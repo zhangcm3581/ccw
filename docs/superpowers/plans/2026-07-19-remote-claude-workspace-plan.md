@@ -1,4 +1,6 @@
-# 双项目远程Claude工作空间Implementation Plan
+# 双项目远程Claude工作空间Implementation Plan（v2）
+
+> **v2修订说明：**本计划已按[审计与修订说明](../specs/2026-07-19-remote-claude-workspace-audit-corrections.md)完成修订（容器TTY、CDK两段式、令牌传递、同步revision、池双窗口、超额主动执行、迁移管理等）；若仍有冲突，以审计文档为准，其次以[Design Spec v2](../specs/2026-07-19-remote-claude-workspace-design.md)为准。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -19,9 +21,44 @@
 - 用量单位对外一律称"内部额度单位"，不得标注为官方订阅百分比。
 - 每个任务TDD：先写失败测试，再实现，`go test ./... `全绿后提交。
 - 中文文档遵守中英文之间无空格的排版规则（代码块除外；不要对本文件跑clean_cjk_spaces.py，会破坏命令语法）。
-- 仓库根：`/root/code1/remote-claude-workspace/`；所有路径相对仓库根。
+- 仓库根：`/root/code1/remote-claude-workspace/`；所有路径相对仓库根。仓库内`remote-claude-workspace/`子目录是用户本地机器的FUSE同步挂载点，已gitignore，任何任务不得写入或删除该目录。
+- migration文件只保留`internal/store/migrations/`一份源，用`schema_migrations`表保证每个迁移只执行一次。
+- terminal/sync连接令牌TTL为2分钟、单用途；令牌只放`Authorization`头或首个认证帧，禁止URL查询参数。
+- 整体池保护必须同时计算5小时与7天两个窗口。
+- worker-agent只监听localhost/内网；公网只有反向代理的443。
+
+## 阶段映射（审计§13的Phase与Task对应关系）
+
+| Phase | 内容 | 对应任务 |
+|---|---|---|
+| Phase 0 | 仓库与规则（Git、AGENTS.md、CI、Go模块） | Task 1 |
+| Phase 1 | **架构阻断验证**（任一失败先改设计） | Task 0（必须最先执行，可与Task 1并行准备但先于Task 2之后的一切） |
+| Phase 2 | 单项目垂直切片（CDK→令牌→终端） | Task 2、3、4、5 |
+| Phase 3 | 可靠同步 | Task 6、7 |
+| Phase 4 | 第二项目与隔离 | Task 12的隔离/重建部分 |
+| Phase 5 | 用量与额度执行 | Task 8、9 |
+| Phase 6 | 门户、备份与发布验收 | Task 10、11、12 |
 
 ---
+
+### Task 0: 架构阻断验证（Phase 1，先于全部编码）
+
+**Files:**
+- Create: `docs/phase1-evidence/dual-login-24h.md`（双登录验证记录）
+- Create: `docs/phase1-evidence/tmux-prototype.md`（tmux原型记录）
+- Create: `internal/usage/testdata/session-sample.jsonl`（**脱敏**真实样例，替换Task 8中的手工样例）
+
+**Interfaces:**
+- Produces: 三份证据文件与一份脱敏JSONL样例；Task 8的解析测试必须以该样例为准。
+
+- [ ] **Step 1: 双Claude HOME同账号登录24小时验证**——在任一有Docker的Linux机器上起两个容器，各自独立Claude HOME卷，分别官方登录；每小时各发起一次正常对话（可用`claude -p "ping"`）；24小时后检查两边凭据均未失效。结果（通过/失败、时间线、Claude Code版本）写入`dual-login-24h.md`。**失败→停止，回改设计为分时使用或官方API接入。**
+- [ ] **Step 2: tmux容器原型**——用`sleep infinity`作PID 1起最小容器，执行审计§4.1的三步会话准备流程（has-session→new-session -d→attach），验证：断开attach后会话存活、重连可见此前输出、容器stop/start后按`claude --continue`策略恢复。记录到`tmux-prototype.md`。
+- [ ] **Step 3: 脱敏JSONL样例与requestId语义**——从真实Claude HOME提取一段多轮（含工具调用）会话JSONL，把文本内容替换为占位符、只保留结构与usage字段；确认同一requestId出现多条记录时哪条代表最终用量（最终/最大计数规则），把结论写进样例文件头部注释与Task 8的解析规则。
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A && git commit -m "docs: record phase 1 architecture-blocking validation evidence"
+```
 
 ### Task 1: Go工具链、项目骨架与配置加载
 
@@ -36,15 +73,17 @@
 **Interfaces:**
 - Produces: `config.Load(getenv func(string) string) (Config, error)`；`Config{DatabaseURL string; TokenSigningKey []byte; WorkspaceRoot string; ListenAddr string; AgentListenAddr string; AdminSocketPath string; ClaudeImage string}`。TokenSigningKey由环境变量`CCW_TOKEN_KEY`（hex，≥32字节）解码，无默认值。
 
-- [ ] **Step 0: 安装Go工具链（开发机当前没有Go）**
+- [ ] **Step 0: 安装Go工具链（开发机当前没有Go；不使用破坏性命令）**
 
 ```bash
-curl -fsSL https://go.dev/dl/go1.22.5.linux-amd64.tar.gz -o /tmp/claude-0/-root/efa99086-5fe4-4de1-9a62-c41b8e8d35ef/scratchpad/go.tgz
-rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/claude-0/-root/efa99086-5fe4-4de1-9a62-c41b8e8d35ef/scratchpad/go.tgz
+test -d /usr/local/go && echo "Go already installed, skip" || {
+  curl -fsSL https://go.dev/dl/go1.22.5.linux-amd64.tar.gz -o "$HOME/go1.22.5.tgz"
+  tar -C /usr/local -xzf "$HOME/go1.22.5.tgz" && rm "$HOME/go1.22.5.tgz"
+}
 export PATH=$PATH:/usr/local/go/bin && go version
 ```
 
-Expected: `go version go1.22.5 linux/amd64`（如无外网，使用系统包管理器`apt install golang-go`并确认≥1.22）
+Expected: `go version go1.22.5 linux/amd64`（如无外网，使用系统包管理器`apt install golang-go`并确认≥1.22；若`/usr/local/go`已存在旧版本，人工确认后再决定是否替换，不得脚本内`rm -rf`）
 
 - [ ] **Step 1: 初始化模块并写失败测试**
 
@@ -200,7 +239,7 @@ git add -A && git commit -m "chore: scaffold remote workspace services"
 ### Task 2: 数据库迁移、CDK认证与单项目绑定
 
 **Files:**
-- Create: `migrations/001_initial.sql`
+- Create: `internal/store/migrations/001_initial.sql`（唯一一份migration源，embed使用，禁止复制第二份）
 - Create: `internal/auth/cdk.go`
 - Create: `internal/auth/cdk_test.go`
 - Create: `internal/store/postgres.go`
@@ -210,12 +249,13 @@ git add -A && git commit -m "chore: scaffold remote workspace services"
 **Interfaces:**
 - Consumes: `config.Config`
 - Produces:
-  - `auth.HashCDK(plain string) (string, error)`（编码为`argon2id$v=19$m=65536,t=3,p=2$<salt-b64>$<hash-b64>`）
-  - `auth.VerifyCDK(plain, encoded string) bool`
-  - `auth.NewCDK() (plain string, err error)`（`ccw_`前缀+32字节随机hex）
-  - `store.New(ctx, dsn string) (*Store, error)`、`(*Store).Migrate(ctx) error`
+  - `auth.NewCDK() (plain, publicID string, err error)`——CDK格式`ccw_<public-id>.<random-secret>`，public-id为8字节hex（O(1)检索键），secret为32字节hex
+  - `auth.SplitCDK(plain string) (publicID, secret string, err error)`
+  - `auth.HashSecret(secret string) (string, error)`（编码为`argon2id$v=19$m=65536,t=3,p=2$<salt-b64>$<hash-b64>`）
+  - `auth.VerifySecret(secret, encoded string) bool`
+  - `store.New(ctx, dsn string) (*Store, error)`、`(*Store).Migrate(ctx) error`（`schema_migrations`表，每个迁移只执行一次）、`(*Store).GetProjectByID(ctx, id string) (project.Project, error)`
   - `project.Project{ID, AccountID, Slug, ContainerName string; DiskLimit, FiveHourLimit, SevenDayLimit int64}`
-  - `project.Resolver`接口：`ResolveCDK(ctx, plain string) (Project, error)`；错误恒为`project.ErrInvalidCDK`（不区分不存在/禁用/过期）
+  - `project.Resolver`接口：`ResolveCDK(ctx, plain string) (Project, error)`——按public-id做O(1)查询后验证secret；错误恒为`project.ErrInvalidCDK`（不区分不存在/禁用/过期）；限速在Task 10的HTTP层实现（IP与public-id双维度）
 
 - [ ] **Step 1: 写失败测试**
 
@@ -229,34 +269,46 @@ import (
 	"testing"
 )
 
-func TestHashRoundTrip(t *testing.T) {
-	plain, err := NewCDK()
+func TestNewCDKFormatAndSplit(t *testing.T) {
+	plain, pub, err := NewCDK()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(plain, "ccw_") {
-		t.Fatalf("cdk must have ccw_ prefix: %q", plain)
+	if !strings.HasPrefix(plain, "ccw_") || !strings.Contains(plain, ".") {
+		t.Fatalf("cdk must look like ccw_<public>.<secret>: %q", plain)
 	}
-	enc, err := HashCDK(plain)
+	gotPub, secret, err := SplitCDK(plain)
+	if err != nil || gotPub != pub || secret == "" {
+		t.Fatalf("split failed: %q %q %v", gotPub, secret, err)
+	}
+	if _, _, err := SplitCDK("ccw_nosecret"); err == nil {
+		t.Fatal("cdk without secret part must be rejected")
+	}
+}
+
+func TestSecretHashRoundTrip(t *testing.T) {
+	plain, _, _ := NewCDK()
+	_, secret, _ := SplitCDK(plain)
+	enc, err := HashSecret(secret)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(enc, plain) || strings.Contains(enc, strings.TrimPrefix(plain, "ccw_")) {
-		t.Fatal("encoded hash must not contain plaintext")
+	if strings.Contains(enc, secret) {
+		t.Fatal("encoded hash must not contain plaintext secret")
 	}
-	if !VerifyCDK(plain, enc) {
-		t.Fatal("verify must succeed for correct cdk")
+	if !VerifySecret(secret, enc) {
+		t.Fatal("verify must succeed for correct secret")
 	}
-	if VerifyCDK(plain+"x", enc) {
-		t.Fatal("verify must fail for wrong cdk")
+	if VerifySecret(secret+"x", enc) {
+		t.Fatal("verify must fail for wrong secret")
 	}
 }
 
 func TestHashIsSalted(t *testing.T) {
-	a, _ := HashCDK("ccw_same")
-	b, _ := HashCDK("ccw_same")
+	a, _ := HashSecret("same-secret")
+	b, _ := HashSecret("same-secret")
 	if a == b {
-		t.Fatal("two hashes of the same cdk must differ (random salt)")
+		t.Fatal("two hashes of the same secret must differ (random salt)")
 	}
 }
 ```
@@ -274,19 +326,25 @@ import (
 )
 
 func TestCDKBindsExactlyOneProject(t *testing.T) {
-	cdkA, _ := auth.NewCDK()
-	cdkB, _ := auth.NewCDK()
-	hashA, _ := auth.HashCDK(cdkA)
-	hashB, _ := auth.HashCDK(cdkB)
-	r := NewMemoryResolver(map[string]Project{
-		hashA: {ID: "pa", Slug: "project-a"},
-		hashB: {ID: "pb", Slug: "project-b"},
+	cdkA, pubA, _ := auth.NewCDK()
+	cdkB, pubB, _ := auth.NewCDK()
+	_, secA, _ := auth.SplitCDK(cdkA)
+	_, secB, _ := auth.SplitCDK(cdkB)
+	hashA, _ := auth.HashSecret(secA)
+	hashB, _ := auth.HashSecret(secB)
+	r := NewMemoryResolver(map[string]Entry{
+		pubA: {SecretHash: hashA, Project: Project{ID: "pa", Slug: "project-a"}},
+		pubB: {SecretHash: hashB, Project: Project{ID: "pb", Slug: "project-b"}},
 	})
 	p, err := r.ResolveCDK(context.Background(), cdkA)
 	if err != nil || p.ID != "pa" {
 		t.Fatalf("cdkA must resolve to project A only, got %+v err=%v", p, err)
 	}
-	if _, err := r.ResolveCDK(context.Background(), "ccw_unknown"); err != ErrInvalidCDK {
+	// 正确public-id+错误secret也必须失败
+	if _, err := r.ResolveCDK(context.Background(), "ccw_"+pubA+".wrongsecret"); err != ErrInvalidCDK {
+		t.Fatalf("wrong secret must return ErrInvalidCDK, got %v", err)
+	}
+	if _, err := r.ResolveCDK(context.Background(), "ccw_unknown.zzz"); err != ErrInvalidCDK {
 		t.Fatalf("unknown cdk must return ErrInvalidCDK, got %v", err)
 	}
 }
@@ -313,6 +371,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -327,27 +386,47 @@ const (
 	saltLen      = 16
 )
 
-func NewCDK() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+var ErrMalformedCDK = errors.New("auth: malformed cdk")
+
+// NewCDK生成ccw_<public-id>.<secret>；public-id用于数据库O(1)检索，secret参与Argon2id验证。
+func NewCDK() (plain, publicID string, err error) {
+	pub := make([]byte, 8)
+	sec := make([]byte, 32)
+	if _, err := rand.Read(pub); err != nil {
+		return "", "", err
 	}
-	return "ccw_" + hex.EncodeToString(b), nil
+	if _, err := rand.Read(sec); err != nil {
+		return "", "", err
+	}
+	publicID = hex.EncodeToString(pub)
+	return "ccw_" + publicID + "." + hex.EncodeToString(sec), publicID, nil
 }
 
-func HashCDK(plain string) (string, error) {
+func SplitCDK(plain string) (publicID, secret string, err error) {
+	body, ok := strings.CutPrefix(plain, "ccw_")
+	if !ok {
+		return "", "", ErrMalformedCDK
+	}
+	publicID, secret, ok = strings.Cut(body, ".")
+	if !ok || publicID == "" || secret == "" {
+		return "", "", ErrMalformedCDK
+	}
+	return publicID, secret, nil
+}
+
+func HashSecret(secret string) (string, error) {
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	h := argon2.IDKey([]byte(plain), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	h := argon2.IDKey([]byte(secret), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
 	return fmt.Sprintf("argon2id$v=19$m=%d,t=%d,p=%d$%s$%s",
 		argonMemory, argonTime, argonThreads,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(h)), nil
 }
 
-func VerifyCDK(plain, encoded string) bool {
+func VerifySecret(plain, encoded string) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 5 || parts[0] != "argon2id" {
 		return false
@@ -398,26 +477,41 @@ type Resolver interface {
 	ResolveCDK(ctx context.Context, plain string) (Project, error)
 }
 
-// MemoryResolver：单元测试与后续HTTP测试共用；生产实现在store包。
-type MemoryResolver struct{ byHash map[string]Project }
+// Entry：以public-id为键的CDK记录（与数据库行同构）。
+type Entry struct {
+	SecretHash string
+	Project    Project
+}
 
-func NewMemoryResolver(byHash map[string]Project) *MemoryResolver {
-	return &MemoryResolver{byHash: byHash}
+// MemoryResolver：单元测试与后续HTTP测试共用；生产实现在store包。
+// 与生产实现一致：先按public-id做O(1)查找，再验证secret哈希。
+type MemoryResolver struct{ byPublicID map[string]Entry }
+
+func NewMemoryResolver(byPublicID map[string]Entry) *MemoryResolver {
+	return &MemoryResolver{byPublicID: byPublicID}
 }
 
 func (r *MemoryResolver) ResolveCDK(_ context.Context, plain string) (Project, error) {
-	for enc, p := range r.byHash {
-		if auth.VerifyCDK(plain, enc) {
-			return p, nil
-		}
+	pub, secret, err := auth.SplitCDK(plain)
+	if err != nil {
+		return Project{}, ErrInvalidCDK
 	}
-	return Project{}, ErrInvalidCDK
+	e, ok := r.byPublicID[pub]
+	if !ok || !auth.VerifySecret(secret, e.SecretHash) {
+		return Project{}, ErrInvalidCDK
+	}
+	return e.Project, nil
 }
 ```
 
-`migrations/001_initial.sql`（照抄spec第4节引用的初版计划六张表，此处必须完整落盘）：
+`internal/store/migrations/001_initial.sql`（spec第4节的表结构，此处完整落盘；`schema_migrations`由Migrate自身维护）：
 
 ```sql
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  name TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE accounts (
   id UUID PRIMARY KEY,
   name TEXT NOT NULL,
@@ -439,7 +533,8 @@ CREATE TABLE projects (
 CREATE TABLE cdks (
   id UUID PRIMARY KEY,
   project_id UUID NOT NULL REFERENCES projects(id),
-  token_hash TEXT NOT NULL UNIQUE,
+  public_id TEXT NOT NULL UNIQUE,
+  secret_hash TEXT NOT NULL,
   expires_at TIMESTAMPTZ,
   disabled_at TIMESTAMPTZ
 );
@@ -454,7 +549,8 @@ CREATE TABLE usage_events (
   cache_read_tokens BIGINT NOT NULL,
   cache_write_tokens BIGINT NOT NULL,
   weighted_units BIGINT NOT NULL,
-  source_event_id TEXT NOT NULL UNIQUE
+  source_event_id TEXT NOT NULL,
+  UNIQUE (project_id, source_event_id)
 );
 CREATE INDEX usage_events_window ON usage_events (project_id, occurred_at);
 
@@ -463,8 +559,10 @@ CREATE TABLE file_index (
   path TEXT NOT NULL,
   size_bytes BIGINT NOT NULL,
   sha256 TEXT NOT NULL,
-  revision BIGINT NOT NULL,
+  server_revision BIGINT NOT NULL,
   deleted BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_by_device TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (project_id, path)
 );
 
@@ -474,7 +572,17 @@ CREATE TABLE sessions (
   tmux_name TEXT NOT NULL,
   connected_at TIMESTAMPTZ,
   last_seen_at TIMESTAMPTZ NOT NULL,
-  state TEXT NOT NULL
+  state TEXT NOT NULL,
+  UNIQUE (project_id, tmux_name)
+);
+
+CREATE TABLE usage_offsets (
+  project_id UUID NOT NULL REFERENCES projects(id),
+  file_identity TEXT NOT NULL,
+  path TEXT NOT NULL,
+  committed_offset BIGINT NOT NULL DEFAULT 0,
+  partial_line TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (project_id, file_identity)
 );
 ```
 
@@ -496,19 +604,28 @@ import (
 )
 
 //go:embed migrations
-var migrationsFS embed.FS // 构建时将migrations/软链接或复制进包目录；见Step 3末命令
+var migrationsFS embed.FS // migration唯一源就在本包的migrations/目录，禁止在仓库其他位置复制第二份
 
 type Store struct{ Pool *pgxpool.Pool }
 
+// New连接数据库并立即Ping；失败返回错误，调用方（main）必须以非零码退出。
 func New(ctx context.Context, dsn string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: connect: %w", err)
 	}
+	if err := pool.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("store: ping: %w", err)
+	}
 	return &Store{Pool: pool}, nil
 }
 
+// Migrate：schema_migrations记录已执行迁移，每个迁移文件只执行一次。
 func (s *Store) Migrate(ctx context.Context) error {
+	if _, err := s.Pool.Exec(ctx,
+		`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
+		return err
+	}
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
 		return err
@@ -519,45 +636,71 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	sort.Strings(names)
 	for _, n := range names {
+		var done bool
+		if err := s.Pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE name=$1)`, n).Scan(&done); err != nil {
+			return err
+		}
+		if done {
+			continue
+		}
 		sql, err := migrationsFS.ReadFile("migrations/" + n)
 		if err != nil {
 			return err
 		}
-		if _, err := s.Pool.Exec(ctx, string(sql)); err != nil {
+		tx, err := s.Pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, string(sql)); err != nil {
+			tx.Rollback(ctx)
 			return fmt.Errorf("store: migrate %s: %w", n, err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, n); err != nil {
+			tx.Rollback(ctx)
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// ResolveCDK实现project.Resolver：取未禁用未过期的cdk行逐一验证哈希。
+// ResolveCDK实现project.Resolver：按public-id做O(1)查询，再验证secret哈希。
 func (s *Store) ResolveCDK(ctx context.Context, plain string) (project.Project, error) {
-	rows, err := s.Pool.Query(ctx, `
-		SELECT c.token_hash, p.id, p.account_id, p.slug, p.container_name,
+	pub, secret, err := auth.SplitCDK(plain)
+	if err != nil {
+		return project.Project{}, project.ErrInvalidCDK
+	}
+	var hash string
+	var p project.Project
+	err = s.Pool.QueryRow(ctx, `
+		SELECT c.secret_hash, p.id, p.account_id, p.slug, p.container_name,
 		       p.disk_limit_bytes, p.five_hour_limit, p.seven_day_limit
 		FROM cdks c JOIN projects p ON p.id = c.project_id
-		WHERE c.disabled_at IS NULL AND (c.expires_at IS NULL OR c.expires_at > now())`)
-	if err != nil {
-		return project.Project{}, err
+		WHERE c.public_id = $1
+		  AND c.disabled_at IS NULL AND (c.expires_at IS NULL OR c.expires_at > now())`, pub).
+		Scan(&hash, &p.ID, &p.AccountID, &p.Slug, &p.ContainerName,
+			&p.DiskLimit, &p.FiveHourLimit, &p.SevenDayLimit)
+	if err != nil || !auth.VerifySecret(secret, hash) {
+		return project.Project{}, project.ErrInvalidCDK
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var hash string
-		var p project.Project
-		if err := rows.Scan(&hash, &p.ID, &p.AccountID, &p.Slug, &p.ContainerName,
-			&p.DiskLimit, &p.FiveHourLimit, &p.SevenDayLimit); err != nil {
-			return project.Project{}, err
-		}
-		if auth.VerifyCDK(plain, hash) {
-			return p, nil
-		}
-	}
-	return project.Project{}, project.ErrInvalidCDK
+	return p, nil
 }
-```
 
-```bash
-mkdir -p internal/store/migrations && cp migrations/001_initial.sql internal/store/migrations/
+// GetProjectByID：session claims里的project ID一律经此查库（control-api不保存进程内会话状态）。
+func (s *Store) GetProjectByID(ctx context.Context, id string) (project.Project, error) {
+	var p project.Project
+	err := s.Pool.QueryRow(ctx, `
+		SELECT id, account_id, slug, container_name, disk_limit_bytes, five_hour_limit, seven_day_limit
+		FROM projects WHERE id = $1`, id).
+		Scan(&p.ID, &p.AccountID, &p.Slug, &p.ContainerName, &p.DiskLimit, &p.FiveHourLimit, &p.SevenDayLimit)
+	if err != nil {
+		return project.Project{}, fmt.Errorf("store: project %s not found", id)
+	}
+	return p, nil
+}
 ```
 
 - [ ] **Step 4: 运行测试**
@@ -584,6 +727,7 @@ git add -A && git commit -m "feat: bind hashed cdk tokens to projects"
   - `token.Mint(key []byte, projectID, audience string, ttl time.Duration, now time.Time) (string, error)`
   - `token.Verify(key []byte, tok, audience string, now time.Time) (Claims, error)`；`Claims{ProjectID, Audience string; ExpiresAt time.Time}`
   - 错误：`token.ErrInvalid`（签名/格式错）、`token.ErrExpired`、`token.ErrAudience`
+  - TTL约定（由签发方传入）：AudSession=15分钟；AudTerminal/AudSync=**2分钟**、单用途；令牌只经`Authorization`头或首个认证帧传递，禁止URL查询参数
 
 - [ ] **Step 1: 写失败测试**
 
@@ -742,7 +886,7 @@ git add -A && git commit -m "feat: add hmac-signed short-lived connection tokens
   - `runtime.ContainerSpec{Name, Image string; Mounts []Mount; User string; Cmd []string; Limits Limits}`；`Mount{Volume, Target string}`；`Limits{NanoCPUs int64; MemoryBytes int64; PidsLimit int64}`
   - `runtime.VolumeNames(p project.Project) (workspace, claudeHome, sync string)`（`<slug>-workspace`等）
   - `runtime.EnsureProjectRuntime(ctx, api DockerAPI, p project.Project, image string) error`
-  - 容器命令固定：`tmux -L <project-id> new-session -A -s main -c /workspace claude`
+  - **容器PID 1不是tmux**（审计§4.1：无TTY会立即退出）：容器命令固定为`sleep infinity`；tmux会话由worker-agent在容器运行后经`docker exec`准备（见Task 5的`EnsureSessionCmds`）
 
 - [ ] **Step 1: 写失败测试**
 
@@ -821,9 +965,9 @@ func TestSecurityDefaults(t *testing.T) {
 	if c.Limits.MemoryBytes == 0 || c.Limits.PidsLimit == 0 || c.Limits.NanoCPUs == 0 {
 		t.Fatalf("resource limits must be set: %+v", c.Limits)
 	}
-	want := "tmux -L " + pa.ID + " new-session -A -s main -c /workspace claude"
-	if got := strings.Join(c.Cmd, " "); got != want {
-		t.Fatalf("cmd mismatch:\n got %q\nwant %q", got, want)
+	// PID 1必须是sleep infinity而不是tmux（无TTY下tmux前台会立即退出）
+	if got := strings.Join(c.Cmd, " "); got != "sleep infinity" {
+		t.Fatalf("pid1 must be sleep infinity, got %q", got)
 	}
 }
 ```
@@ -889,7 +1033,8 @@ func EnsureProjectRuntime(ctx context.Context, api DockerAPI, p project.Project,
 			{Volume: c, Target: "/home/claude/.claude"},
 			{Volume: s, Target: "/var/lib/cclaude-sync"},
 		},
-		Cmd: []string{"tmux", "-L", p.ID, "new-session", "-A", "-s", "main", "-c", "/workspace", "claude"},
+		// PID 1不能是tmux（无TTY立即退出）；tmux由worker经docker exec准备（Task 5）
+		Cmd: []string{"sleep", "infinity"},
 		Limits: Limits{
 			NanoCPUs:    2_000_000_000,  // 2 CPU
 			MemoryBytes: 4 << 30,        // 4 GiB
@@ -952,8 +1097,9 @@ git add -A && git commit -m "feat: isolate project runtimes with persistent volu
 - Consumes: `token.Verify`（AudTerminal）、`runtime`容器名约定
 - Produces:
   - `terminal.Names(projectID string) (socket, session string)`（socket=projectID，session恒为`main`）
-  - `terminal.AttachCmd(containerName, projectID string) []string`——`["docker","exec","-it",container,"tmux","-L",projectID,"attach-session","-t","main"]`
-  - `terminal.Serve(w http.ResponseWriter, r *http.Request, key []byte, start func(projectID string) (io.ReadWriteCloser, error))`：WebSocket升级+字节转发+resize控制消息`{"type":"resize","rows":N,"cols":N}`
+  - `terminal.EnsureSessionCmds(containerName, projectID string) [][]string`——审计§4.1流程：先`has-session -t main`，不存在则`new-session -d -s main -c /workspace claude`（都经`docker exec`）
+  - `terminal.AttachCmd(containerName, projectID string) []string`——`["docker","exec","-i",container,"tmux","-L",projectID,"attach-session","-t","main"]`
+  - `terminal.Serve(w http.ResponseWriter, r *http.Request, key []byte, start func(projectID string) (io.ReadWriteCloser, error))`：WebSocket升级+字节转发+resize控制消息`{"type":"resize","rows":N,"cols":N}`；令牌从`Authorization: Bearer`头读取（2分钟，AudTerminal），禁止URL查询参数；设置最大消息大小、读写deadline、ping/pong与连接数上限
   - 断开语义：只关闭PTY与WebSocket，绝不kill tmux会话
 
 - [ ] **Step 1: 写失败测试**
@@ -985,6 +1131,20 @@ func TestAttachCmdNeverKills(t *testing.T) {
 	}
 	if !strings.Contains(joined, "attach-session") {
 		t.Fatalf("must attach existing session: %q", joined)
+	}
+}
+
+func TestEnsureSessionCmdsOrder(t *testing.T) {
+	cmds := EnsureSessionCmds("ccw-project-a", "pid-1")
+	if len(cmds) != 2 {
+		t.Fatalf("want has-session then new-session, got %d cmds", len(cmds))
+	}
+	if !strings.Contains(strings.Join(cmds[0], " "), "has-session") {
+		t.Fatalf("first cmd must probe session: %v", cmds[0])
+	}
+	joined := strings.Join(cmds[1], " ")
+	if !strings.Contains(joined, "new-session -d") || strings.Contains(joined, "-A") {
+		t.Fatalf("second cmd must create detached session without -A: %v", cmds[1])
 	}
 }
 
@@ -1033,6 +1193,15 @@ func Names(projectID string) (socket, session string) {
 	return projectID, "main"
 }
 
+// EnsureSessionCmds：附着前必须依次执行的命令（第一条失败时执行第二条）。
+// 不使用new-session -A的前台形式：PID 1不是tmux，会话一律detached创建。
+func EnsureSessionCmds(containerName, projectID string) [][]string {
+	return [][]string{
+		{"docker", "exec", containerName, "tmux", "-L", projectID, "has-session", "-t", "main"},
+		{"docker", "exec", containerName, "tmux", "-L", projectID, "new-session", "-d", "-s", "main", "-c", "/workspace", "claude"},
+	}
+}
+
 func AttachCmd(containerName, projectID string) []string {
 	return []string{"docker", "exec", "-i", containerName,
 		"tmux", "-L", projectID, "attach-session", "-t", "main"}
@@ -1048,6 +1217,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -1069,7 +1239,9 @@ type ctrlMsg struct {
 // start由worker-agent注入：为该项目启动/附着PTY（docker exec tmux attach）。
 func Serve(w http.ResponseWriter, r *http.Request, key []byte,
 	start func(projectID string) (io.ReadWriteCloser, error)) {
-	claims, err := token.Verify(key, r.URL.Query().Get("token"), token.AudTerminal, time.Now())
+	// 令牌只从Authorization头读取（2分钟单用途）；URL查询参数会进代理日志，禁止使用
+	raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	claims, err := token.Verify(key, raw, token.AudTerminal, time.Now())
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -1176,7 +1348,15 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/terminal", func(w http.ResponseWriter, r *http.Request) {
 		terminal.Serve(w, r, cfg.TokenSigningKey, func(projectID string) (io.ReadWriteCloser, error) {
-			args := terminal.AttachCmd(containerFor(projectID), projectID)
+			container := containerFor(projectID)
+			// 附着前先准备会话：has-session失败才new-session -d（审计§4.1）
+			cmds := terminal.EnsureSessionCmds(container, projectID)
+			if err := exec.Command(cmds[0][0], cmds[0][1:]...).Run(); err != nil {
+				if err := exec.Command(cmds[1][0], cmds[1][1:]...).Run(); err != nil {
+					return nil, err
+				}
+			}
+			args := terminal.AttachCmd(container, projectID)
 			cmd := exec.Command(args[0], args[1:]...)
 			f, err := pty.Start(cmd)
 			if err != nil {
@@ -1218,7 +1398,8 @@ git add -A && git commit -m "feat: persist terminal sessions across reconnects"
   - `sync.Diff(local, remote []FileEntry) Plan`；`Plan{Upload, Download []FileEntry; Conflicts []Conflict; TombstoneToRemote, TombstoneToLocal []FileEntry}`；`Conflict{Path, LocalSHA, RemoteSHA string}`
   - `sync.SafeRelPath(p string) (string, error)`——校验并规范为forward-slash相对路径；错误`ErrUnsafePath`
   - `sync.DefaultExcluded(path string) bool`——`.env`、`.cclaude/`、`.ssh/`、`.aws/`、`.claude/`前缀
-  - `sync.ConflictName(path, device string, at time.Time) string`——`<path>.conflict-<device>-<20060102T150405Z>`
+  - `sync.ConflictName(path, device string, at time.Time) string`——`<path>.conflict-<device>-<20060102T150405Z>`；远端副本落地时device恒为`remote`（审计§6.4的`.conflict-remote-<UTC>`）
+  - **权威裁决在服务端（审计§6）：**客户端`Diff`只计算候选传输集；冲突以Task 12协议中`put`携带的`base_revision`与服务端`server_revision`的CAS比较为准，不得静默用"revision更大一端"覆盖。`DirStore.Manifest`仅用于灾后重建校验，正式Manifest来自`file_index`（含未过保留期tombstone）
   - `sync.Store`接口（服务端落盘）：`WriteTemp(path string, r io.Reader) (sha string, size int64, err error)`；`Promote(path string, revision int64) error`；`Delete(path string, revision int64) error`；`Manifest() ([]FileEntry, error)`
   - `sync.NewDirStore(root string) Store`——`.cclaude.tmp.<revision>`+SHA校验+原子rename；拒绝符号链接逃逸
 
@@ -1804,7 +1985,10 @@ git add -A && git commit -m "feat: enforce logical project storage quotas"
   - `usage.ParseLines(r io.Reader) (events []Event, badLines int)`——容错：坏行/非assistant行/缺usage跳过并计数
   - `usage.Weights{Input, Output, CacheRead, CacheWrite int64}`与`usage.Weighted(e Event, w Weights) int64`
   - `usage.Sink`接口：`Insert(ctx, projectID string, e Event, weighted int64) error`（幂等：`source_event_id`冲突时忽略）
-  - `usage.Collector{Dir string; ProjectID string; Sink Sink; Weights Weights}`：`Scan(ctx) error`记录每文件字节偏移量，只读增量
+  - `usage.OffsetStore`接口：`Load(ctx, projectID, fileIdentity string) (offset int64, partial string, err error)`；`Save(ctx, projectID, fileIdentity, path string, offset int64, partial string) error`——生产实现写`usage_offsets`表（审计§8.2：worker重启从持久offset恢复；找不到则从头重扫靠幂等去重）
+  - `usage.Collector{Dir string; ProjectID string; Sink Sink; Weights Weights; Offsets OffsetStore}`：`Scan(ctx) error`——只在读到**完整换行**后推进offset；末尾半行存`partial_line`下轮拼接；文件截断/轮转时按file identity（inode+首行哈希）重识别；Scanner错误与超长行记指标不静默丢弃
+  - 数据来源：worker以**只读方式挂载**各项目claude卷（或受控docker exec读取），不依赖`/var/lib/docker/volumes/.../_data`内部布局（审计§8.1）
+  - 测试样例：`testdata/session-sample.jsonl`以Task 0产出的**脱敏真实样例**为准（含requestId多条记录场景）；下方Step 1给出的是最小结构示例，Task 0完成后必须替换并按确认的最终计量语义调整断言
 
 - [ ] **Step 1: 准备真实样例并写失败测试**
 
@@ -1987,7 +2171,8 @@ type Collector struct {
 	ProjectID string
 	Sink      Sink
 	Weights   Weights
-	offsets   map[string]int64
+	Offsets   OffsetStore      // 生产必须注入（usage_offsets表）；为nil时退化为内存offset（仅单元测试）
+	offsets   map[string]int64 // 内存退化实现；持久化路径见OffsetStore
 }
 
 func (c *Collector) Scan(ctx context.Context) error {
@@ -2047,7 +2232,7 @@ git add -A && git commit -m "feat: collect usage events from claude jsonl transc
 - Consumes: `usage_events`表（生产）/内存事件表（测试）
 - Produces:
   - `quota.UsageReader`接口：`WindowUsed(ctx, projectID string, since time.Time) (int64, error)`；`PoolUsed(ctx, accountID string, since time.Time) (int64, error)`
-  - `quota.Limits{FiveHour, SevenDay, PoolFiveHour, Reserve, SafetyMargin int64}`
+  - `quota.Limits{FiveHour, SevenDay, PoolFiveHour, PoolSevenDay, Reserve, SafetyMargin int64}`——池保护**同时**计算5小时与7天两个窗口（审计§9.3）
   - `quota.Service{Reader UsageReader}`：`Check(ctx, projectID, accountID string, l Limits, now time.Time) (Decision, error)`
   - `quota.Decision{Over bool; Reason string; FiveHourUsed, SevenDayUsed int64}`；Reason取值：`""`、`"five_hour_limit"`、`"seven_day_limit"`、`"pool_exhausted"`（磁盘原因由调用方叠加`"disk_limit"`）
   - `AccountUsageProvider`接口按spec原样声明，第一版无实现
@@ -2115,7 +2300,7 @@ func TestWindowBoundaries(t *testing.T) {
 		"pa": {at(now, 4*time.Hour, 100), at(now, 6*time.Hour, 500), at(now, 8*24*time.Hour, 9000)},
 	}}
 	s := Service{Reader: r}
-	d, err := s.Check(context.Background(), "pa", "acc", Limits{FiveHour: 1000, SevenDay: 1000, PoolFiveHour: 1 << 40}, now)
+	d, err := s.Check(context.Background(), "pa", "acc", Limits{FiveHour: 1000, SevenDay: 1000, PoolFiveHour: 1 << 40, PoolSevenDay: 1 << 40}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2140,7 +2325,7 @@ func TestProjectIsolationAOverBFree(t *testing.T) {
 		"pb": {at(now, time.Hour, 10)},
 	}}
 	s := Service{Reader: r}
-	l := Limits{FiveHour: 1000, SevenDay: 100000, PoolFiveHour: 1 << 40}
+	l := Limits{FiveHour: 1000, SevenDay: 100000, PoolFiveHour: 1 << 40, PoolSevenDay: 1 << 40}
 	da, _ := s.Check(context.Background(), "pa", "acc", l, now)
 	db, _ := s.Check(context.Background(), "pb", "acc", l, now)
 	if !da.Over || da.Reason != "five_hour_limit" {
@@ -2164,13 +2349,19 @@ func TestPoolSafetyMarginStopsBoth(t *testing.T) {
 		}{"acc": {at(now, time.Hour, 9800)}},
 	}
 	s := Service{Reader: r}
-	l := Limits{FiveHour: 100000, SevenDay: 100000, PoolFiveHour: 10000, Reserve: 100, SafetyMargin: 200}
-	// 池剩余=10000-9800=200，不大于Reserve+SafetyMargin=300 → 双双拒绝
+	l := Limits{FiveHour: 100000, SevenDay: 100000, PoolFiveHour: 10000, PoolSevenDay: 1 << 40, Reserve: 100, SafetyMargin: 200}
+	// 5小时池剩余=10000-9800=200，不大于Reserve+SafetyMargin=300 → 双双拒绝
 	for _, pid := range []string{"pa", "pb"} {
 		d, _ := s.Check(context.Background(), pid, "acc", l, now)
 		if !d.Over || d.Reason != "pool_exhausted" {
 			t.Fatalf("%s must be pool_exhausted: %+v", pid, d)
 		}
+	}
+	// 7天池同样受保护：5小时充裕但7天耗尽时也必须拒绝
+	l2 := Limits{FiveHour: 100000, SevenDay: 100000, PoolFiveHour: 1 << 40, PoolSevenDay: 10000, Reserve: 100, SafetyMargin: 200}
+	d, _ := s.Check(context.Background(), "pa", "acc", l2, now)
+	if !d.Over || d.Reason != "pool_exhausted" {
+		t.Fatalf("7d pool must also be protected: %+v", d)
 	}
 }
 ```
@@ -2198,8 +2389,9 @@ type UsageReader interface {
 }
 
 type Limits struct {
-	FiveHour, SevenDay             int64
-	PoolFiveHour, Reserve, SafetyMargin int64
+	FiveHour, SevenDay                        int64
+	PoolFiveHour, PoolSevenDay                int64
+	Reserve, SafetyMargin                     int64
 }
 
 type Decision struct {
@@ -2225,11 +2417,17 @@ func (s Service) Check(ctx context.Context, projectID, accountID string, l Limit
 	case d.SevenDayUsed >= l.SevenDay:
 		d.Over, d.Reason = true, "seven_day_limit"
 	default:
-		poolUsed, err := s.Reader.PoolUsed(ctx, accountID, now.Add(-5*time.Hour))
+		// 池保护同时看5小时与7天窗口（审计§9.3：只看5小时不足以保护周额度）
+		pool5h, err := s.Reader.PoolUsed(ctx, accountID, now.Add(-5*time.Hour))
 		if err != nil {
 			return d, err
 		}
-		if l.PoolFiveHour-poolUsed <= l.Reserve+l.SafetyMargin {
+		pool7d, err := s.Reader.PoolUsed(ctx, accountID, now.Add(-7*24*time.Hour))
+		if err != nil {
+			return d, err
+		}
+		if l.PoolFiveHour-pool5h <= l.Reserve+l.SafetyMargin ||
+			l.PoolSevenDay-pool7d <= l.Reserve+l.SafetyMargin {
 			d.Over, d.Reason = true, "pool_exhausted"
 		}
 	}
@@ -2274,9 +2472,10 @@ git add -A && git commit -m "feat: enforce independent project usage budgets"
 - Consumes: `project.Resolver`、`token.Mint`、`quota.Service`、`storage.Index`
 - Produces（HTTP合同，CLI与门户都依赖）：
   - `POST /v1/auth/exchange`，body `{"cdk":"ccw_..."}` → `200 {"session_token":"...","project_id":"...","project_slug":"..."}`；无效CDK一律`401 {"error":"invalid_cdk"}`
-  - `GET /v1/connection`（Header `Authorization: Bearer <session_token>`）→ `ConnectionResponse`（spec第4节字段：project_id、project_slug、terminal_url、sync_url、terminal_token、sync_token、disk_used/limit、five_hour_used/limit、seven_day_used/limit、over、over_reason）；`over==true`时不签发terminal_token/sync_token（空串）
+  - `GET /v1/connection`（Header `Authorization: Bearer <session_token>`）→ `ConnectionResponse`（字段：project_id、project_slug、terminal_url、sync_url、terminal_token、sync_token、sync_mode、disk_used/limit、five_hour_used/limit、seven_day_used/limit、over、over_reason）；terminal/sync令牌TTL为**2分钟**；`over==true`时terminal_token为空串，但**sync_token仍签发**且`sync_mode="cleanup"`（只允许下载/删除/缩小，由Task 12的sync端点强制执行；审计§7）；正常时`sync_mode="rw"`
+  - exchange端点按IP与public-id双维度做简单令牌桶限速（内存实现即可），超阈值返回429
   - `GET /usage`（会话令牌）→ SSR HTML，30秒`<meta http-equiv="refresh" content="30">`
-  - `control.Server`结构：`New(resolver project.Resolver, key []byte, q quota.Service, idx storage.Index, limitsFor func(project.Project) quota.Limits, agentBase string) *Server`；`(*Server).Handler() http.Handler`
+  - `control.Server`结构：`New(resolver project.Resolver, getProject func(context.Context, string) (project.Project, error), key []byte, q quota.Service, idx storage.Index, limitsFor func(project.Project) quota.Limits, agentBase string) *Server`；`(*Server).Handler() http.Handler`。**无进程内会话状态**（审计§5.4）：session claims里的project ID一律经`getProject`查库（生产传`store.GetProjectByID`），control-api重启后未过期会话仍有效
 
 - [ ] **Step 1: 写失败测试**
 
@@ -2309,17 +2508,25 @@ func (f fixedReader) PoolUsed(_ context.Context, _ string, _ time.Time) (int64, 
 
 func newTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
-	cdkA, _ := auth.NewCDK()
-	hashA, _ := auth.HashCDK(cdkA)
-	resolver := project.NewMemoryResolver(map[string]project.Project{
-		hashA: {ID: "pa", AccountID: "acc", Slug: "project-a", DiskLimit: 1000, FiveHourLimit: 100, SevenDayLimit: 1000},
+	cdkA, pubA, _ := auth.NewCDK()
+	_, secA, _ := auth.SplitCDK(cdkA)
+	hashA, _ := auth.HashSecret(secA)
+	pa := project.Project{ID: "pa", AccountID: "acc", Slug: "project-a", DiskLimit: 1000, FiveHourLimit: 100, SevenDayLimit: 1000}
+	resolver := project.NewMemoryResolver(map[string]project.Entry{
+		pubA: {SecretHash: hashA, Project: pa},
 	})
+	getProject := func(_ context.Context, id string) (project.Project, error) {
+		if id == pa.ID {
+			return pa, nil
+		}
+		return project.Project{}, project.ErrInvalidCDK
+	}
 	key := make([]byte, 32)
 	q := quota.Service{Reader: fixedReader{perProject: map[string]int64{"pa": 10}}}
-	s := New(resolver, key, q, storage.NewMemoryIndex(),
+	s := New(resolver, getProject, key, q, storage.NewMemoryIndex(),
 		func(p project.Project) quota.Limits {
-			return quota.Limits{FiveHour: p.FiveHourLimit, SevenDay: p.SevenDayLimit, PoolFiveHour: 1 << 40}
-		}, "ws://agent:8081")
+			return quota.Limits{FiveHour: p.FiveHourLimit, SevenDay: p.SevenDayLimit, PoolFiveHour: 1 << 40, PoolSevenDay: 1 << 40}
+		}, "wss://ccw.example.com/ws")
 	return s, cdkA
 }
 
@@ -2386,8 +2593,12 @@ func TestOverProjectGetsNoConnectionTokens(t *testing.T) {
 	resp2, _ := http.DefaultClient.Do(req)
 	var conn ConnectionResponse
 	json.NewDecoder(resp2.Body).Decode(&conn)
-	if !conn.Over || conn.OverReason != "five_hour_limit" || conn.TerminalToken != "" || conn.SyncToken != "" {
-		t.Fatalf("over project must get no tokens: %+v", conn)
+	if !conn.Over || conn.OverReason != "five_hour_limit" || conn.TerminalToken != "" {
+		t.Fatalf("over project must get no terminal token: %+v", conn)
+	}
+	// 超额仍必须能清理：sync token照发，但模式为cleanup（审计§7）
+	if conn.SyncToken == "" || conn.SyncMode != "cleanup" {
+		t.Fatalf("over project must still get cleanup-mode sync token: %+v", conn)
 	}
 }
 ```
@@ -2407,6 +2618,7 @@ Expected: FAIL（未定义符号）
 package control
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"html/template"
@@ -2430,6 +2642,7 @@ type ConnectionResponse struct {
 	SyncURL       string `json:"sync_url"`
 	TerminalToken string `json:"terminal_token"`
 	SyncToken     string `json:"sync_token"`
+	SyncMode      string `json:"sync_mode"` // "rw"或"cleanup"（超额/磁盘满时只许下载、删除、缩小）
 	DiskUsed      int64  `json:"disk_used"`
 	DiskLimit     int64  `json:"disk_limit"`
 	FiveHourUsed  int64  `json:"five_hour_used"`
@@ -2441,19 +2654,20 @@ type ConnectionResponse struct {
 }
 
 type Server struct {
-	Resolver  project.Resolver
-	Key       []byte
-	Quota     quota.Service
-	Index     storage.Index
-	LimitsFor func(project.Project) quota.Limits
-	AgentBase string
-	Projects  map[string]project.Project // session claims → project元数据缓存
+	Resolver   project.Resolver
+	GetProject func(context.Context, string) (project.Project, error) // 一律查库，无进程内会话状态（审计§5.4）
+	Key        []byte
+	Quota      quota.Service
+	Index      storage.Index
+	LimitsFor  func(project.Project) quota.Limits
+	AgentBase  string
 }
 
-func New(r project.Resolver, key []byte, q quota.Service, idx storage.Index,
+func New(r project.Resolver, getProject func(context.Context, string) (project.Project, error),
+	key []byte, q quota.Service, idx storage.Index,
 	limitsFor func(project.Project) quota.Limits, agentBase string) *Server {
-	return &Server{Resolver: r, Key: key, Quota: q, Index: idx,
-		LimitsFor: limitsFor, AgentBase: agentBase, Projects: map[string]project.Project{}}
+	return &Server{Resolver: r, GetProject: getProject, Key: key, Quota: q, Index: idx,
+		LimitsFor: limitsFor, AgentBase: agentBase}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -2477,7 +2691,6 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 401, "invalid_cdk") // 统一错误：不泄露CDK是否存在/过期/禁用
 		return
 	}
-	s.Projects[p.ID] = p
 	tok, err := token.Mint(s.Key, p.ID, token.AudSession, 15*time.Minute, time.Now())
 	if err != nil {
 		httpErr(w, 500, "internal")
@@ -2494,8 +2707,8 @@ func (s *Server) authed(r *http.Request) (project.Project, bool) {
 	if err != nil {
 		return project.Project{}, false
 	}
-	p, ok := s.Projects[c.ProjectID]
-	return p, ok
+	p, err := s.GetProject(r.Context(), c.ProjectID)
+	return p, err == nil
 }
 
 func (s *Server) connection(w http.ResponseWriter, r *http.Request) {
@@ -2522,10 +2735,14 @@ func (s *Server) connection(w http.ResponseWriter, r *http.Request) {
 	if disk >= p.DiskLimit && !resp.Over {
 		resp.Over, resp.OverReason = true, "disk_limit"
 	}
-	if !resp.Over {
-		resp.TerminalToken, _ = token.Mint(s.Key, p.ID, token.AudTerminal, 15*time.Minute, now)
-		resp.SyncToken, _ = token.Mint(s.Key, p.ID, token.AudSync, 15*time.Minute, now)
+	// 超额/磁盘满：不发终端令牌，但sync降级为cleanup模式照发（仍能下载/删除/缩小，审计§7）
+	resp.SyncMode = "rw"
+	if resp.Over {
+		resp.SyncMode = "cleanup"
+	} else {
+		resp.TerminalToken, _ = token.Mint(s.Key, p.ID, token.AudTerminal, 2*time.Minute, now)
 	}
+	resp.SyncToken, _ = token.Mint(s.Key, p.ID, token.AudSync, 2*time.Minute, now)
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -2566,7 +2783,7 @@ func httpErr(w http.ResponseWriter, code int, msg string) {
 </ul>
 ```
 
-`cmd/control-api/main.go`改为：加载配置→`store.New`+`Migrate`→用store实现的Resolver/UsageReader/PGIndex组装`control.New(...)`→`http.ListenAndServe(cfg.ListenAddr, s.Handler())`。管理端（建项目/发CDK）以`net.Listen("unix", cfg.AdminSocketPath)`挂独立mux：`POST /admin/projects`、`POST /admin/cdks`（返回一次性明文），不注册到公网Handler。
+`cmd/control-api/main.go`改为：加载配置→`store.New`+`Migrate`（连接或Ping失败打印错误并`os.Exit(1)`）→用store实现的Resolver/UsageReader/PGIndex与`store.GetProjectByID`组装`control.New(...)`→用`http.Server{ReadTimeout: 10s, ReadHeaderTimeout: 5s, WriteTimeout: 30s, IdleTimeout: 60s}`启动并检查`ListenAndServe`返回错误（不得忽略）。**只监听内网/localhost**，公网由Caddy/Nginx的443反代（Task 12的Caddyfile）。exchange端点套IP+public-id令牌桶限速中间件。管理端（建项目/发CDK）以`net.Listen("unix", cfg.AdminSocketPath)`挂独立mux：`POST /admin/projects`、`POST /admin/cdks`（返回一次性明文），socket权限`0660`并校验调用者；不注册到公网Handler。门户`/usage`不用Bearer：用独立管理员cookie或仅localhost+SSH隧道访问（审计§11），CDK会话仅能查自己项目的JSON接口。
 
 - [ ] **Step 4: 运行测试**
 
@@ -2949,7 +3166,7 @@ func main() {
 }
 ```
 
-`runSyncLoop`与`runTerminal`在同文件实现：`runTerminal`用`gorilla/websocket`连`conn.TerminalURL+"?token="+conn.TerminalToken`，`term.MakeRaw(stdin)`进raw mode（退出时恢复），goroutine双向拷贝，监听`SIGWINCH`（Windows上轮询`term.GetSize`每2秒）发resize Text帧；`runSyncLoop`调用`ScanDir`+`LocalIndex`+`Diff`，通过同步WebSocket端点执行Plan（上传走`WriteTemp`语义的消息，冲突时按`ConflictName`落地并打印提示），fsnotify事件进入500ms定时器去抖后重扫。两个循环断线后均以1s起倍增退避重连（上限30s），并用会话令牌重新`Connection`换新的短期令牌。
+`runSyncLoop`与`runTerminal`在同文件实现：`runTerminal`用`gorilla/websocket`连`conn.TerminalURL+"?token="+conn.TerminalToken`，`term.MakeRaw(stdin)`进raw mode（退出时恢复），goroutine双向拷贝，监听`SIGWINCH`（Windows上轮询`term.GetSize`每2秒）发resize Text帧；`runSyncLoop`调用`ScanDir`+`LocalIndex`+`Diff`，通过同步WebSocket端点执行Plan（上传走`WriteTemp`语义的消息，冲突时按`ConflictName`落地并打印提示），fsnotify事件进入500ms定时器去抖后重扫。两个循环断线后均以1s起倍增退避重连（上限30s），并用会话令牌重新`Connection`换新的2分钟连接令牌；session token过期（401）时用**内存中保留的CDK**自动重新`Exchange`（审计§5.3），CDK只存进程内存、不落盘不入日志。连接WebSocket时令牌放`Authorization`头。`sync_mode=="cleanup"`时CLI只执行下载/删除/缩小并提示用户当前为清理模式。
 
 - [ ] **Step 4: 运行测试与三平台交叉编译**
 
@@ -2971,6 +3188,7 @@ git add -A && git commit -m "feat: add cross-platform remote workspace cli"
 - Create: `internal/sync/ws.go`（worker-agent侧同步WebSocket端点：验AudSync令牌→按消息调DirStore+PGIndex+Gate）
 - Modify: `cmd/worker-agent/main.go`（挂`/v1/sync`路由、启动每30秒的usage.Collector循环、容器名改为store查询）
 - Create: `tests/e2e/two_projects_test.go`
+- Create: `deploy/Caddyfile`
 - Create: `deploy/control-api.service`
 - Create: `deploy/worker-agent.service`
 - Create: `deploy/Dockerfile.claude`（含官方Claude Code、git、tmux、非root用户claude的项目容器镜像）
@@ -2980,15 +3198,19 @@ git add -A && git commit -m "feat: add cross-platform remote workspace cli"
 - Consumes: 前面全部任务的产出
 - Produces: 可部署系统与e2e证据
 
-同步WebSocket消息协议（JSON Text帧+文件内容Binary帧交替）：
+同步WebSocket消息协议（JSON Text帧+文件内容Binary帧交替；连接建立后第一帧为认证帧，令牌不进URL）：
 
 ```json
-{"op":"hello","project_id":"...","device":"laptop"}
-{"op":"manifest"}                          → 服务端回{"op":"manifest","entries":[FileEntry...]}
-{"op":"put","entry":FileEntry}             → 紧随一个Binary帧为文件内容；服务端校验SHA与Gate后回{"op":"ack","path":"...","revision":N}或{"op":"reject","path":"...","reason":"disk_full|sha_mismatch|unsafe_path"}
+{"op":"auth","token":"<sync-token>"}       → 验证AudSync（2分钟）；服务端回{"op":"auth_ok","mode":"rw|cleanup"}
+{"op":"hello","project_id":"...","device":"laptop","cursor":N}
+{"op":"manifest"}                          → 服务端回{"op":"manifest","entries":[FileEntry...]}——来自file_index，含未过保留期tombstone，不是磁盘扫描
+{"op":"put","entry":FileEntry,"base_revision":N,"declared_size":M}
+                                           → 紧随一个Binary帧为文件内容；服务端在项目级锁/事务中：CAS比较base_revision与当前server_revision→限制实际读取字节数（不信任declared_size）→写tmp并算真实SHA/大小→Gate.Allow预留→原子替换→revision+1→回{"op":"ack","path":"...","revision":N+1}；失败回{"op":"reject","path":"...","reason":"conflict|disk_full|sha_mismatch|unsafe_path|readonly_mode|too_large"}
 {"op":"get","path":"..."}                  → 服务端回{"op":"file","entry":FileEntry}+Binary帧
-{"op":"delete","entry":FileEntry}          → tombstone；回ack
+{"op":"delete","entry":FileEntry,"base_revision":N} → CAS通过后写持久tombstone；回ack
 ```
+
+收到`reject:conflict`时客户端下载远端版本存为`ConflictName(path, "remote", now)`并提示用户，不覆盖本地。`mode=="cleanup"`时服务端拒绝一切新增/扩大的`put`（`readonly_mode`），只允许get/delete/缩小。WebSocket设最大消息大小、读写deadline、ping/pong与连接数上限。
 
 - [ ] **Step 1: 写e2e测试（在目标VPS或有Docker的环境运行；无Docker自动skip）**
 
@@ -3020,8 +3242,14 @@ func TestTwoProjectsEndToEnd(t *testing.T) {
 	t.Run("disk_quota", testDiskQuota)                  // 超限上传被reject，删除仍允许，页面数值与SUM一致
 	t.Run("terminal_reconnect", testTerminalReconnect)  // 断开WebSocket重连后capture-pane可见断开前标记
 	t.Run("quota_a_over_b_free", testQuotaIsolation)    // 灌A的usage_events到超限：A拒连，B正常
+	t.Run("quota_enforce_active_conn", testQuotaClosesActiveTerminals) // A超额时已连接终端被关闭输入（审计§9.3）
+	t.Run("concurrent_uploads_quota", testConcurrentUploadsQuota) // 并发上传不能各读旧用量后同时突破限额（审计§15.2）
+	t.Run("cleanup_mode_when_full", testCleanupModeStillWorks)    // 磁盘满/超额时仍能下载、删除、缩小（审计§15.9）
+	t.Run("api_restart_keeps_sessions", testAPIRestartKeepsSessions) // 重启control-api后未过期会话仍可解析项目（审计§15.1）
+	t.Run("cloud_edit_syncs_back", testCloudEditSyncsBack)        // 云端直接改/删文件→revision/tombstone→同步回本地（审计§15.10）
 	t.Run("rebuild_keeps_volumes", testRebuildKeepsData) // docker rm A容器→EnsureProjectRuntime重建→数据仍在
-	t.Run("no_secrets_in_logs", testNoSecretLeak)       // 全部服务日志grep无ccw_前缀明文与OAuth token
+	t.Run("backup_restore", testBackupRestore)           // 加密备份恢复到空环境后A/B、数据库与Claude HOME可用（审计§15.12）
+	t.Run("no_secrets_in_logs", testNoSecretLeak)       // 服务与反代日志grep无ccw_前缀明文、令牌与OAuth token
 }
 ```
 
@@ -3034,7 +3262,25 @@ Expected: SKIP（docker not available）——测试结构编译通过
 
 - [ ] **Step 3: 实现`internal/sync/ws.go`与worker-agent接线**
 
-`ws.go`按上方协议实现：每个`put`在事务中执行`Gate.Allow(used, oldSize, newSize)`→`WriteTemp`→SHA比对`entry.SHA256`→`Promote`→`Index.Upsert`；任何一步失败回`reject`并删tmp。`cmd/worker-agent/main.go`补：`store.New`、每项目一个`usage.Collector`每30秒`Scan`、`mux.HandleFunc("GET /v1/sync", ...)`；终端与同步连接建立/断开时写`sessions`表（`connected_at`/`last_seen_at`/`state`），供门户显示会话状态。
+`ws.go`按上方协议实现：每个`put`在**项目级advisory lock+事务**中执行CAS（`base_revision`不匹配→`conflict`）→`Gate.Allow(used, oldSize, newSize)`预留→`WriteTemp`（带字节上限`io.LimitReader`）→SHA比对`entry.SHA256`→`Promote`→`Index.Upsert`（带期望revision的CAS更新）；任何一步失败回`reject`、删tmp并释放预留。
+
+`cmd/worker-agent/main.go`补齐四件事：
+
+1. `store.New`+每项目一个`usage.Collector`（注入`usage_offsets`表的OffsetStore）每30秒`Scan`；
+2. `mux.HandleFunc("GET /v1/sync", ...)`；终端与同步连接建立/断开时写`sessions`表（`connected_at`/`last_seen_at`/`state`）；
+3. **云端workspace watcher（审计§6.3）：**监控各项目workspace（只读挂载+fsnotify），500ms静默窗口→前后双哈希一致才入账→与file_index比较→为Claude的新增/修改/删除分配新server revision或持久tombstone；
+4. **额度主动执行循环（审计§9.3）：**每30秒及每次用量入库后`quota.Check`；项目超额→关闭该项目所有终端输入WebSocket→60秒宽限期→仍在产生新用量则`docker exec <container> pkill -INT -f claude`→保留tmux/workspace/Claude HOME→sync连接切cleanup模式→窗口恢复后允许重连。门户注明存在最后一个请求的计量延迟。
+
+`deploy/Caddyfile`（唯一公网入口，两个服务只听localhost）：
+
+```text
+ccw.example.com {
+    reverse_proxy /api/* 127.0.0.1:8080
+    reverse_proxy /portal/* 127.0.0.1:8080
+    reverse_proxy /ws/terminal 127.0.0.1:8081
+    reverse_proxy /ws/sync 127.0.0.1:8081
+}
+```
 
 `deploy/control-api.service`：
 
@@ -3101,4 +3347,21 @@ git add -A && git commit -m "test: verify isolated dual-project remote workspace
 | CDK无SSH/Docker权限 | Task 4、10（管理socket分离） |
 | 无CDK明文/OAuth凭据泄漏 | Task 2、11、12（no_secrets_in_logs） |
 | macOS与Win/Linux同等验收 | Task 11（交叉编译+路径测试）+VPS手工验收 |
-| 用量采集无重复无遗漏 | Task 8（真实样例）、12 |
+| 用量采集无重复无遗漏 | Task 8（脱敏样例）、12 |
+
+## 验收对照补充（spec §14第13–24条，来自审计§15）
+
+| 验收条 | 覆盖任务 |
+|---|---|
+| control-api重启后未过期会话仍可解析项目 | Task 10（无状态验签+查库）、12（api_restart_keeps_sessions） |
+| 并发上传不能突破硬盘限额 | Task 12（advisory lock+预留；concurrent_uploads_quota） |
+| 伪报文件大小不能写爆临时目录 | Task 12（io.LimitReader+too_large） |
+| JSONL半行补全后准确采集 | Task 8（OffsetStore+partial_line） |
+| 同一requestId多条记录按确认语义计量 | Task 0（语义确认）、Task 8 |
+| session token过期后CLI自动重新exchange | Task 11 |
+| 日志与错误信息无任何令牌 | Task 10、11、12（no_secrets_in_logs） |
+| A超额时已连接终端不能继续提交 | Task 12（执行循环；quota_enforce_active_conn） |
+| 超额/磁盘满仍能下载、删除、缩小 | Task 10（cleanup模式sync token）、12（cleanup_mode_when_full） |
+| 服务端改/删文件产生revision/tombstone并回同步 | Task 12（云端watcher；cloud_edit_syncs_back） |
+| worker-agent不暴露公网，流量走WSS/TLS | Task 12（Caddyfile+localhost监听） |
+| 备份恢复到空服务器可用 | Task 12（backup_restore） |
