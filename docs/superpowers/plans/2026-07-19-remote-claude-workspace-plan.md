@@ -1,6 +1,8 @@
-# 双项目远程Claude工作空间Implementation Plan（v2）
+# 双项目远程Claude工作空间Implementation Plan（v3）
 
-> **v2修订说明：**本计划已按[审计与修订说明](../specs/2026-07-19-remote-claude-workspace-audit-corrections.md)完成修订（容器TTY、CDK两段式、令牌传递、同步revision、池双窗口、超额主动执行、迁移管理等）；若仍有冲突，以审计文档为准，其次以[Design Spec v2](../specs/2026-07-19-remote-claude-workspace-design.md)为准。
+> **v3修订说明：**本计划已按[v2审查与v3调整要求](../specs/2026-07-19-remote-claude-workspace-v2-review-adjustments.md)（最高权威）与[审计与修订说明](../specs/2026-07-19-remote-claude-workspace-audit-corrections.md)完成修订；配套设计为[Design Spec v3](../specs/2026-07-19-remote-claude-workspace-design.md)。**编码闸门：**在用户批准v3并明确允许前，只可执行Task 0中不消耗真实Claude额度的准备项；24小时双登录验证也需用户明确同意后才运行。
+>
+> **v2→v3主要变更：**①终端附着改`docker exec -it`（真实TTY）；②公网/后端路径合同+Caddy前缀重写与集成测试；③"单用途令牌"更名为"2分钟短期连接令牌"（可重连，worker接入时实时复查额度）；④同步改三方判断（base_revision+base_sha256+current_sha256+本地状态）；⑤同步路径生产安全边界改`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`，tmp随机独占+上限加一字节判超；⑥新增Task 13文件系统硬配额（默认每项目loop文件系统）；⑦JSONL采集器按OffsetStore+半行拼接+同requestId最终值语义重写；⑧CLI超额不退出，cleanup模式端到端可达，删除`?token=`残留；⑨依赖与镜像版本全部固定（deploy/versions.lock）；⑩门户定案为localhost+SSH隧道；⑪服务默认只监听127.0.0.1；⑫描述性段落不再自称"完整实现"，改为接口/状态机/测试先行的工程步骤。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -23,9 +25,11 @@
 - 中文文档遵守中英文之间无空格的排版规则（代码块除外；不要对本文件跑clean_cjk_spaces.py，会破坏命令语法）。
 - 仓库根：`/root/code1/remote-claude-workspace/`；所有路径相对仓库根。仓库内`remote-claude-workspace/`子目录是用户本地机器的FUSE同步挂载点，已gitignore，任何任务不得写入或删除该目录。
 - migration文件只保留`internal/store/migrations/`一份源，用`schema_migrations`表保证每个迁移只执行一次。
-- terminal/sync连接令牌TTL为2分钟、单用途；令牌只放`Authorization`头或首个认证帧，禁止URL查询参数。
+- terminal/sync连接令牌TTL为2分钟（**短期令牌，非单用途**：有效期内允许重连，worker每次接入实时复查额度）；令牌只放`Authorization`头或首个认证帧，全计划禁止出现`?token=`。
 - 整体池保护必须同时计算5小时与7天两个窗口。
-- worker-agent只监听localhost/内网；公网只有反向代理的443。
+- control-api与worker-agent默认只监听`127.0.0.1:8080`/`127.0.0.1:8081`；公网只有反向代理的443，路径按spec第3节合同重写。
+- **版本固定：**任何实施步骤禁止`@latest`或未固定版本安装；本计划指定的版本在Task 1锁入go.mod/go.sum，镜像与工具版本记录于`deploy/versions.lock`。
+- **诚实表述：**计划中给出代码的步骤按代码执行；只给接口/状态机/规则的步骤是"实现规格"，编码时测试先行补全，不得跳过其中任何列出的行为点。
 
 ## 阶段映射（审计§13的Phase与Task对应关系）
 
@@ -37,7 +41,7 @@
 | Phase 3 | 可靠同步 | Task 6、7 |
 | Phase 4 | 第二项目与隔离 | Task 12的隔离/重建部分 |
 | Phase 5 | 用量与额度执行 | Task 8、9 |
-| Phase 6 | 门户、备份与发布验收 | Task 10、11、12 |
+| Phase 6 | 门户、备份与发布验收 | Task 10、11、12、13 |
 
 ---
 
@@ -51,7 +55,7 @@
 **Interfaces:**
 - Produces: 三份证据文件与一份脱敏JSONL样例；Task 8的解析测试必须以该样例为准。
 
-- [ ] **Step 1: 双Claude HOME同账号登录24小时验证**——在任一有Docker的Linux机器上起两个容器，各自独立Claude HOME卷，分别官方登录；每小时各发起一次正常对话（可用`claude -p "ping"`）；24小时后检查两边凭据均未失效。结果（通过/失败、时间线、Claude Code版本）写入`dual-login-24h.md`。**失败→停止，回改设计为分时使用或官方API接入。**
+- [ ] **Step 1: 双Claude HOME同账号登录24小时验证**（**消耗真实Claude额度，须用户明确同意后才运行**）——在任一有Docker的Linux机器上起两个容器，各自独立Claude HOME卷，分别官方登录；每小时各发起一次正常对话（可用`claude -p "ping"`）；24小时后检查两边凭据均未失效。结果（通过/失败、时间线、Claude Code版本）写入`dual-login-24h.md`。**失败→停止，回改设计为分时使用或官方API接入。**
 - [ ] **Step 2: tmux容器原型**——用`sleep infinity`作PID 1起最小容器，执行审计§4.1的三步会话准备流程（has-session→new-session -d→attach），验证：断开attach后会话存活、重连可见此前输出、容器stop/start后按`claude --continue`策略恢复。记录到`tmux-prototype.md`。
 - [ ] **Step 3: 脱敏JSONL样例与requestId语义**——从真实Claude HOME提取一段多轮（含工具调用）会话JSONL，把文本内容替换为占位符、只保留结构与usage字段；确认同一requestId出现多条记录时哪条代表最终用量（最终/最大计数规则），把结论写进样例文件头部注释与Task 8的解析规则。
 - [ ] **Step 4: Commit**
@@ -118,8 +122,9 @@ func TestLoadValid(t *testing.T) {
 	if len(c.TokenSigningKey) != 32 {
 		t.Fatalf("want 32-byte key, got %d", len(c.TokenSigningKey))
 	}
-	if c.ListenAddr != ":8080" || c.AgentListenAddr != ":8081" {
-		t.Fatalf("defaults not applied: %+v", c)
+	// 默认只监听回环地址（审查§3.1）：绑定所有网卡的":8080"形式是错误答案
+	if c.ListenAddr != "127.0.0.1:8080" || c.AgentListenAddr != "127.0.0.1:8081" {
+		t.Fatalf("defaults must bind loopback only: %+v", c)
 	}
 }
 
@@ -173,8 +178,8 @@ func Load(getenv func(string) string) (Config, error) {
 	c := Config{
 		DatabaseURL:     getenv("CCW_DATABASE_URL"),
 		WorkspaceRoot:   getenv("CCW_WORKSPACE_ROOT"),
-		ListenAddr:      or(getenv("CCW_LISTEN_ADDR"), ":8080"),
-		AgentListenAddr: or(getenv("CCW_AGENT_LISTEN_ADDR"), ":8081"),
+		ListenAddr:      or(getenv("CCW_LISTEN_ADDR"), "127.0.0.1:8080"),
+		AgentListenAddr: or(getenv("CCW_AGENT_LISTEN_ADDR"), "127.0.0.1:8081"),
 		AdminSocketPath: or(getenv("CCW_ADMIN_SOCKET"), "/run/ccw/admin.sock"),
 		ClaudeImage:     or(getenv("CCW_CLAUDE_IMAGE"), "ccw-claude:latest"),
 	}
@@ -358,8 +363,10 @@ Expected: FAIL（未定义符号）
 - [ ] **Step 3: 实现**
 
 ```bash
-go get golang.org/x/crypto@latest github.com/jackc/pgx/v5@latest github.com/google/uuid@latest
+go get golang.org/x/crypto@v0.31.0 github.com/jackc/pgx/v5@v5.7.1 github.com/google/uuid@v1.6.0
 ```
+
+（版本为编写本计划时的已验证稳定版；如执行时需调整，先更新本行与`deploy/versions.lock`再安装，禁止`@latest`。）
 
 `internal/auth/cdk.go`：
 
@@ -727,7 +734,7 @@ git add -A && git commit -m "feat: bind hashed cdk tokens to projects"
   - `token.Mint(key []byte, projectID, audience string, ttl time.Duration, now time.Time) (string, error)`
   - `token.Verify(key []byte, tok, audience string, now time.Time) (Claims, error)`；`Claims{ProjectID, Audience string; ExpiresAt time.Time}`
   - 错误：`token.ErrInvalid`（签名/格式错）、`token.ErrExpired`、`token.ErrAudience`
-  - TTL约定（由签发方传入）：AudSession=15分钟；AudTerminal/AudSync=**2分钟**、单用途；令牌只经`Authorization`头或首个认证帧传递，禁止URL查询参数
+  - TTL约定（由签发方传入）：AudSession=15分钟；AudTerminal/AudSync=**2分钟短期连接令牌**——无状态HMAC无法保证单次使用，故不声称单用途；有效期内允许重连，worker每次接入实时复查额度（审查§2.3方案1）；令牌只经`Authorization`头或首个认证帧传递，禁止URL查询参数
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1098,7 +1105,7 @@ git add -A && git commit -m "feat: isolate project runtimes with persistent volu
 - Produces:
   - `terminal.Names(projectID string) (socket, session string)`（socket=projectID，session恒为`main`）
   - `terminal.EnsureSessionCmds(containerName, projectID string) [][]string`——审计§4.1流程：先`has-session -t main`，不存在则`new-session -d -s main -c /workspace claude`（都经`docker exec`）
-  - `terminal.AttachCmd(containerName, projectID string) []string`——`["docker","exec","-i",container,"tmux","-L",projectID,"attach-session","-t","main"]`
+  - `terminal.AttachCmd(containerName, projectID string) []string`——`["docker","exec","-it",container,"tmux","-L",projectID,"attach-session","-t","main"]`（**必须`-it`**：`-t`给容器内分配TTY，宿主机侧TTY由creack/pty提供；真实容器附着/断开/重连集成测试在Task 12覆盖）
   - `terminal.Serve(w http.ResponseWriter, r *http.Request, key []byte, start func(projectID string) (io.ReadWriteCloser, error))`：WebSocket升级+字节转发+resize控制消息`{"type":"resize","rows":N,"cols":N}`；令牌从`Authorization: Bearer`头读取（2分钟，AudTerminal），禁止URL查询参数；设置最大消息大小、读写deadline、ping/pong与连接数上限
   - 断开语义：只关闭PTY与WebSocket，绝不kill tmux会话
 
@@ -1131,6 +1138,10 @@ func TestAttachCmdNeverKills(t *testing.T) {
 	}
 	if !strings.Contains(joined, "attach-session") {
 		t.Fatalf("must attach existing session: %q", joined)
+	}
+	// 审查§2.1：必须为容器内分配TTY，否则tmux attach失败
+	if !strings.Contains(joined, "-it") {
+		t.Fatalf("attach must allocate a container tty (-it): %q", joined)
 	}
 }
 
@@ -1181,7 +1192,7 @@ Expected: FAIL（未定义符号）
 - [ ] **Step 3: 实现**
 
 ```bash
-go get github.com/gorilla/websocket@latest github.com/creack/pty@latest
+go get github.com/gorilla/websocket@v1.5.3 github.com/creack/pty@v1.1.24
 ```
 
 `internal/terminal/session.go`：
@@ -1202,8 +1213,10 @@ func EnsureSessionCmds(containerName, projectID string) [][]string {
 	}
 }
 
+// AttachCmd必须带-t（审查§2.1）：容器内不分配TTY时tmux attach会直接失败；
+// 宿主机侧的TTY由creack/pty提供给docker CLI进程，两者缺一不可。
 func AttachCmd(containerName, projectID string) []string {
-	return []string{"docker", "exec", "-i", containerName,
+	return []string{"docker", "exec", "-it", containerName,
 		"tmux", "-L", projectID, "attach-session", "-t", "main"}
 }
 ```
@@ -1239,7 +1252,7 @@ type ctrlMsg struct {
 // start由worker-agent注入：为该项目启动/附着PTY（docker exec tmux attach）。
 func Serve(w http.ResponseWriter, r *http.Request, key []byte,
 	start func(projectID string) (io.ReadWriteCloser, error)) {
-	// 令牌只从Authorization头读取（2分钟单用途）；URL查询参数会进代理日志，禁止使用
+	// 令牌只从Authorization头读取（2分钟短期令牌，可重连）；URL查询参数会进代理日志，禁止使用
 	raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	claims, err := token.Verify(key, raw, token.AudTerminal, time.Now())
 	if err != nil {
@@ -1394,14 +1407,15 @@ git add -A && git commit -m "feat: persist terminal sessions across reconnects"
 **Interfaces:**
 - Consumes: `token.Verify`（AudSync）
 - Produces:
-  - `sync.FileEntry{Path string; Size int64; SHA256 string; Revision int64; Deleted bool}`
-  - `sync.Diff(local, remote []FileEntry) Plan`；`Plan{Upload, Download []FileEntry; Conflicts []Conflict; TombstoneToRemote, TombstoneToLocal []FileEntry}`；`Conflict{Path, LocalSHA, RemoteSHA string}`
+  - `sync.FileEntry{Path string; Size int64; SHA256 string; Revision int64; Deleted bool}`——**服务端**清单条目，`Revision`即`server_revision`
+  - `sync.LocalEntry{Path string; Size int64; BaseRevision int64; BaseSHA256 string; CurrentSHA256 string; State LocalState}`与`type LocalState string`（`StateClean`/`StateModified`/`StateDeleted`）——**本地**索引条目，保存三方判断所需基线（审查§2.4）；`sync.BuildLocal(scanned []FileEntry, base []LocalEntry) []LocalEntry`由当前扫描结果+上次基线推导State
+  - `sync.Diff(local []LocalEntry, remote []FileEntry) Plan`；`Plan{Upload []LocalEntry; Download []FileEntry; Conflicts []Conflict; DeleteToRemote []LocalEntry; DeleteToLocal []FileEntry}`；`Conflict{Path, LocalSHA, RemoteSHA string}`。**三方规则（不再是"revision大者胜"）：**clean+服务端已变→下载；modified+服务端未变→CAS上传；modified+服务端已变→冲突副本；deleted+服务端未变→CAS删除；deleted+服务端已变→保留服务端版本并提示冲突
   - `sync.SafeRelPath(p string) (string, error)`——校验并规范为forward-slash相对路径；错误`ErrUnsafePath`
   - `sync.DefaultExcluded(path string) bool`——`.env`、`.cclaude/`、`.ssh/`、`.aws/`、`.claude/`前缀
   - `sync.ConflictName(path, device string, at time.Time) string`——`<path>.conflict-<device>-<20060102T150405Z>`；远端副本落地时device恒为`remote`（审计§6.4的`.conflict-remote-<UTC>`）
   - **权威裁决在服务端（审计§6）：**客户端`Diff`只计算候选传输集；冲突以Task 12协议中`put`携带的`base_revision`与服务端`server_revision`的CAS比较为准，不得静默用"revision更大一端"覆盖。`DirStore.Manifest`仅用于灾后重建校验，正式Manifest来自`file_index`（含未过保留期tombstone）
-  - `sync.Store`接口（服务端落盘）：`WriteTemp(path string, r io.Reader) (sha string, size int64, err error)`；`Promote(path string, revision int64) error`；`Delete(path string, revision int64) error`；`Manifest() ([]FileEntry, error)`
-  - `sync.NewDirStore(root string) Store`——`.cclaude.tmp.<revision>`+SHA校验+原子rename；拒绝符号链接逃逸
+  - `sync.Store`接口（服务端落盘）：`WriteTemp(path string, r io.Reader, maxBytes int64) (tmpID, sha string, size int64, err error)`（超限返回`ErrTooLarge`，用"上限+1字节"的LimitReader判定，不信任声明大小）；`Promote(path, tmpID string, revision int64) error`；`Discard(tmpID string)`（任何失败路径删除临时文件并释放空间预留）；`Delete(path string, revision int64) error`；`Manifest() ([]FileEntry, error)`
+  - `sync.NewDirStore(root string) Store`——临时文件**随机命名+`O_EXCL`独占创建**，SHA校验+原子rename。**安全边界（审查§2.5）：**Linux生产实现必须用`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`（`golang.org/x/sys/unix.Openat2`，构建标签`//go:build linux`）解析父目录与目标；`EvalSymlinks`版本仅作非Linux平台测试替代，不得作为生产边界——`MkdirAll`与写入之间的符号链接替换是真实TOCTOU竞态，测试须覆盖"检查后替换符号链接"场景
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1447,29 +1461,38 @@ import (
 	"time"
 )
 
-func e(path, sha string, rev int64, del bool) FileEntry {
+func srv(path, sha string, rev int64, del bool) FileEntry {
 	return FileEntry{Path: path, SHA256: sha, Revision: rev, Deleted: del, Size: 10}
 }
 
-func TestDiffUploadDownload(t *testing.T) {
-	local := []FileEntry{e("a.go", "s1", 1, false), e("new.go", "s2", 0, false)}
-	remote := []FileEntry{e("a.go", "s1", 1, false), e("srv.go", "s3", 4, false)}
+func loc(path string, baseRev int64, baseSHA, curSHA string, st LocalState) LocalEntry {
+	return LocalEntry{Path: path, BaseRevision: baseRev, BaseSHA256: baseSHA, CurrentSHA256: curSHA, State: st, Size: 10}
+}
+
+func TestDiffCleanFollowsServer(t *testing.T) {
+	// 本地未修改（current==base），服务端已前进 → 下载，绝不上传
+	local := []LocalEntry{loc("a.go", 1, "s1", "s1", StateClean)}
+	remote := []FileEntry{srv("a.go", "s9", 5, false)}
 	p := Diff(local, remote)
-	if len(p.Upload) != 1 || p.Upload[0].Path != "new.go" {
-		t.Fatalf("want upload new.go, got %+v", p.Upload)
+	if len(p.Download) != 1 || p.Download[0].SHA256 != "s9" || len(p.Upload)+len(p.Conflicts) != 0 {
+		t.Fatalf("clean local must follow server: %+v", p)
 	}
-	if len(p.Download) != 1 || p.Download[0].Path != "srv.go" {
-		t.Fatalf("want download srv.go, got %+v", p.Download)
-	}
-	if len(p.Conflicts) != 0 {
-		t.Fatalf("no conflicts expected: %+v", p.Conflicts)
+}
+
+func TestDiffModifiedOnCurrentBaseUploads(t *testing.T) {
+	// 本地已修改，服务端仍在同一基线 → CAS上传
+	local := []LocalEntry{loc("a.go", 3, "s1", "s2", StateModified), loc("new.go", 0, "", "n1", StateModified)}
+	remote := []FileEntry{srv("a.go", "s1", 3, false)}
+	p := Diff(local, remote)
+	if len(p.Upload) != 2 || len(p.Conflicts) != 0 {
+		t.Fatalf("want 2 uploads no conflicts, got %+v", p)
 	}
 }
 
 func TestDiffBothModifiedIsConflict(t *testing.T) {
-	// 同一revision基线上双方都改了内容
-	local := []FileEntry{e("a.go", "local-sha", 2, false)}
-	remote := []FileEntry{e("a.go", "remote-sha", 2, false)}
+	// 本地基于rev2修改，服务端已到rev4且内容不同 → 冲突，禁止任何静默传输
+	local := []LocalEntry{loc("a.go", 2, "s1", "local-sha", StateModified)}
+	remote := []FileEntry{srv("a.go", "remote-sha", 4, false)}
 	p := Diff(local, remote)
 	if len(p.Conflicts) != 1 || p.Conflicts[0].Path != "a.go" {
 		t.Fatalf("want conflict on a.go, got %+v", p)
@@ -1479,12 +1502,28 @@ func TestDiffBothModifiedIsConflict(t *testing.T) {
 	}
 }
 
-func TestDiffTombstone(t *testing.T) {
-	local := []FileEntry{e("gone.go", "s", 3, true)}
-	remote := []FileEntry{e("gone.go", "s", 2, false)}
+func TestDiffStaleLocalIsNotAWin(t *testing.T) {
+	// 关键回归（审查§2.4）：本地是未修改的旧版本，不能因为"看起来不同"而上传覆盖服务端
+	local := []LocalEntry{loc("a.go", 2, "s-old", "s-old", StateClean)}
+	remote := []FileEntry{srv("a.go", "s-new", 7, false)}
 	p := Diff(local, remote)
-	if len(p.TombstoneToRemote) != 1 {
-		t.Fatalf("deletion must propagate: %+v", p)
+	if len(p.Upload) != 0 || len(p.Download) != 1 {
+		t.Fatalf("stale clean copy must download, never upload: %+v", p)
+	}
+}
+
+func TestDiffDelete(t *testing.T) {
+	local := []LocalEntry{loc("gone.go", 3, "s", "", StateDeleted)}
+	remote := []FileEntry{srv("gone.go", "s", 3, false)}
+	p := Diff(local, remote)
+	if len(p.DeleteToRemote) != 1 {
+		t.Fatalf("deletion on current base must propagate: %+v", p)
+	}
+	// 删除遇到服务端新版本 → 冲突（保留服务端）
+	remote2 := []FileEntry{srv("gone.go", "s-new", 5, false)}
+	p2 := Diff(local, remote2)
+	if len(p2.DeleteToRemote) != 0 || len(p2.Conflicts) != 1 {
+		t.Fatalf("delete vs newer server must conflict: %+v", p2)
 	}
 }
 
@@ -1513,7 +1552,7 @@ import (
 func TestDirStoreAtomicWriteAndManifest(t *testing.T) {
 	root := t.TempDir()
 	s := NewDirStore(root)
-	sha, size, err := s.WriteTemp("src/main.go", strings.NewReader("package main\n"))
+	tmpID, sha, size, err := s.WriteTemp("src/main.go", strings.NewReader("package main\n"), 1<<20)
 	if err != nil || size != 13 {
 		t.Fatalf("write: sha=%s size=%d err=%v", sha, size, err)
 	}
@@ -1522,7 +1561,7 @@ func TestDirStoreAtomicWriteAndManifest(t *testing.T) {
 	if len(m) != 0 {
 		t.Fatalf("tmp file must not appear in manifest: %+v", m)
 	}
-	if err := s.Promote("src/main.go", 1); err != nil {
+	if err := s.Promote("src/main.go", tmpID, 1); err != nil {
 		t.Fatal(err)
 	}
 	m, _ = s.Manifest()
@@ -1531,16 +1570,29 @@ func TestDirStoreAtomicWriteAndManifest(t *testing.T) {
 	}
 }
 
+func TestDirStoreTooLarge(t *testing.T) {
+	// 审查§2.5/§15.3：真实字节上限用"上限+1"判定，超限必须失败且tmp被清理
+	root := t.TempDir()
+	s := NewDirStore(root)
+	if _, _, _, err := s.WriteTemp("big.bin", strings.NewReader("0123456789"), 9); err != ErrTooLarge {
+		t.Fatalf("want ErrTooLarge, got %v", err)
+	}
+	entries, _ := os.ReadDir(root)
+	if len(entries) != 0 {
+		t.Fatalf("failed write must leave no tmp files: %v", entries)
+	}
+}
+
 func TestDirStoreRejectsEscape(t *testing.T) {
 	root := t.TempDir()
 	s := NewDirStore(root)
-	if _, _, err := s.WriteTemp("../evil", strings.NewReader("x")); err == nil {
+	if _, _, _, err := s.WriteTemp("../evil", strings.NewReader("x"), 8); err == nil {
 		t.Fatal("path escape must be rejected")
 	}
 	// 符号链接逃逸：workspace内建一个指向外部的链接目录
 	outside := t.TempDir()
 	os.Symlink(outside, filepath.Join(root, "link"))
-	if _, _, err := s.WriteTemp("link/evil.txt", strings.NewReader("x")); err == nil {
+	if _, _, _, err := s.WriteTemp("link/evil.txt", strings.NewReader("x"), 8); err == nil {
 		t.Fatal("symlink escape must be rejected")
 	}
 }
@@ -1548,8 +1600,8 @@ func TestDirStoreRejectsEscape(t *testing.T) {
 func TestDirStoreDeleteTombstone(t *testing.T) {
 	root := t.TempDir()
 	s := NewDirStore(root)
-	s.WriteTemp("a.txt", strings.NewReader("hello"))
-	s.Promote("a.txt", 1)
+	tmpID, _, _, _ := s.WriteTemp("a.txt", strings.NewReader("hello"), 8)
+	s.Promote("a.txt", tmpID, 1)
 	if err := s.Delete("a.txt", 2); err != nil {
 		t.Fatal(err)
 	}
@@ -1619,62 +1671,119 @@ type FileEntry struct {
 	Path     string `json:"path"`
 	Size     int64  `json:"size"`
 	SHA256   string `json:"sha256"`
-	Revision int64  `json:"revision"`
+	Revision int64  `json:"revision"` // server_revision，只由服务端分配
 	Deleted  bool   `json:"deleted"`
+}
+
+type LocalState string
+
+const (
+	StateClean    LocalState = "clean"
+	StateModified LocalState = "modified"
+	StateDeleted  LocalState = "deleted"
+)
+
+// LocalEntry保存三方判断的基线（审查§2.4）：只有同时知道
+// "上次确认的服务端版本"和"当前本地内容"，才能区分旧副本与新修改。
+type LocalEntry struct {
+	Path          string     `json:"path"`
+	Size          int64      `json:"size"`
+	BaseRevision  int64      `json:"base_revision"`
+	BaseSHA256    string     `json:"base_sha256"`
+	CurrentSHA256 string     `json:"current_sha256"`
+	State         LocalState `json:"state"`
 }
 
 type Conflict struct{ Path, LocalSHA, RemoteSHA string }
 
 type Plan struct {
-	Upload, Download                     []FileEntry
-	Conflicts                            []Conflict
-	TombstoneToRemote, TombstoneToLocal  []FileEntry
+	Upload         []LocalEntry
+	Download       []FileEntry
+	Conflicts      []Conflict
+	DeleteToRemote []LocalEntry
+	DeleteToLocal  []FileEntry
 }
 
-// Diff规则：
-//   只在一端存在（且未删除）→ 传到另一端；
-//   两端同revision但SHA不同 → 冲突（双方都在同一基线上改动）；
-//   一端revision更高 → 高者胜出（单侧变化）；
-//   一端deleted且revision更高 → tombstone传播。
-func Diff(local, remote []FileEntry) Plan {
-	li := index(local)
-	ri := index(remote)
+// Diff三方规则（服务端CAS是最终裁决，这里只产生候选集）：
+//   clean    + 服务端已变 → 下载（本地旧副本永远不是"赢家"）；
+//   modified + 服务端未变 → CAS上传；
+//   modified + 服务端已变 → 冲突副本；
+//   deleted  + 服务端未变 → CAS删除；
+//   deleted  + 服务端已变 → 冲突（保留服务端版本）。
+func Diff(local []LocalEntry, remote []FileEntry) Plan {
+	ri := make(map[string]FileEntry, len(remote))
+	for _, r := range remote {
+		ri[r.Path] = r
+	}
+	seen := make(map[string]bool, len(local))
 	var p Plan
-	for path, l := range li {
-		r, ok := ri[path]
-		switch {
-		case !ok:
-			if !l.Deleted {
-				p.Upload = append(p.Upload, l)
+	for _, l := range local {
+		seen[l.Path] = true
+		r, ok := ri[l.Path]
+		serverAdvanced := ok && (r.Revision != l.BaseRevision || r.Deleted)
+		switch l.State {
+		case StateClean:
+			if serverAdvanced {
+				if r.Deleted {
+					p.DeleteToLocal = append(p.DeleteToLocal, r)
+				} else {
+					p.Download = append(p.Download, r)
+				}
 			}
-		case l.Deleted && l.Revision > r.Revision:
-			p.TombstoneToRemote = append(p.TombstoneToRemote, l)
-		case r.Deleted && r.Revision > l.Revision:
-			p.TombstoneToLocal = append(p.TombstoneToLocal, r)
-		case l.SHA256 == r.SHA256:
-			// 一致，无事
-		case l.Revision == r.Revision:
-			p.Conflicts = append(p.Conflicts, Conflict{Path: path, LocalSHA: l.SHA256, RemoteSHA: r.SHA256})
-		case l.Revision > r.Revision:
-			p.Upload = append(p.Upload, l)
-		default:
-			p.Download = append(p.Download, r)
+		case StateModified:
+			switch {
+			case !ok || !serverAdvanced:
+				p.Upload = append(p.Upload, l)
+			case r.SHA256 == l.CurrentSHA256:
+				// 内容碰巧一致：只需更新基线，无需传输
+			default:
+				p.Conflicts = append(p.Conflicts, Conflict{Path: l.Path, LocalSHA: l.CurrentSHA256, RemoteSHA: r.SHA256})
+			}
+		case StateDeleted:
+			if !ok || !serverAdvanced {
+				p.DeleteToRemote = append(p.DeleteToRemote, l)
+			} else if !r.Deleted {
+				p.Conflicts = append(p.Conflicts, Conflict{Path: l.Path, LocalSHA: "", RemoteSHA: r.SHA256})
+			}
 		}
 	}
 	for path, r := range ri {
-		if _, ok := li[path]; !ok && !r.Deleted {
+		if !seen[path] && !r.Deleted {
 			p.Download = append(p.Download, r)
 		}
 	}
 	return p
 }
 
-func index(es []FileEntry) map[string]FileEntry {
-	m := make(map[string]FileEntry, len(es))
-	for _, e := range es {
-		m[e.Path] = e
+// BuildLocal由当前目录扫描结果与上次保存的基线推导每条路径的State。
+func BuildLocal(scanned []FileEntry, base []LocalEntry) []LocalEntry {
+	bi := make(map[string]LocalEntry, len(base))
+	for _, b := range base {
+		bi[b.Path] = b
 	}
-	return m
+	seen := make(map[string]bool, len(scanned))
+	var out []LocalEntry
+	for _, s := range scanned {
+		seen[s.Path] = true
+		b, ok := bi[s.Path]
+		e := LocalEntry{Path: s.Path, Size: s.Size, CurrentSHA256: s.SHA256}
+		if ok {
+			e.BaseRevision, e.BaseSHA256 = b.BaseRevision, b.BaseSHA256
+		}
+		if ok && s.SHA256 == b.BaseSHA256 {
+			e.State = StateClean
+		} else {
+			e.State = StateModified // 新文件的BaseRevision=0也走CAS上传
+		}
+		out = append(out, e)
+	}
+	for _, b := range base {
+		if !seen[b.Path] && b.State != StateDeleted {
+			out = append(out, LocalEntry{Path: b.Path, BaseRevision: b.BaseRevision,
+				BaseSHA256: b.BaseSHA256, State: StateDeleted})
+		}
+	}
+	return out
 }
 
 func ConflictName(path, device string, at time.Time) string {
@@ -1688,8 +1797,10 @@ func ConflictName(path, device string, at time.Time) string {
 package sync
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -1698,9 +1809,12 @@ import (
 	"strings"
 )
 
+var ErrTooLarge = errors.New("sync: content exceeds size limit")
+
 type Store interface {
-	WriteTemp(path string, r io.Reader) (sha string, size int64, err error)
-	Promote(path string, revision int64) error
+	WriteTemp(path string, r io.Reader, maxBytes int64) (tmpID, sha string, size int64, err error)
+	Promote(path, tmpID string, revision int64) error
+	Discard(tmpID string)
 	Delete(path string, revision int64) error
 	Manifest() ([]FileEntry, error)
 }
@@ -1709,7 +1823,13 @@ type DirStore struct{ root string }
 
 func NewDirStore(root string) *DirStore { return &DirStore{root: root} }
 
-// resolve把相对路径映射到root下，并用EvalSymlinks防符号链接逃逸。
+// resolve把相对路径映射到root下。
+//
+// 安全边界（审查§2.5）：本函数的EvalSymlinks实现存在检查与写入之间的
+// TOCTOU窗口，只允许用于非Linux平台的测试。Linux生产构建必须提供
+// resolve的openat2版本（//go:build linux文件中用unix.Openat2带
+// RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS逐级打开父目录并在fd上操作），
+// 并有"检查后替换符号链接"的竞态测试证明其不可绕过。
 func (d *DirStore) resolve(rel string) (string, error) {
 	rel, err := SafeRelPath(rel)
 	if err != nil {
@@ -1734,34 +1854,52 @@ func (d *DirStore) resolve(rel string) (string, error) {
 	return filepath.Join(realParent, filepath.Base(abs)), nil
 }
 
-func (d *DirStore) tmpName(abs string, rev int64) string {
-	return filepath.Join(filepath.Dir(abs), fmt.Sprintf(".cclaude.tmp.%d.%s", rev, filepath.Base(abs)))
-}
-
-func (d *DirStore) WriteTemp(rel string, r io.Reader) (string, int64, error) {
+// WriteTemp：随机命名+O_EXCL独占创建；LimitReader读"上限+1"字节判定超限；
+// 任何失败路径都删除临时文件（审查§2.5）。
+func (d *DirStore) WriteTemp(rel string, r io.Reader, maxBytes int64) (string, string, int64, error) {
 	abs, err := d.resolve(rel)
 	if err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
-	f, err := os.Create(d.tmpName(abs, 0))
+	rnd := make([]byte, 8)
+	if _, err := rand.Read(rnd); err != nil {
+		return "", "", 0, err
+	}
+	tmpID := fmt.Sprintf(".cclaude.tmp.%s", hex.EncodeToString(rnd))
+	tmpPath := filepath.Join(filepath.Dir(abs), tmpID)
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
-	defer f.Close()
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), r)
-	if err != nil {
-		return "", 0, err
+	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(r, maxBytes+1))
+	f.Close()
+	if err != nil || n > maxBytes {
+		os.Remove(tmpPath)
+		if err == nil {
+			err = ErrTooLarge
+		}
+		return "", "", 0, err
 	}
-	return hex.EncodeToString(h.Sum(nil)), n, nil
+	return tmpID, hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
-func (d *DirStore) Promote(rel string, rev int64) error {
+func (d *DirStore) Promote(rel, tmpID string, rev int64) error {
 	abs, err := d.resolve(rel)
 	if err != nil {
 		return err
 	}
-	return os.Rename(d.tmpName(abs, 0), abs)
+	return os.Rename(filepath.Join(filepath.Dir(abs), tmpID), abs)
+}
+
+func (d *DirStore) Discard(tmpID string) {
+	// tmpID不含路径分隔符，只可能位于root子树内；遍历删除同名tmp
+	filepath.WalkDir(d.root, func(p string, e fs.DirEntry, err error) error {
+		if err == nil && !e.IsDir() && filepath.Base(p) == tmpID {
+			os.Remove(p)
+		}
+		return nil
+	})
 }
 
 func (d *DirStore) Delete(rel string, rev int64) error {
@@ -2076,6 +2214,32 @@ func TestCollectorIncrementalScan(t *testing.T) {
 		t.Fatal("incremental event not collected")
 	}
 }
+
+func TestPartialLineNotLostAcrossScans(t *testing.T) {
+	// 审查§2.7.3/§15.4：末尾半行不解析、不丢失，补全后被准确采集
+	dir := t.TempDir()
+	os.MkdirAll(dir+"/projects/x", 0o755)
+	path := dir + "/projects/x/s.jsonl"
+	full := `{"type":"assistant","requestId":"req_E","timestamp":"2026-07-19T09:02:00.000Z","message":{"model":"m","usage":{"input_tokens":3,"output_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}` + "\n"
+	os.WriteFile(path, []byte(full[:60]), 0o644) // 只写前60字节，无换行
+	sink := &memSink{}
+	c := &Collector{Dir: dir, ProjectID: "pa", Sink: sink}
+	if err := c.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sink.ids["req_E"] {
+		t.Fatal("half line must not be parsed yet")
+	}
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(full[60:])
+	f.Close()
+	if err := c.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !sink.ids["req_E"] {
+		t.Fatal("completed line must be collected exactly once")
+	}
+}
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -2124,34 +2288,41 @@ type rawLine struct {
 	} `json:"message"`
 }
 
+// parseLine解析单行。返回(event, isEvent, isBad)：非用量行两者皆false。
+func parseLine(line string) (Event, bool, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return Event{}, false, false
+	}
+	var rl rawLine
+	if err := json.Unmarshal([]byte(line), &rl); err != nil {
+		return Event{}, false, true
+	}
+	if rl.Type != "assistant" || rl.Message.Usage == nil || rl.RequestID == "" {
+		return Event{}, false, false // 非用量行，不算坏行
+	}
+	ts, err := time.Parse(time.RFC3339Nano, rl.Timestamp)
+	if err != nil {
+		return Event{}, false, true
+	}
+	u := rl.Message.Usage
+	return Event{
+		SourceEventID: rl.RequestID, OccurredAt: ts.UTC(), Model: rl.Message.Model,
+		Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite,
+	}, true, false
+}
+
 func ParseLines(r io.Reader) ([]Event, int) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 8<<20) // 长行容忍到8MB
 	var out []Event
 	bad := 0
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		var rl rawLine
-		if err := json.Unmarshal([]byte(line), &rl); err != nil {
+		if e, ok, isBad := parseLine(sc.Text()); ok {
+			out = append(out, e)
+		} else if isBad {
 			bad++
-			continue
 		}
-		if rl.Type != "assistant" || rl.Message.Usage == nil || rl.RequestID == "" {
-			continue // 非用量行，不算坏行
-		}
-		ts, err := time.Parse(time.RFC3339Nano, rl.Timestamp)
-		if err != nil {
-			bad++
-			continue
-		}
-		u := rl.Message.Usage
-		out = append(out, Event{
-			SourceEventID: rl.RequestID, OccurredAt: ts.UTC(), Model: rl.Message.Model,
-			Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite,
-		})
 	}
 	return out, bad
 }
@@ -2163,7 +2334,20 @@ func Weighted(e Event, w Weights) int64 {
 }
 
 type Sink interface {
+	// Insert幂等键为(projectID, e.SourceEventID)；同一requestId再次出现时
+	// 必须按Task 0确认的语义更新为最终记录/各字段最大值，不能简单保留第一条。
 	Insert(ctx context.Context, projectID string, e Event, weighted int64) error
+}
+
+// OffsetStore持久化每文件读取游标（审查§2.7）；生产实现写usage_offsets表。
+type OffsetStore interface {
+	Load(ctx context.Context, projectID, fileIdentity string) (offset int64, partial string, err error)
+	Save(ctx context.Context, projectID, fileIdentity, path string, offset int64, partial string) error
+}
+
+type fileCursor struct {
+	offset  int64  // committed_offset：最后一个完整行末尾的位置
+	partial string // 已读到但未见换行的尾部半行
 }
 
 type Collector struct {
@@ -2171,45 +2355,105 @@ type Collector struct {
 	ProjectID string
 	Sink      Sink
 	Weights   Weights
-	Offsets   OffsetStore      // 生产必须注入（usage_offsets表）；为nil时退化为内存offset（仅单元测试）
-	offsets   map[string]int64 // 内存退化实现；持久化路径见OffsetStore
+	Offsets   OffsetStore // 生产必须注入；为nil时退化为进程内存游标（仅单元测试）
+	mem       map[string]fileCursor
+	BadLines  int64 // 指标：坏行/超长行/读取错误累计，由worker暴露，不静默丢弃
+}
+
+// fileIdentity在Linux上取dev:inode（处理轮转/重建）；退化实现取路径。
+// 生产版在collector_linux.go以syscall.Stat_t实现，此处默认用路径。
+func fileIdentity(path string, fi os.FileInfo) string { return path }
+
+func (c *Collector) load(ctx context.Context, id string) (fileCursor, error) {
+	if c.Offsets == nil {
+		if c.mem == nil {
+			c.mem = map[string]fileCursor{}
+		}
+		return c.mem[id], nil
+	}
+	off, partial, err := c.Offsets.Load(ctx, c.ProjectID, id)
+	return fileCursor{offset: off, partial: partial}, err
+}
+
+func (c *Collector) save(ctx context.Context, id, path string, cur fileCursor) error {
+	if c.Offsets == nil {
+		c.mem[id] = cur
+		return nil
+	}
+	return c.Offsets.Save(ctx, c.ProjectID, id, path, cur.offset, cur.partial)
 }
 
 func (c *Collector) Scan(ctx context.Context) error {
-	if c.offsets == nil {
-		c.offsets = map[string]int64{}
-	}
 	return filepath.WalkDir(c.Dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".jsonl") {
-			return nil // 单文件读失败不中断整体采集
+			return nil // 单文件失败不中断整体采集
 		}
 		f, err := os.Open(p)
 		if err != nil {
 			return nil
 		}
 		defer f.Close()
-		off := c.offsets[p]
-		if fi, _ := f.Stat(); fi != nil && fi.Size() < off {
-			off = 0 // 文件被截断则重扫（幂等由Sink保证）
-		}
-		if _, err := f.Seek(off, io.SeekStart); err != nil {
+		fi, err := f.Stat()
+		if err != nil {
 			return nil
 		}
-		events, _ := ParseLines(f)
-		for _, e := range events {
-			if err := c.Sink.Insert(ctx, c.ProjectID, e, Weighted(e, c.Weights)); err != nil {
-				return err // Sink失败要停：偏移量不前进，下轮重试
+		id := fileIdentity(p, fi)
+		cur, err := c.load(ctx, id)
+		if err != nil {
+			return nil // 游标读不到：跳过本轮，不前进
+		}
+		resume := cur.offset + int64(len(cur.partial))
+		if fi.Size() < resume {
+			cur = fileCursor{} // 截断/轮转：从头重扫，幂等写入兜底
+			resume = 0
+		}
+		if _, err := f.Seek(resume, io.SeekStart); err != nil {
+			return nil
+		}
+		br := bufio.NewReaderSize(f, 64<<10)
+		for {
+			chunk, rerr := br.ReadString('\n')
+			if rerr == nil {
+				line := cur.partial + chunk
+				cur.partial = ""
+				if e, ok, isBad := parseLine(line); ok {
+					if err := c.Sink.Insert(ctx, c.ProjectID, e, Weighted(e, c.Weights)); err != nil {
+						return err // Sink失败：游标不保存，下轮重试
+					}
+				} else if isBad {
+					c.BadLines++
+				}
+				cur.offset += int64(len(line)) // 只在完整行后推进committed_offset
+				continue
 			}
+			if rerr == io.EOF {
+				cur.partial += chunk // 半行暂存，下一轮补全
+				break
+			}
+			c.BadLines++ // 读取错误：记指标，游标停在最后完整行
+			break
 		}
-		if pos, err := f.Seek(0, io.SeekCurrent); err == nil {
-			c.offsets[p] = pos
-		}
+		c.save(ctx, id, p, cur)
 		return nil
 	})
 }
 ```
 
-生产Sink（`store`包追加方法）：`INSERT INTO usage_events (...) VALUES (...) ON CONFLICT (source_event_id) DO NOTHING`。默认权重（可由环境变量覆盖，比例参考官方计费）：`Input=10, Output=50, CacheRead=1, CacheWrite=12`。
+生产Sink（`store`包追加方法，审查§2.7.7）：
+
+```sql
+INSERT INTO usage_events (project_id, occurred_at, model, input_tokens, output_tokens,
+  cache_read_tokens, cache_write_tokens, weighted_units, source_event_id)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+ON CONFLICT (project_id, source_event_id) DO UPDATE SET
+  input_tokens      = GREATEST(usage_events.input_tokens, EXCLUDED.input_tokens),
+  output_tokens     = GREATEST(usage_events.output_tokens, EXCLUDED.output_tokens),
+  cache_read_tokens = GREATEST(usage_events.cache_read_tokens, EXCLUDED.cache_read_tokens),
+  cache_write_tokens= GREATEST(usage_events.cache_write_tokens, EXCLUDED.cache_write_tokens),
+  weighted_units    = GREATEST(usage_events.weighted_units, EXCLUDED.weighted_units);
+```
+
+（"各字段最大值"是默认语义；若Task 0确认应取"最终记录"，改为按`occurred_at`较新者覆盖——二选一以Task 0结论为准，禁止简单保留第一条。）生产OffsetStore：`usage_offsets`表的`SELECT/UPSERT`。默认权重（可由环境变量覆盖，比例参考官方计费）：`Input=10, Output=50, CacheRead=1, CacheWrite=12`。
 
 - [ ] **Step 4: 运行测试**
 
@@ -2783,7 +3027,7 @@ func httpErr(w http.ResponseWriter, code int, msg string) {
 </ul>
 ```
 
-`cmd/control-api/main.go`改为：加载配置→`store.New`+`Migrate`（连接或Ping失败打印错误并`os.Exit(1)`）→用store实现的Resolver/UsageReader/PGIndex与`store.GetProjectByID`组装`control.New(...)`→用`http.Server{ReadTimeout: 10s, ReadHeaderTimeout: 5s, WriteTimeout: 30s, IdleTimeout: 60s}`启动并检查`ListenAndServe`返回错误（不得忽略）。**只监听内网/localhost**，公网由Caddy/Nginx的443反代（Task 12的Caddyfile）。exchange端点套IP+public-id令牌桶限速中间件。管理端（建项目/发CDK）以`net.Listen("unix", cfg.AdminSocketPath)`挂独立mux：`POST /admin/projects`、`POST /admin/cdks`（返回一次性明文），socket权限`0660`并校验调用者；不注册到公网Handler。门户`/usage`不用Bearer：用独立管理员cookie或仅localhost+SSH隧道访问（审计§11），CDK会话仅能查自己项目的JSON接口。
+`cmd/control-api/main.go`改为：加载配置→`store.New`+`Migrate`（连接或Ping失败打印错误并`os.Exit(1)`）→用store实现的Resolver/UsageReader/PGIndex与`store.GetProjectByID`组装`control.New(...)`→用`http.Server{ReadTimeout: 10s, ReadHeaderTimeout: 5s, WriteTimeout: 30s, IdleTimeout: 60s}`启动并检查`ListenAndServe`返回错误（不得忽略）。**只监听内网/localhost**，公网由Caddy/Nginx的443反代（Task 12的Caddyfile）。exchange端点套IP+public-id令牌桶限速中间件。管理端（建项目/发CDK）以`net.Listen("unix", cfg.AdminSocketPath)`挂独立mux：`POST /admin/projects`、`POST /admin/cdks`（返回一次性明文），socket权限`0660`并校验调用者；不注册到公网Handler。门户`/usage`认证定案（审查§3.3，不再二选一）：**仅监听localhost，经SSH隧道访问**；`/portal/*`公网路由不启用；CDK会话仅能查自己项目的JSON接口，无管理员能力。
 
 - [ ] **Step 4: 运行测试**
 
@@ -2809,8 +3053,8 @@ git add -A && git commit -m "feat: expose auth, connection and usage endpoints"
 - Consumes: Task 10的HTTP合同、Task 5的WebSocket终端协议、Task 6的`Diff`/`FileEntry`
 - Produces:
   - `control.Client{Base string}`：`Exchange(ctx, cdk string) (ExchangeResult, error)`；`Connection(ctx, sessionToken string) (ConnectionResponse, error)`（指数退避重试：1s起倍增，上限30s）
-  - `sync.LocalIndex`：项目根`.cclaude/index.json`读写本地`[]FileEntry`
-  - `sync.ScanDir(root string) ([]FileEntry, error)`——与DirStore.Manifest同规则（排除`.cclaude/`与默认排除项），供watcher静默期后全量对比
+  - `sync.LocalIndex`：项目根`.cclaude/index.json`读写本地`[]LocalEntry`（含base_revision/base_sha256基线，审查§2.4）
+  - `sync.ScanDir(root string) ([]FileEntry, error)`——当前目录状态扫描（排除`.cclaude/`与默认排除项）；与`LocalIndex`基线经`BuildLocal`合成`[]LocalEntry`后才能进`Diff`
   - CLI主流程：读CDK（终端交互输入，禁止argv；`CCW_CDK`环境变量仅供测试）→exchange→首次同步→fsnotify watcher（500ms静默窗口）→连接终端（raw mode+resize）→状态栏一行：`[project-a] 5h:10/100 7d:60/1000 disk:1.2MiB/1GiB net:ok`
 
 - [ ] **Step 1: 写失败测试**
@@ -2897,7 +3141,7 @@ func TestScanDirMatchesManifestRules(t *testing.T) {
 func TestLocalIndexRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	idx := LocalIndex{Root: root}
-	in := []FileEntry{{Path: "a.go", Size: 3, SHA256: "abc", Revision: 2}}
+	in := []LocalEntry{{Path: "a.go", Size: 3, BaseRevision: 2, BaseSHA256: "abc", CurrentSHA256: "abc", State: StateClean}}
 	if err := idx.Save(in); err != nil {
 		t.Fatal(err)
 	}
@@ -2910,10 +3154,14 @@ func TestLocalIndexRoundTrip(t *testing.T) {
 func TestUnchangedFileNotReuploaded(t *testing.T) {
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "a.go"), []byte("abc"), 0o644)
-	local, _ := ScanDir(root)
-	// 远端清单与本地一致→Diff不产生任何传输
-	p := Diff(local, local)
-	if len(p.Upload)+len(p.Download) != 0 {
+	scanned, _ := ScanDir(root)
+	sha := scanned[0].SHA256
+	// 基线=服务端rev3同内容 → BuildLocal判定clean → Diff零传输
+	base := []LocalEntry{{Path: "a.go", BaseRevision: 3, BaseSHA256: sha, State: StateClean}}
+	local := BuildLocal(scanned, base)
+	remote := []FileEntry{{Path: "a.go", SHA256: sha, Revision: 3, Size: 3}}
+	p := Diff(local, remote)
+	if len(p.Upload)+len(p.Download)+len(p.Conflicts) != 0 {
 		t.Fatalf("unchanged files must not transfer: %+v", p)
 	}
 }
@@ -2927,7 +3175,7 @@ Expected: FAIL（未定义符号）
 - [ ] **Step 3: 实现**
 
 ```bash
-go get github.com/fsnotify/fsnotify@latest golang.org/x/term@latest
+go get github.com/fsnotify/fsnotify@v1.8.0 golang.org/x/term@v0.27.0
 ```
 
 `internal/control/client.go`：
@@ -3046,7 +3294,7 @@ type LocalIndex struct{ Root string }
 
 func (l LocalIndex) path() string { return filepath.Join(l.Root, ".cclaude", "index.json") }
 
-func (l LocalIndex) Load() ([]FileEntry, error) {
+func (l LocalIndex) Load() ([]LocalEntry, error) {
 	b, err := os.ReadFile(l.path())
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -3054,11 +3302,11 @@ func (l LocalIndex) Load() ([]FileEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []FileEntry
+	var out []LocalEntry
 	return out, json.Unmarshal(b, &out)
 }
 
-func (l LocalIndex) Save(es []FileEntry) error {
+func (l LocalIndex) Save(es []LocalEntry) error {
 	if err := os.MkdirAll(filepath.Dir(l.path()), 0o755); err != nil {
 		return err
 	}
@@ -3150,15 +3398,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if conn.Over {
-		fmt.Fprintf(os.Stderr, "项目额度受限（%s），无法连接。\n", conn.OverReason)
-		os.Exit(2)
-	}
 	fmt.Printf("[%s] 5h:%d/%d 7d:%d/%d disk:%d/%d\n", conn.ProjectSlug,
 		conn.FiveHourUsed, conn.FiveHourLimit, conn.SevenDayUsed, conn.SevenDayLimit,
 		conn.DiskUsed, conn.DiskLimit)
-
 	cwd, _ := os.Getwd()
+
+	if conn.Over {
+		// 审查§2.8：超额/磁盘满绝不直接退出——否则cleanup模式永远不可达。
+		// 不开Claude终端；以cleanup模式建立同步（服务端只允许get/delete/缩小），
+		// 周期性重新Connection探测窗口恢复，恢复后自动切回正常流程。
+		fmt.Fprintf(os.Stderr, "项目受限（%s）：进入cleanup模式，可下载、删除、缩小文件；额度窗口恢复后自动回到正常模式。\n", conn.OverReason)
+		runSyncLoop(ctx, cwd, conn) // 阻塞运行；内部每60秒重新Connection，Over解除即返回
+		return
+	}
+
 	go runSyncLoop(ctx, cwd, conn)            // 首次全量+watcher增量，断线退避重连
 	if err := runTerminal(ctx, conn); err != nil { // raw mode+WebSocket+resize；断线退避重连
 		fmt.Fprintln(os.Stderr, err)
@@ -3166,7 +3419,7 @@ func main() {
 }
 ```
 
-`runSyncLoop`与`runTerminal`在同文件实现：`runTerminal`用`gorilla/websocket`连`conn.TerminalURL+"?token="+conn.TerminalToken`，`term.MakeRaw(stdin)`进raw mode（退出时恢复），goroutine双向拷贝，监听`SIGWINCH`（Windows上轮询`term.GetSize`每2秒）发resize Text帧；`runSyncLoop`调用`ScanDir`+`LocalIndex`+`Diff`，通过同步WebSocket端点执行Plan（上传走`WriteTemp`语义的消息，冲突时按`ConflictName`落地并打印提示），fsnotify事件进入500ms定时器去抖后重扫。两个循环断线后均以1s起倍增退避重连（上限30s），并用会话令牌重新`Connection`换新的2分钟连接令牌；session token过期（401）时用**内存中保留的CDK**自动重新`Exchange`（审计§5.3），CDK只存进程内存、不落盘不入日志。连接WebSocket时令牌放`Authorization`头。`sync_mode=="cleanup"`时CLI只执行下载/删除/缩小并提示用户当前为清理模式。
+`runSyncLoop`与`runTerminal`在同文件实现（实现规格，编码时测试先行补全）：`runTerminal`用`gorilla/websocket`的`Dialer.DialContext`连`conn.TerminalURL`，令牌放`http.Header{"Authorization": {"Bearer " + conn.TerminalToken}}`（**全代码库不得出现`?token=`**），`term.MakeRaw(stdin)`进raw mode（退出时恢复），goroutine双向拷贝，监听`SIGWINCH`（Windows上轮询`term.GetSize`每2秒）发resize Text帧；`runSyncLoop`调用`ScanDir`+`LocalIndex`+`BuildLocal`+`Diff`，通过同步WebSocket端点执行Plan（首帧发auth，上传带`base_revision`走CAS，收到`reject:conflict`时下载远端版本按`ConflictName(path,"remote",now)`落地并提示；ack后把该路径基线更新为新revision与新SHA），fsnotify事件进入500ms定时器去抖后重扫。两个循环断线后均以1s起倍增退避重连（上限30s），并用会话令牌重新`Connection`换新的2分钟连接令牌；session token过期（401）时用**内存中保留的CDK**自动重新`Exchange`（审计§5.3），CDK只存进程内存、不落盘不入日志。连接WebSocket时令牌放`Authorization`头。`sync_mode=="cleanup"`时CLI只执行下载/删除/缩小并提示用户当前为清理模式。
 
 - [ ] **Step 4: 运行测试与三平台交叉编译**
 
@@ -3175,6 +3428,8 @@ Expected: PASS
 
 Run: `GOOS=windows GOARCH=amd64 go build ./cmd/cclaude && GOOS=darwin GOARCH=arm64 go build ./cmd/cclaude && GOOS=linux GOARCH=amd64 go build ./cmd/cclaude`
 Expected: 三平台全部编译通过（Windows路径规则已由`SafeRelPath`反斜杠测试覆盖）
+
+- [ ] **Step 4b: 三平台真实冒烟（审查§3.5：交叉编译不等于可用）**——在Windows、macOS、Linux三台真机（或Windows实机+macOS实机+Linux VPS）各执行一次：启动`cclaude`、输入CDK、完成一次同步、附着终端输入一条命令、断网30秒验证自动重连。每平台记录结果到`docs/phase1-evidence/cli-smoke-<os>.md`；任一平台失败视为本任务未完成。
 
 - [ ] **Step 5: Commit**
 
@@ -3189,6 +3444,9 @@ git add -A && git commit -m "feat: add cross-platform remote workspace cli"
 - Modify: `cmd/worker-agent/main.go`（挂`/v1/sync`路由、启动每30秒的usage.Collector循环、容器名改为store查询）
 - Create: `tests/e2e/two_projects_test.go`
 - Create: `deploy/Caddyfile`
+- Create: `deploy/versions.lock`
+- Create: `deploy/backup.sh`
+- Create: `deploy/restore.sh`
 - Create: `deploy/control-api.service`
 - Create: `deploy/worker-agent.service`
 - Create: `deploy/Dockerfile.claude`（含官方Claude Code、git、tmux、非root用户claude的项目容器镜像）
@@ -3235,6 +3493,8 @@ func TestTwoProjectsEndToEnd(t *testing.T) {
 	requireDocker(t)
 	// 子测试按序执行，共享docker compose环境：
 	t.Run("bootstrap", testBootstrap)                   // compose起postgres，迁移，建A/B项目与CDK，起两容器
+	t.Run("proxy_path_contract", testProxyPathContract) // spec第3节路径合同逐条打通：/api/v1/*→/v1/*，/ws/*→/v1/*（审查§2.2）
+	t.Run("terminal_tty_attach", testTerminalTTYAttach) // 真实容器内tmux经-it附着/断开/重连（审查§2.1）
 	t.Run("isolation_volumes", testVolumeIsolation)     // docker inspect：A容器挂载列表无B卷
 	t.Run("isolation_cdk", testCDKIsolation)            // CDK-A取connection只能拿到A；伪造B的project_id被拒
 	t.Run("sync_roundtrip", testSyncRoundtrip)          // 本地→云端→云端改文件→回本地
@@ -3262,25 +3522,36 @@ Expected: SKIP（docker not available）——测试结构编译通过
 
 - [ ] **Step 3: 实现`internal/sync/ws.go`与worker-agent接线**
 
-`ws.go`按上方协议实现：每个`put`在**项目级advisory lock+事务**中执行CAS（`base_revision`不匹配→`conflict`）→`Gate.Allow(used, oldSize, newSize)`预留→`WriteTemp`（带字节上限`io.LimitReader`）→SHA比对`entry.SHA256`→`Promote`→`Index.Upsert`（带期望revision的CAS更新）；任何一步失败回`reject`、删tmp并释放预留。
+`ws.go`（实现规格，编码时测试先行补全，含全部消息错误路径的状态机测试）：每个`put`在**项目级advisory lock+事务**中执行CAS（`base_revision`不匹配→`conflict`）→`Gate.Allow(used, oldSize, newSize)`预留→`WriteTemp(path, r, maxBytes)`（上限+1字节判超）→SHA比对`entry.SHA256`→`Promote(path, tmpID, rev)`→`Index.Upsert`（带期望revision的CAS更新）；任何一步失败回`reject`、`Discard(tmpID)`并释放预留；`mode=="cleanup"`时新增/扩大一律`readonly_mode`。
 
-`cmd/worker-agent/main.go`补齐四件事：
+`cmd/worker-agent/main.go`补齐五件事（实现规格，编码时测试先行补全；服务用`http.Server`带四类超时并检查`ListenAndServe`错误）：
+
+0. **terminal/sync接入时实时复查（审查§3.1）：**每次WebSocket升级通过令牌验证后、建立会话前，先`quota.Check`+磁盘检查——2分钟前签发的令牌不豁免其后发生的超额；
 
 1. `store.New`+每项目一个`usage.Collector`（注入`usage_offsets`表的OffsetStore）每30秒`Scan`；
 2. `mux.HandleFunc("GET /v1/sync", ...)`；终端与同步连接建立/断开时写`sessions`表（`connected_at`/`last_seen_at`/`state`）；
 3. **云端workspace watcher（审计§6.3）：**监控各项目workspace（只读挂载+fsnotify），500ms静默窗口→前后双哈希一致才入账→与file_index比较→为Claude的新增/修改/删除分配新server revision或持久tombstone；
 4. **额度主动执行循环（审计§9.3）：**每30秒及每次用量入库后`quota.Check`；项目超额→关闭该项目所有终端输入WebSocket→60秒宽限期→仍在产生新用量则`docker exec <container> pkill -INT -f claude`→保留tmux/workspace/Claude HOME→sync连接切cleanup模式→窗口恢复后允许重连。门户注明存在最后一个请求的计量延迟。
 
-`deploy/Caddyfile`（唯一公网入口，两个服务只听localhost）：
+`deploy/Caddyfile`（唯一公网入口；**必须做前缀剥离/重写**，否则`/api/v1/...`原样打到只认`/v1/...`的后端全部404——审查§2.2；与spec第3节路径合同逐条对应，e2e含反代路径合同测试）：
 
 ```text
 ccw.example.com {
-    reverse_proxy /api/* 127.0.0.1:8080
-    reverse_proxy /portal/* 127.0.0.1:8080
-    reverse_proxy /ws/terminal 127.0.0.1:8081
-    reverse_proxy /ws/sync 127.0.0.1:8081
+    handle_path /api/* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /ws/terminal {
+        rewrite * /v1/terminal
+        reverse_proxy 127.0.0.1:8081
+    }
+    handle /ws/sync {
+        rewrite * /v1/sync
+        reverse_proxy 127.0.0.1:8081
+    }
 }
 ```
+
+（`handle_path /api/*`会剥掉`/api`前缀，`/api/v1/auth/exchange`→后端`/v1/auth/exchange`；`/portal/*`不代理——门户仅localhost+SSH隧道。）另建`deploy/versions.lock`：记录Go、全部Go模块、PostgreSQL、Ubuntu镜像tag+digest、Node.js、Claude Code、Caddy的精确版本；镜像构建与部署脚本都从此文件读取。
 
 `deploy/control-api.service`：
 
@@ -3308,16 +3579,26 @@ WantedBy=multi-user.target
 `deploy/Dockerfile.claude`：
 
 ```dockerfile
-FROM ubuntu:24.04
+# 版本一律取自deploy/versions.lock（审查§3.2）：构建脚本以--build-arg注入，
+# 并把实际使用的ubuntu digest与各版本写入镜像label。
+ARG UBUNTU_TAG=24.04
+FROM ubuntu:${UBUNTU_TAG}
+ARG NODE_MAJOR=20
+ARG CLAUDE_CODE_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git tmux curl ca-certificates nodejs npm && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @anthropic-ai/claude-code
+    git tmux curl ca-certificates gnupg && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+    && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
+RUN test -n "${CLAUDE_CODE_VERSION}" \
+    && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 RUN useradd -m -s /bin/bash claude
 USER claude
 WORKDIR /workspace
 ```
 
-`docs/runbook.md`：安装Docker与PostgreSQL→建库→跑迁移→systemd安装→管理socket建A/B项目与CDK→按`docs/admin-login-runbook.md`完成两容器登录→备份（每日`pg_dump`+`docker run --rm -v <vol>:/v alpine tar`快照）→VPS重启恢复流程→R2的24小时双登录验证记录表。
+（`CLAUDE_CODE_VERSION`必须显式传入且记录于`deploy/versions.lock`；升级前先用脱敏JSONL样例与tmux恢复测试验证。）
+
+`docs/runbook.md`：安装Docker与PostgreSQL（版本按`deploy/versions.lock`）→建库→跑迁移→systemd安装→管理socket建A/B项目与CDK→按`docs/admin-login-runbook.md`完成两容器登录→**备份流程（审查§3.4，直接tar运行中的卷不算备份）**：暂停写入或文件系统一致性快照→`pg_dump`一致性备份→workspace/Claude HOME/同步状态卷备份→`age`或GPG加密→复制到VPS之外→保留周期与失败告警→定期空服务器恢复演练（`deploy/backup.sh`与`deploy/restore.sh`落地）→VPS重启恢复流程→R2的24小时双登录验证记录表。
 
 - [ ] **Step 4: 在目标VPS运行全量验收**
 
@@ -3328,6 +3609,27 @@ Expected: 全部PASS，无SKIP（VPS有Docker）
 
 ```bash
 git add -A && git commit -m "test: verify isolated dual-project remote workspaces"
+```
+
+### Task 13: 文件系统硬配额（审查§2.6，独立任务）
+
+**Files:**
+- Create: `deploy/quota-setup.sh`
+- Create: `tests/e2e/hard_quota_test.go`
+- Modify: `docs/runbook.md`（硬配额段落）
+
+**Interfaces:**
+- Consumes: `runtime.VolumeNames`的卷命名约定
+- Produces: 每项目workspace卷带文件系统级容量上限；技术选型**默认每项目固定大小loop文件系统**（VPS无关）；目标VPS为XFS+`prjquota`挂载时可改用XFS project quota（runbook二选一记录，不留待实现时再定）
+
+- [ ] **Step 1: 写e2e测试（无Docker自动skip）**——`hard_quota_test.go`：在容器内绕过同步接口直接`dd`一个超过A限额的大文件，断言：写入在配额边界失败；Project B的卷仍可写入其预留量；宿主机根分区剩余空间未被侵占（前后`df`对比误差在阈值内）。
+- [ ] **Step 2: 实现`deploy/quota-setup.sh`（loop方案）**——为每项目：`truncate -s <limit> /srv/ccw/<slug>-workspace.img`→`mkfs.ext4`→`losetup`→挂载到固定目录→以`docker volume create --driver local --opt device=... --opt type=none --opt o=bind`把该目录建为命名卷；写入systemd mount单元保证重启自动恢复；脚本幂等（已存在则跳过）。
+- [ ] **Step 3: runbook记录选型与容量调整流程**（扩容=新建更大img+rsync+切换，不支持在线缩小）。
+- [ ] **Step 4: 在目标VPS运行**`go test ./tests/e2e -run HardQuota -v`，Expected: PASS。
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A && git commit -m "feat: enforce per-project filesystem hard quotas"
 ```
 
 ---
@@ -3364,4 +3666,14 @@ git add -A && git commit -m "test: verify isolated dual-project remote workspace
 | 超额/磁盘满仍能下载、删除、缩小 | Task 10（cleanup模式sync token）、12（cleanup_mode_when_full） |
 | 服务端改/删文件产生revision/tombstone并回同步 | Task 12（云端watcher；cloud_edit_syncs_back） |
 | worker-agent不暴露公网，流量走WSS/TLS | Task 12（Caddyfile+localhost监听） |
-| 备份恢复到空服务器可用 | Task 12（backup_restore） |
+| 备份恢复到空服务器可用 | Task 12（backup.sh/restore.sh；backup_restore） |
+
+## 验收对照补充二（spec §14第25–27条，来自审查§2/§3）
+
+| 验收条 | 覆盖任务 |
+|---|---|
+| 反向代理路径合同逐条命中 | Task 12（Caddyfile重写；proxy_path_contract） |
+| 硬配额：绕过同步写大文件不越界、不占B预留、不写满宿主机 | Task 13（quota-setup.sh；hard_quota_test） |
+| cleanup模式CLI与服务端端到端可运行 | Task 10（cleanup令牌）、11（超额不退出）、12（cleanup_mode_when_full） |
+| 真实容器TTY附着/断开/重连 | Task 5（-it）、12（terminal_tty_attach） |
+| 三平台真实冒烟通过 | Task 11 Step 4b（cli-smoke-<os>.md证据） |
