@@ -1,6 +1,8 @@
 # 双项目远程Claude工作空间Implementation Plan（v3）
 
-> **v3修订说明：**本计划已按[v2审查与v3调整要求](../specs/2026-07-19-remote-claude-workspace-v2-review-adjustments.md)（最高权威）与[审计与修订说明](../specs/2026-07-19-remote-claude-workspace-audit-corrections.md)完成修订；配套设计为[Design Spec v3](../specs/2026-07-19-remote-claude-workspace-design.md)。**编码闸门：**在用户批准v3并明确允许前，只可执行Task 0中不消耗真实Claude额度的准备项；24小时双登录验证也需用户明确同意后才运行。
+> **v3修订说明：**本计划已按[v2审查与v3调整要求](../specs/2026-07-19-remote-claude-workspace-v2-review-adjustments.md)（最高权威）与[审计与修订说明](../specs/2026-07-19-remote-claude-workspace-audit-corrections.md)完成修订；配套设计为[Design Spec v3](../specs/2026-07-19-remote-claude-workspace-design.md)。
+>
+> **执行状态（2026-07-19）：**v3与调整后顺序已获用户批准，编码开始。24小时双登录验证消耗真实Claude额度，运行前仍需用户单独同意。
 >
 > **v2→v3主要变更：**①终端附着改`docker exec -it`（真实TTY）；②公网/后端路径合同+Caddy前缀重写与集成测试；③"单用途令牌"更名为"2分钟短期连接令牌"（可重连，worker接入时实时复查额度）；④同步改三方判断（base_revision+base_sha256+current_sha256+本地状态）；⑤同步路径生产安全边界改`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`，tmp随机独占+上限加一字节判超；⑥新增Task 13文件系统硬配额（默认每项目loop文件系统）；⑦JSONL采集器按OffsetStore+半行拼接+同requestId最终值语义重写；⑧CLI超额不退出，cleanup模式端到端可达，删除`?token=`残留；⑨依赖与镜像版本全部固定（deploy/versions.lock）；⑩门户定案为localhost+SSH隧道；⑪服务默认只监听127.0.0.1；⑫描述性段落不再自称"完整实现"，改为接口/状态机/测试先行的工程步骤。
 
@@ -31,17 +33,23 @@
 - **版本固定：**任何实施步骤禁止`@latest`或未固定版本安装；本计划指定的版本在Task 1锁入go.mod/go.sum，镜像与工具版本记录于`deploy/versions.lock`。
 - **诚实表述：**计划中给出代码的步骤按代码执行；只给接口/状态机/规则的步骤是"实现规格"，编码时测试先行补全，不得跳过其中任何列出的行为点。
 
-## 阶段映射（审计§13的Phase与Task对应关系）
+## 阶段映射（调整版，2026-07-19经用户批准）
 
-| Phase | 内容 | 对应任务 |
+**调整原则：**纯逻辑先行（本机单元测试+假Docker API，零外部依赖）；零成本验证穿插；需要VPS/账号的验证后置为**集成/上线闸门**而非编码闸门。Task 0据此拆分：
+
+| Task 0拆分项 | 何时做 | 依赖 |
 |---|---|---|
-| Phase 0 | 仓库与规则（Git、AGENTS.md、CI、Go模块） | Task 1 |
-| Phase 1 | **架构阻断验证**（任一失败先改设计） | Task 0（必须最先执行，可与Task 1并行准备但先于Task 2之后的一切） |
-| Phase 2 | 单项目垂直切片（CDK→令牌→终端） | Task 2、3、4、5 |
-| Phase 3 | 可靠同步 | Task 6、7 |
-| Phase 4 | 第二项目与隔离 | Task 12的隔离/重建部分 |
-| Phase 5 | 用量与额度执行 | Task 8、9 |
-| Phase 6 | 门户、备份与发布验收 | Task 10、11、12、13 |
+| Step 3脱敏JSONL样例与requestId语义 | **立即**（编码Task 8前完成） | 仅本机现成`~/.claude`会话数据，零成本 |
+| Step 2 tmux容器原型 | Task 4/5编码前后皆可，尽早 | 任一有Docker的机器，容器内用`sh`代替`claude`，不消耗额度 |
+| Step 1 24小时双登录验证 | **上线闸门**：引入第二项目并行（Phase 4）之前完成 | VPS/Docker机+用户Claude账号+**用户单独同意**（消耗额度） |
+
+| 执行序 | 内容 | 对应任务 | 依赖 |
+|---|---|---|---|
+| ① | 仓库与骨架 | Task 1 | 本机（装Go） |
+| ② | 纯逻辑层：CDK/令牌/同步/配额/采集/闸门 | Task 2、3、6、7、8、9 | 本机单元测试；Task 8前完成Task 0 Step 3 |
+| ③ | 容器与终端逻辑（假Docker API+本机tmux） | Task 4、5 | 本机；穿插Task 0 Step 2原型 |
+| ④ | control-api与CLI | Task 10、11 | 本机（三平台冒烟可后置到⑤前） |
+| ⑤ | 真实集成：e2e/硬配额/部署/备份 | Task 12、13 | **目标VPS**；此前完成Task 0 Step 1 |
 
 ---
 
