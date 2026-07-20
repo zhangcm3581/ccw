@@ -8,8 +8,8 @@ func env(m map[string]string) func(string) string {
 
 func valid() map[string]string {
 	return map[string]string{
-		"CCW_DATABASE_URL":  "postgres://ccw:pw@localhost:5432/ccw",
-		"CCW_TOKEN_KEY":     "8ba7167acf1c9ee1cbfbcbf0b2c7e51ecdf8b1d0a9b3c2d1e0f1a2b3c4d5e6f7",
+		"CCW_DATABASE_URL":   "postgres://ccw:pw@localhost:5432/ccw",
+		"CCW_TOKEN_KEY":      "8ba7167acf1c9ee1cbfbcbf0b2c7e51ecdf8b1d0a9b3c2d1e0f1a2b3c4d5e6f7",
 		"CCW_WORKSPACE_ROOT": "/srv/ccw",
 	}
 }
