@@ -1,0 +1,11 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ccw
+      POSTGRES_PASSWORD: ccw-dev-only
+      POSTGRES_DB: ccw
+    volumes: ["ccw-pg:/var/lib/postgresql/data"]
+    ports: ["127.0.0.1:5432:5432"]
+volumes:
+  ccw-pg: {}

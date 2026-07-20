@@ -1,0 +1,8 @@
+{
+  "no_new_privileges": true,
+  "cap_drop": ["ALL"],
+  "mount_docker_socket": false,
+  "network": "ccw-projects",
+  "tmpfs": {"/tmp": "size=512m"},
+  "restart_policy": "always"
+}
