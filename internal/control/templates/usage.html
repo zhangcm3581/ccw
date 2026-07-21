@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="30">
+<title>项目用量 - {{.Project.Slug}}</title>
+<h1>{{.Project.Slug}}</h1>
+<p><strong>注意：以下为内部项目额度（估算单位），不是Anthropic官方订阅余额。</strong></p>
+<ul>
+  <li>5小时窗口：{{.Decision.FiveHourUsed}}/{{.Project.FiveHourLimit}}内部单位</li>
+  <li>7天窗口：{{.Decision.SevenDayUsed}}/{{.Project.SevenDayLimit}}内部单位</li>
+  <li>磁盘：{{.DiskUsed}}/{{.Project.DiskLimit}}字节（逻辑字节，1GiB=1073741824字节）</li>
+  {{if .Decision.Over}}<li>状态：已超额（{{.Decision.Reason}}）</li>{{else}}<li>状态：正常</li>{{end}}
+</ul>
