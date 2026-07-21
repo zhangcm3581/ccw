@@ -40,7 +40,7 @@ docker --version && docker compose version
 sudo mkdir -p /opt/ccw && sudo chown "$USER" /opt/ccw
 # 用scp/rsync/git把项目内容传到/opt/ccw
 cd /opt/ccw
-ls deploy/docker-compose.yml   # 确认存在
+ls deploy/compose.yaml   # 确认存在
 ```
 
 ## 4. 配置环境变量
