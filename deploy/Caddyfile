@@ -1,0 +1,25 @@
+# 唯一公网入口：Caddy终止TLS，按路径合同重写后转发到内部服务。
+# 有公网域名+DNS时Caddy自动签发Let's Encrypt证书。
+# 本地/无域名测试见DEPLOY.md（可改用 tls internal 或 http://）。
+
+{$CCW_DOMAIN} {
+	# /api/* 剥掉前缀后转control-api（/api/v1/auth/exchange -> /v1/auth/exchange）
+	handle_path /api/* {
+		reverse_proxy control-api:8080
+	}
+
+	# 终端WebSocket：重写到后端/v1/terminal
+	handle /ws/terminal {
+		rewrite * /v1/terminal
+		reverse_proxy worker-agent:8081
+	}
+
+	# 同步WebSocket：重写到后端/v1/sync（端点在Task 12实现）
+	handle /ws/sync {
+		rewrite * /v1/sync
+		reverse_proxy worker-agent:8081
+	}
+
+	# 其余路径拒绝（门户仅localhost+SSH隧道访问，不经公网）
+	respond 404
+}

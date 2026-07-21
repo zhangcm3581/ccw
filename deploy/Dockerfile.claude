@@ -1,0 +1,22 @@
+# 项目容器镜像：官方Claude Code + git + tmux，非root用户claude，PID 1为sleep infinity。
+# 版本按deploy/versions.lock固定（审查§3.2）；升级前先用脱敏JSONL样例与tmux恢复测试验证。
+ARG UBUNTU_TAG=24.04
+FROM ubuntu:${UBUNTU_TAG}
+ARG NODE_MAJOR=20
+ARG CLAUDE_CODE_VERSION
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git tmux curl ca-certificates gnupg \
+ && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+ && apt-get install -y nodejs \
+ && rm -rf /var/lib/apt/lists/*
+RUN if [ -n "${CLAUDE_CODE_VERSION}" ]; then \
+      npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}; \
+    else \
+      npm install -g @anthropic-ai/claude-code; \
+    fi
+RUN useradd -m -s /bin/bash claude
+USER claude
+WORKDIR /workspace
+# PID 1不是tmux（无TTY会立即退出）；tmux由worker-agent经docker exec准备。
+CMD ["sleep", "infinity"]

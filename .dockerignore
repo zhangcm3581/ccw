@@ -1,0 +1,8 @@
+.git
+remote-claude-workspace/
+*.md
+docs/
+control-api
+worker-agent
+cclaude
+ccwadmin

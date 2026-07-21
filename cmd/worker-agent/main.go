@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/creack/pty"
 
 	"ccw/internal/config"
+	"ccw/internal/store"
 	"ccw/internal/terminal"
 )
 
@@ -43,14 +45,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 容器名映射：Task 12接入store查询后替换此简化实现。
+	ctx := context.Background()
+	st, err := store.New(ctx, cfg.DatabaseURL) // 内部Ping，失败即非零退出
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "worker-agent:", err)
+		os.Exit(1)
+	}
+
+	// 从projectID查项目的container_name（终端附着的目标容器）。
 	containerFor := func(projectID string) string {
-		key := projectID
-		if len(key) > 8 {
-			key = key[:8]
-		}
-		if v := os.Getenv("CCW_CONTAINER_" + key); v != "" {
-			return v
+		if p, err := st.GetProjectByID(ctx, projectID); err == nil && p.ContainerName != "" {
+			return p.ContainerName
 		}
 		return "ccw-" + projectID
 	}
