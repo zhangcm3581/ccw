@@ -1,11 +1,113 @@
+# 双项目远程Claude工作空间——一键部署编排。
+#
+# 对外只暴露Caddy的443/80；control-api与worker-agent不映射宿主机端口，
+# 仅在内部ccw网络内被Caddy访问（等效于"只监听内网"）。
+# 项目容器project-a/project-b以sleep infinity运行，等待管理员登录与worker-agent附着。
+#
+# 未启用：文件同步端点/v1/sync（Task 12）；本编排提供认证、连接、门户与终端通道。
+
 services:
   postgres:
     image: postgres:16
     environment:
       POSTGRES_USER: ccw
-      POSTGRES_PASSWORD: ccw-dev-only
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set in .env}"
       POSTGRES_DB: ccw
-    volumes: ["ccw-pg:/var/lib/postgresql/data"]
-    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - ccw-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ccw"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [ccw]
+    restart: unless-stopped
+
+  control-api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.control-api
+    environment:
+      CCW_DATABASE_URL: postgres://ccw:${POSTGRES_PASSWORD}@postgres:5432/ccw
+      CCW_TOKEN_KEY: "${CCW_TOKEN_KEY:?generate with openssl rand -hex 32}"
+      CCW_WORKSPACE_ROOT: /srv/ccw
+      CCW_LISTEN_ADDR: 0.0.0.0:8080
+      CCW_AGENT_WS_BASE: wss://${CCW_DOMAIN}/ws
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [ccw]
+    restart: unless-stopped
+
+  worker-agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.worker-agent
+    environment:
+      CCW_DATABASE_URL: postgres://ccw:${POSTGRES_PASSWORD}@postgres:5432/ccw
+      CCW_TOKEN_KEY: ${CCW_TOKEN_KEY}
+      CCW_WORKSPACE_ROOT: /srv/ccw
+      CCW_AGENT_LISTEN_ADDR: 0.0.0.0:8081
+    volumes:
+      # 挂docker.sock以exec项目容器；本服务因此等同宿主机高权限，不对公网暴露。
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [ccw]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CCW_DOMAIN: ${CCW_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [control-api, worker-agent]
+    networks: [ccw]
+    restart: unless-stopped
+
+  project-a:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.claude
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-}
+    image: ccw-claude:latest
+    container_name: ccw-project-a
+    volumes:
+      - project-a-workspace:/workspace
+      - project-a-claude:/home/claude/.claude
+      - project-a-sync:/var/lib/cclaude-sync
+    networks: [ccw]
+    restart: unless-stopped
+
+  project-b:
+    image: ccw-claude:latest
+    container_name: ccw-project-b
+    depends_on: [project-a]
+    volumes:
+      - project-b-workspace:/workspace
+      - project-b-claude:/home/claude/.claude
+      - project-b-sync:/var/lib/cclaude-sync
+    networks: [ccw]
+    restart: unless-stopped
+
 volumes:
   ccw-pg: {}
+  caddy-data: {}
+  caddy-config: {}
+  project-a-workspace: {}
+  project-a-claude: {}
+  project-a-sync: {}
+  project-b-workspace: {}
+  project-b-claude: {}
+  project-b-sync: {}
+
+networks:
+  ccw: {}
