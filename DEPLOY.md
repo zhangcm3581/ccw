@@ -137,22 +137,45 @@ export CCW_API=https://你的域名.example.com/api
 
 > 文件同步（本地目录↔云端workspace）在本版本尚未启用，客户端目前仅提供终端通道。
 
-## 9. 无域名的快速验证
+## 9. 用服务器 IP 测试（无域名，纯 HTTP）
 
-没有域名（Caddy无法签发公网证书）时，可临时用Caddy内部证书验证控制面：
+域名只用于 Caddy 自动签发 HTTPS 证书。没有域名时，用服务器公网 IP + HTTP 即可完整测试（认证、连接、终端）。**明文不加密，仅限测试，切勿用于生产。**
+
+在 `deploy/` 目录执行（把 `<IP>` 换成服务器公网 IP）：
 
 ```bash
-# 临时改Caddyfile首行为固定端口+内部TLS
-#   :443 {
-#       tls internal
-#       ... 其余handle不变 ...
-#   }
-docker compose up -d caddy
-# 客户端用curl跳过证书校验测试认证端点
-curl -sk https://<服务器IP>/api/v1/auth/exchange \
+cd /opt/ccw/deploy
+
+# 1) 配 .env：CCW_DOMAIN 填服务器公网 IP，并生成真实密钥
+sed -i "s|^CCW_DOMAIN=.*|CCW_DOMAIN=<IP>|" .env
+sed -i "s|^CCW_TOKEN_KEY=.*|CCW_TOKEN_KEY=$(openssl rand -hex 32)|" .env
+sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 16)|" .env
+
+# 2) 无 TLS：control-api 返回的终端地址改用 ws:// 而非 wss://
+sed -i 's|wss://\${CCW_DOMAIN}/ws|ws://\${CCW_DOMAIN}/ws|' compose.yaml
+
+# 3) Caddy 改用 HTTP 版（监听 80，不签证书）
+cp Caddyfile.http Caddyfile
+
+# 4) 起服务（确保云厂商安全组/防火墙放行 80 端口）
+docker compose up -d
+docker compose ps
+```
+
+创建项目、拿 CDK（第 6 节），然后验证：
+
+```bash
+# 认证端点（任意机器）
+curl -s http://<IP>/api/v1/auth/exchange \
   -H 'Content-Type: application/json' -d '{"cdk":"<你的CDK>"}'
 # 成功返回 {"session_token":"...","project_id":"...","project_slug":"project-a"}
+
+# 客户端连终端
+export CCW_API=http://<IP>/api
+./cclaude
 ```
+
+上线时改回域名版：`cp` 回原 `Caddyfile`、把 `compose.yaml` 的 `ws://` 改回 `wss://`、`CCW_DOMAIN` 填真实域名并让 DNS 指向本机。
 
 ## 10. 运维常用命令
 

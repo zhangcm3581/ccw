@@ -1,0 +1,16 @@
+# IP/无域名测试用：纯HTTP监听80端口，不签证书。
+# 明文传输，仅用于功能验证，切勿用于生产。生产请用 Caddyfile（域名+自动HTTPS）。
+:80 {
+	handle_path /api/* {
+		reverse_proxy control-api:8080
+	}
+	handle /ws/terminal {
+		rewrite * /v1/terminal
+		reverse_proxy worker-agent:8081
+	}
+	handle /ws/sync {
+		rewrite * /v1/sync
+		reverse_proxy worker-agent:8081
+	}
+	respond 404
+}
