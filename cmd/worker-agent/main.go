@@ -7,12 +7,16 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	stdsync "sync"
 	"time"
 
 	"github.com/creack/pty"
 
 	"ccw/internal/config"
+	"ccw/internal/storage"
 	"ccw/internal/store"
+	syncpkg "ccw/internal/sync"
 	"ccw/internal/terminal"
 )
 
@@ -78,9 +82,36 @@ func main() {
 		return &ptySession{f: f, cmd: cmd}, nil
 	}
 
+	// 每个项目一把锁，串行化其同步写（防并发上传 TOCTOU，审查§15.2）。
+	var projectLocks stdsync.Map
+	lockFor := func(pid string) *stdsync.Mutex {
+		m, _ := projectLocks.LoadOrStore(pid, &stdsync.Mutex{})
+		return m.(*stdsync.Mutex)
+	}
+	// 同步会话工厂：绑定 PG 存储、项目 workspace 目录、磁盘配额门、项目锁。
+	sessionFactory := func(projectID, device, mode string) *syncpkg.SyncSession {
+		root := filepath.Join(cfg.WorkspaceRoot, projectID)
+		os.MkdirAll(root, 0o755)
+		var limit int64 = 1 << 40
+		if p, err := st.GetProjectByID(ctx, projectID); err == nil && p.DiskLimit > 0 {
+			limit = p.DiskLimit
+		}
+		gate := storage.Gate{Limit: limit}
+		return &syncpkg.SyncSession{
+			ProjectID: projectID, Device: device, Mode: mode,
+			Store: st, Dir: syncpkg.NewDirStore(root),
+			MaxBytes: 1 << 30, AllowQuota: gate.Allow, Lock: lockFor(projectID),
+		}
+	}
+	// 同步模式：TODO(12-4) 查项目额度决定 cleanup；当前默认 rw。
+	modeFor := func(projectID string) string { return "rw" }
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/terminal", func(w http.ResponseWriter, r *http.Request) {
 		terminal.Serve(w, r, cfg.TokenSigningKey, startPTY)
+	})
+	mux.HandleFunc("GET /v1/sync", func(w http.ResponseWriter, r *http.Request) {
+		syncpkg.ServeSync(w, r, cfg.TokenSigningKey, (1<<30)+(64<<10), modeFor, sessionFactory)
 	})
 
 	// 只监听回环/内网（审查§3.1）；公网由反向代理的443统一入口。

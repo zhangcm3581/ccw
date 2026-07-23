@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	stdsync "sync"
 )
 
 // ErrDiskFull：配额回调可返回它表示超额（SyncSession只判 err!=nil，不依赖具体类型）。
@@ -40,6 +41,21 @@ type SyncSession struct {
 	Dir        *DirStore
 	MaxBytes   int64
 	AllowQuota func(used, oldSize, newSize int64) error
+	// Lock：项目级锁，串行化同一项目的写，防并发上传各读旧revision/用量后同时通过（审查§15.2）。
+	// 可为 nil（单元测试）；worker 为每个 project 注入同一把锁。
+	Lock *stdsync.Mutex
+}
+
+func (s *SyncSession) lock() {
+	if s.Lock != nil {
+		s.Lock.Lock()
+	}
+}
+
+func (s *SyncSession) unlock() {
+	if s.Lock != nil {
+		s.Lock.Unlock()
+	}
 }
 
 // HandlePut：CAS基线检查→写临时文件（字节上限）→SHA校验→cleanup/配额门禁→原子替换→提交新revision。
@@ -49,6 +65,8 @@ func (s *SyncSession) HandlePut(ctx context.Context, path string, baseRev int64,
 	if err != nil {
 		return PutResult{Reason: "unsafe_path"}
 	}
+	s.lock() // 从读当前revision到提交，全程串行，防并发TOCTOU
+	defer s.unlock()
 	curRev, oldSize, exists, err := s.Store.Current(ctx, s.ProjectID, rel)
 	if err != nil {
 		return PutResult{Reason: "internal"}
@@ -102,6 +120,8 @@ func (s *SyncSession) HandleDelete(ctx context.Context, path string, baseRev int
 	if err != nil {
 		return PutResult{Reason: "unsafe_path"}
 	}
+	s.lock()
+	defer s.unlock()
 	curRev, _, exists, err := s.Store.Current(ctx, s.ProjectID, rel)
 	if err != nil {
 		return PutResult{Reason: "internal"}
@@ -126,4 +146,24 @@ func (s *SyncSession) HandleDelete(ctx context.Context, path string, baseRev int
 // HandleManifest：权威清单来自file_index（含未过保留期tombstone），不是磁盘扫描。
 func (s *SyncSession) HandleManifest(ctx context.Context) ([]FileEntry, error) {
 	return s.Store.Manifest(ctx, s.ProjectID)
+}
+
+// HandleGet：返回文件的当前元数据与内容流（客户端下载云端版本用）。调用方负责关闭reader。
+func (s *SyncSession) HandleGet(ctx context.Context, path string) (FileEntry, io.ReadCloser, error) {
+	rel, err := SafeRelPath(path)
+	if err != nil {
+		return FileEntry{}, nil, err
+	}
+	rev, size, exists, err := s.Store.Current(ctx, s.ProjectID, rel)
+	if err != nil {
+		return FileEntry{}, nil, err
+	}
+	if !exists {
+		return FileEntry{}, nil, errors.New("sync: not found")
+	}
+	rc, err := s.Dir.Open(rel)
+	if err != nil {
+		return FileEntry{}, nil, err
+	}
+	return FileEntry{Path: rel, Size: size, Revision: rev}, rc, nil
 }
