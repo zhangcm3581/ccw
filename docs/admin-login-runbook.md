@@ -52,6 +52,25 @@ docker exec ccw-project-a claude auth status    # 仍应 loggedIn: true
 journalctl -u control-api -u worker-agent | grep -iE 'ccw_[0-9a-f]{16}|oauth|refresh_token|access_token'
 ```
 
+## 2.1 关于凭据自动刷新的冲突（共享授权模式）
+
+OAuth 的 access token 几小时过期后会用 refresh token 换新的。两个容器共用同一份凭据文件时，是否冲突取决于 Claude 的 refresh token 是否"轮换"：
+
+- **refresh token 不轮换（固定）**：两容器各换各的 access token，互不影响，永不冲突。
+- **refresh token 轮换（用一次即换新、旧的作废）**：存在一个**窄窗口竞态**——A 刷新后把新 refresh 写回、旧的作废；若 B 恰好同时拿旧 refresh 去刷新会失败，可能掉线。
+
+Claude 具体是否轮换需在本环境实测。现实中风险较小：竞态窗口极窄（需两容器恰好同秒刷新）、多数实现有旧 token 宽限期；且真撞上了，**重新登录一次两个项目一起恢复**（凭据共享）。
+
+日常检查与恢复：
+
+```bash
+docker exec ccw-project-a claude auth status
+docker exec ccw-project-b claude auth status
+# 若任一变 loggedIn:false，按第1节重新登录一次即可（俩都恢复）
+```
+
+需要**零冲突**（两项目长期同时高频使用）时，唯一彻底的办法是改用**两个独立 Claude 账号**（各自独立凭据、各自刷新），但那就失去"共享一份授权"、且需两份订阅。自用双项目场景推荐先用共享方案，实测几乎不会真撞上。
+
 ## 3. 24小时双登录阻断验证（Task 0 Step 1）
 
 **这一步消耗真实Claude额度，必须先获得账号所有者明确同意再执行。**

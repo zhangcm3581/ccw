@@ -7,6 +7,27 @@
 > **文件双向同步（`/v1/sync`）属于Task 12，尚未实现**，本次部署不含该功能。
 > worker-agent挂载docker.sock，等同宿主机高权限，因此**只在内部网络运行、不对公网暴露**。
 
+> **重装用户看这里**：如果你之前部署过（尤其遇到"登录后反复要求登录"），先按 **第 0 节卸载**清掉旧的坏卷，再从第 3 节走一遍。授权模式已改为**共享授权、登录一次**（第 7 节）。
+
+---
+
+## 0. 卸载旧部署（重装前必做）
+
+早期部署的 Claude 卷是 `root:root`、`claude` 用户写不进凭据，必须清掉重来。在 `deploy/` 目录执行：
+
+```bash
+cd /opt/ccw/deploy
+./uninstall.sh                 # 停服务 + 删所有数据卷（含旧的坏卷）
+# 或者彻底一点，连镜像也删（重装会重新 build）：
+# ./uninstall.sh --purge-images
+```
+
+脚本做的事：`docker compose down -v` 删掉容器/网络/卷，并额外清理早期版本遗留的独立 `project-a-claude / project-b-claude` 卷。跑完会打印残留检查，正常应显示"无残留卷"。
+
+> ⚠ 这会删除数据库、已登录凭据、项目 workspace——重装本就要全新开始，属预期。若只想停服务保留数据，用 `docker compose down`（不加 `-v`）。
+
+卸载后，重新获取最新代码（含权限修复的 `Dockerfile.claude` 与共享授权的 `compose.yaml`），然后从第 3 节继续。
+
 ---
 
 ## 1. 硬件与前置
