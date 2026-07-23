@@ -94,23 +94,39 @@ docker compose run --rm --entrypoint /ccwadmin control-api init-project project-
 
 > 容器名约定：`ccwadmin init-project project-a` 建立的项目container_name为 `ccw-project-a`，与compose中的项目容器一一对应。
 
-## 7. 管理员登录Claude（两个容器各一次）
+## 7. 管理员登录Claude（共享授权，只需一次）
 
-项目容器以 `sleep infinity` 运行，Claude Code已安装但未登录。管理员分别进入每个容器完成官方登录（详见 `docs/admin-login-runbook.md`）：
+两个项目容器共用同一个 Claude HOME 卷（`claude-shared`），所以**只在一个容器登录一次**，两个项目共用同一份凭据（本人自用自己账号）。详见 `docs/admin-login-runbook.md`。
 
 ```bash
-# 准备并附着project-a的tmux会话（PROJECT_A_ID为第6步输出的project id）
+# 准备并附着 project-a 的 tmux 会话（PROJECT_A_ID 为第6步输出的 project id）
 docker exec ccw-project-a tmux -L "$PROJECT_A_ID" has-session -t main \
   || docker exec ccw-project-a tmux -L "$PROJECT_A_ID" new-session -d -s main -c /workspace claude
 docker exec -it ccw-project-a tmux -L "$PROJECT_A_ID" attach-session -t main
-# 在附着的终端里按Claude Code提示完成登录，然后Ctrl-b d脱离
+# 按提示完成登录，然后 Ctrl-b d 脱离。project-b 无需再登录（共用同一凭据卷）。
+
+# 验证：两个项目都应已登录，且容器重建后仍保持
+docker exec ccw-project-a claude auth status    # 期望 loggedIn: true
+docker exec ccw-project-b claude auth status    # 期望 loggedIn: true（共用凭据）
 ```
 
-project-b重复同样步骤，容器名换成 `ccw-project-b`、id换成project-b的。
+凭据（`.claude.json` 与 `.claude/.credentials.json`）持久化在 `claude-shared` 卷，容器重建不丢。
 
-凭据只落在各自的 `*-claude` 持久卷，容器重建不丢失。
+> **重要**：登录能持久化的前提是卷可写。镜像已在 `Dockerfile.claude` 里预建挂载目录并 chown 给 claude(1001)，空卷首次挂载会继承该所有权。**若你之前用旧镜像部署过、卷是 root:root，必须先删旧卷再重建**（见下方"升级已部署实例"）。
 
-> **24小时双登录验证**（`docs/admin-login-runbook.md` 第3节）：两个容器同时保持登录并各自定时请求24小时，确认同账号双登录不互相踢下线。**该验证消耗真实Claude额度，需账号所有者同意后再做。**若失败，降级为分时使用或改用两个独立账号。
+### 升级已部署实例（修复登录不持久）
+
+若已按旧版部署、遇到"登录后反复要求登录"，按此修复：
+
+```bash
+cd /opt/ccw/deploy
+docker compose down                       # 停服务（不加 -v，先保留数据库）
+# 删除权限错误的旧 Claude 卷（workspace/数据库不受影响）
+docker volume rm deploy_project-a-claude deploy_project-b-claude 2>/dev/null || true
+docker compose build --no-cache project-a # 用带权限修复的 Dockerfile 重建镜像
+docker compose up -d                      # 全新空卷 claude-shared 会继承 claude 所有权
+# 然后回到本节顶部，登录一次即可
+```
 
 ## 8. 客户端使用（CLI）
 

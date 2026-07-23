@@ -1,39 +1,51 @@
 # 管理员Claude登录运行手册
 
 **适用：**双项目远程Claude工作空间（Project A/Project B）
-**前提：**两个项目容器已由`EnsureProjectRuntime`创建并处于运行状态（PID 1为`sleep infinity`）
-**原则：**系统不复制、不下发、不展示OAuth凭据；CDK通道永远没有登录入口
+**前提：**两个项目容器运行中（PID 1为`sleep infinity`），且已用带权限修复的镜像重建（见下方"前置：卷权限"）
+**授权模式：**共享授权——两个项目容器共用同一个 Claude HOME 卷（`claude-shared`），**只需登录一次**，两个项目共用同一份凭据（本人自用自己账号，非转售第三方）
 
-## 1. 进入容器完成官方登录
+## 前置：卷权限（否则登录写不进凭据）
 
-管理员经**管理socket**（仅监听localhost、权限0660）操作，普通CDK的HTTP API不注册这些路由。
+Claude 授权后，账户资料写 `/home/claude/.claude.json`、访问令牌写 `/home/claude/.claude/.credentials.json`。容器以 `claude`(UID 1001) 运行，若挂载卷归 `root:root`，`claude` 无法写入凭据 → 登录后 `loggedIn=false`、反复要求登录。
 
-对每个项目分别执行一次（以Project A为例）：
+修复已在 `deploy/Dockerfile.claude` 落实：镜像预建 `/home/claude`、`/workspace`、`/var/lib/cclaude-sync` 并 `chown` 给 claude；**空命名卷首次挂载会继承镜像内该路径的所有权**，从而卷归 claude、可写。因此务必用最新 Dockerfile **重新构建镜像**并**用全新的空卷**（旧的 root:root 卷需先删除）。
+
+## 1. 登录一次（共享授权）
+
+只需在任一个容器里登录一次，凭据写入共享卷 `claude-shared`，两个项目立即共用：
 
 ```bash
-# 1)确认容器在跑
+# 1) 确认容器在跑
 docker ps --filter name=ccw-project-a
 
-# 2)准备tmux会话（不存在才创建；PID 1不是tmux）
+# 2) 准备 tmux 会话（不存在才创建；PID 1 不是 tmux）
 docker exec ccw-project-a tmux -L <project-a-id> has-session -t main \
   || docker exec ccw-project-a tmux -L <project-a-id> new-session -d -s main -c /workspace claude
 
-# 3)附着并完成官方登录流程（必须带-t分配容器TTY）
+# 3) 附着并完成官方登录（必须带 -t 分配容器 TTY）
 docker exec -it ccw-project-a tmux -L <project-a-id> attach-session -t main
 ```
 
-在附着的终端里按Claude Code官方提示完成登录。Project B重复同样步骤，容器名与project-id换成B的。
+在附着的终端里按 Claude Code 提示完成登录。**project-b 无需再登录**——它挂的是同一个 `claude-shared` 卷，凭据已共享。
 
-## 2. 验证凭据隔离
-
-登录后确认凭据只落在各自的Claude HOME卷：
+## 2. 验证登录持久化
 
 ```bash
-docker run --rm -v project-a-claude:/m alpine ls -la /m
-docker run --rm -v project-b-claude:/m alpine ls -la /m
+# 凭据文件应已生成，且归 claude(1001) 所有
+docker exec ccw-project-a ls -la /home/claude/.claude/.credentials.json /home/claude/.claude.json
+
+# Claude 自身状态应为已登录
+docker exec ccw-project-a claude auth status    # 期望 loggedIn: true
+
+# project-b 共用同一份凭据，同样应已登录
+docker exec ccw-project-b claude auth status    # 期望 loggedIn: true
+
+# 容器重建后仍保持登录（卷持久）
+docker compose up -d --force-recreate project-a
+docker exec ccw-project-a claude auth status    # 仍应 loggedIn: true
 ```
 
-要求：两个卷内容互不相同、互不引用；control-api与worker-agent的日志、数据库中均无OAuth明文。
+> 卷名提示：docker compose 会给卷加项目名前缀，实际卷名通常是 `deploy_claude-shared`（在 `deploy/` 目录部署时）。用 `docker volume ls` 查实际名称。
 
 ```bash
 # 秘密泄漏扫描（应无输出）

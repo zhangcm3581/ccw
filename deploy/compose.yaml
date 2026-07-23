@@ -82,7 +82,9 @@ services:
     container_name: ccw-project-a
     volumes:
       - project-a-workspace:/workspace
-      - project-a-claude:/home/claude/.claude
+      # 共享授权：整个 /home/claude 由两个项目共用同一个卷，登录一次即全部可用。
+      # 挂整个 home（而非仅 .claude）以同时持久化 .claude.json 与 .claude/.credentials.json。
+      - claude-shared:/home/claude
       - project-a-sync:/var/lib/cclaude-sync
     networks: [ccw]
     restart: unless-stopped
@@ -93,7 +95,7 @@ services:
     depends_on: [project-a]
     volumes:
       - project-b-workspace:/workspace
-      - project-b-claude:/home/claude/.claude
+      - claude-shared:/home/claude          # 同一个共享卷：与 project-a 共用登录凭据
       - project-b-sync:/var/lib/cclaude-sync
     networks: [ccw]
     restart: unless-stopped
@@ -102,11 +104,10 @@ volumes:
   ccw-pg: {}
   caddy-data: {}
   caddy-config: {}
+  claude-shared: {}          # 两个项目共享的 Claude HOME（授权一次、共用凭据）
   project-a-workspace: {}
-  project-a-claude: {}
   project-a-sync: {}
   project-b-workspace: {}
-  project-b-claude: {}
   project-b-sync: {}
 
 networks:

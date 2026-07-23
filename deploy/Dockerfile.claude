@@ -15,7 +15,13 @@ RUN if [ -n "${CLAUDE_CODE_VERSION}" ]; then \
     else \
       npm install -g @anthropic-ai/claude-code; \
     fi
-RUN useradd -m -s /bin/bash claude
+RUN useradd -m -u 1001 -s /bin/bash claude
+# 预建三个挂载目录并归 claude(1001) 所有。关键：空命名卷首次挂载到容器路径时，
+# Docker 会用镜像内该路径的内容与所有权初始化卷——因此这里 chown 后，
+# workspace/claude-home/sync 卷都会是 claude 所有，避免默认 root:root
+# 导致 claude 无法写入 .credentials.json（登录后 loggedIn=false、反复要求登录的根因）。
+RUN mkdir -p /home/claude/.claude /workspace /var/lib/cclaude-sync \
+ && chown -R claude:claude /home/claude /workspace /var/lib/cclaude-sync
 USER claude
 WORKDIR /workspace
 # PID 1不是tmux（无TTY会立即退出）；tmux由worker-agent经docker exec准备。
