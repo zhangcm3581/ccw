@@ -159,33 +159,41 @@ func resizeLoop(ctx context.Context, ws *websocket.Conn) {
 	}
 }
 
-// runSync：首次全量比对 + 定时增量。计算三方Diff后经sync端点执行。
-// sync_mode=="cleanup"时只执行下载/删除/缩小。sync WebSocket协议的两端对接
-// 与端到端验证在Task 12（server端sync端点在该任务实现）。
+// runSync：每2秒一轮三方同步。每轮连sync端点→拉服务端清单→与本地基线Diff→
+// 执行上传/下载/删除/冲突副本→持久化新基线。令牌放Authorization头（禁URL参数）。
+// ctx取消（终端断开/退出）时停止；cleanup模式下同步仍执行下载/删除，只跳过上传。
 func runSync(ctx context.Context, root string, conn control.ConnectionResponse) {
 	idx := syncpkg.LocalIndex{Root: root}
+	client := &syncpkg.SyncClient{
+		Root:   root,
+		Device: deviceName(),
+		Notify: func(m string) { fmt.Fprintln(os.Stderr, "[sync]", m) },
+	}
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	for {
-		base, _ := idx.Load()
-		scanned, err := syncpkg.ScanDir(root)
+		tr, err := syncpkg.DialSync(ctx, conn.SyncURL, conn.SyncToken)
 		if err == nil {
-			local := syncpkg.BuildLocal(scanned, base)
-			// 远端清单经sync端点拉取后与local做Diff；Task 12接入实际传输。
-			_ = local
+			newBase, serr := client.SyncOnce(ctx, tr)
+			tr.Close()
+			if serr == nil {
+				idx.Save(newBase)
+			}
 		}
-		// TODO(Task 12)：连接conn.SyncURL（Authorization头带conn.SyncToken），
-		// 执行Diff的Upload/Download/DeleteToRemote；cleanup模式跳过Upload。
+		// token过期或断线：由外层循环重新Connection换新token后再起本函数。
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		// 每轮重新拉取connection以感知模式切换的逻辑由外层循环负责。
-		if conn.Over && ctx.Err() == nil {
-			return // cleanup模式下让外层60秒探测窗口恢复
-		}
 	}
+}
+
+func deviceName() string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "cclaude"
 }
 
 func envOr(k, def string) string {
