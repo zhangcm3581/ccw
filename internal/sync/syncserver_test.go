@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -166,5 +168,51 @@ func TestManifestFromStore(t *testing.T) {
 	m, err := s.HandleManifest(context.Background())
 	if err != nil || len(m) != 2 {
 		t.Fatalf("manifest must return all entries incl tombstones, got %d %v", len(m), err)
+	}
+}
+
+func TestManifestReconcilesCloudEdit(t *testing.T) {
+	s, store := newSession(t, "rw", 1<<30)
+	// Claude 在云端 workspace 新建了一个文件，file_index 里还没有
+	os.WriteFile(filepath.Join(s.Dir.Root(), "cloud.go"), []byte("by claude"), 0o644)
+	m, err := s.HandleManifest(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.files["cloud.go"].SHA256 != sha256hex("by claude") {
+		t.Fatalf("cloud edit must be reconciled into index: %+v", store.files)
+	}
+	found := false
+	for _, e := range m {
+		if e.Path == "cloud.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("manifest must include cloud edit")
+	}
+}
+
+func TestManifestReconcilesCloudDelete(t *testing.T) {
+	s, store := newSession(t, "rw", 1<<30)
+	store.files["gone.go"] = FileEntry{Path: "gone.go", Size: 5, SHA256: "x", Revision: 2}
+	// workspace 里没有 gone.go（Claude 在云端删了）
+	if _, err := s.HandleManifest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !store.files["gone.go"].Deleted {
+		t.Fatalf("cloud delete must write tombstone, got %+v", store.files["gone.go"])
+	}
+}
+
+func TestReconcileSkipsUnchanged(t *testing.T) {
+	s, store := newSession(t, "rw", 1<<30)
+	// 客户端刚 put 的文件：workspace 有它，file_index sha 一致
+	os.WriteFile(filepath.Join(s.Dir.Root(), "a.go"), []byte("same"), 0o644)
+	store.files["a.go"] = FileEntry{Path: "a.go", Size: 4, SHA256: sha256hex("same"), Revision: 9}
+	s.HandleManifest(context.Background())
+	// revision 不应被 reconcile 抬高（sha 一致 → 跳过）
+	if store.files["a.go"].Revision != 9 {
+		t.Fatalf("unchanged file must not be re-revisioned, got rev %d", store.files["a.go"].Revision)
 	}
 }

@@ -143,9 +143,47 @@ func (s *SyncSession) HandleDelete(ctx context.Context, path string, baseRev int
 	return PutResult{OK: true, Revision: newRev}
 }
 
-// HandleManifest：权威清单来自file_index（含未过保留期tombstone），不是磁盘扫描。
+// HandleManifest：返回清单前先把云端workspace的改动（Claude在容器内改的文件）
+// 入账到file_index，这样客户端拉到的清单包含云端最新状态（云端→本地方向）。
 func (s *SyncSession) HandleManifest(ctx context.Context) ([]FileEntry, error) {
+	s.reconcileCloud(ctx)
 	return s.Store.Manifest(ctx, s.ProjectID)
+}
+
+// reconcileCloud扫描workspace，把与file_index不一致的文件入账为新revision，
+// 消失的文件写tombstone。客户端刚put的文件sha与索引一致会被跳过，不会重复入账。
+// 在项目锁内串行，避免与客户端put竞争。
+func (s *SyncSession) reconcileCloud(ctx context.Context) {
+	s.lock()
+	defer s.unlock()
+	scanned, err := ScanDir(s.Dir.Root())
+	if err != nil {
+		return
+	}
+	remote, err := s.Store.Manifest(ctx, s.ProjectID)
+	if err != nil {
+		return
+	}
+	idx := make(map[string]FileEntry, len(remote))
+	for _, r := range remote {
+		idx[r.Path] = r
+	}
+	seen := make(map[string]bool, len(scanned))
+	for _, f := range scanned {
+		seen[f.Path] = true
+		cur, ok := idx[f.Path]
+		if ok && !cur.Deleted && cur.SHA256 == f.SHA256 {
+			continue // 未变（含客户端刚put的）
+		}
+		_ = s.Store.Commit(ctx, s.ProjectID,
+			FileEntry{Path: f.Path, Size: f.Size, SHA256: f.SHA256, Revision: cur.Revision + 1}, "cloud")
+	}
+	for _, r := range remote {
+		if !r.Deleted && !seen[r.Path] {
+			_ = s.Store.Commit(ctx, s.ProjectID,
+				FileEntry{Path: r.Path, Revision: r.Revision + 1, Deleted: true}, "cloud")
+		}
+	}
 }
 
 // HandleGet：返回文件的当前元数据与内容流（客户端下载云端版本用）。调用方负责关闭reader。

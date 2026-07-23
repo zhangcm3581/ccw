@@ -87,6 +87,9 @@ func (d *DirStore) WriteTemp(rel string, r io.Reader, maxBytes int64) (string, s
 	return tmpID, hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
+// Root返回workspace根目录（供云端reconcile扫描）。
+func (d *DirStore) Root() string { return d.root }
+
 // Open打开已落盘的文件供读取（get 操作用），路径经安全校验。
 func (d *DirStore) Open(rel string) (io.ReadCloser, error) {
 	abs, err := d.resolve(rel)
