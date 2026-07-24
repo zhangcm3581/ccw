@@ -65,14 +65,14 @@ func main() {
 			// 不开终端，仅以cleanup模式同步（服务端只允许下载/删除/缩小），
 			// 每60秒重新Connection探测窗口恢复，恢复后自动回到正常模式。
 			fmt.Fprintf(os.Stderr, "项目受限（%s）：cleanup模式，可下载、删除、缩小文件；额度恢复后自动回到正常模式。\n", conn.OverReason)
-			runSync(ctx, cwd, conn) // 阻塞到窗口恢复或断开
+			runSync(ctx, cwd, c, cdk, sessionToken, conn) // 阻塞到窗口恢复或断开
 			sleep(ctx, 60*time.Second)
 			continue
 		}
 
 		// 正常：后台同步 + 前台终端。任一返回（断开）后回到循环重连。
 		syncDone := make(chan struct{})
-		go func() { defer close(syncDone); runSync(ctx, cwd, conn) }()
+		go func() { defer close(syncDone); runSync(ctx, cwd, c, cdk, sessionToken, conn) }()
 		if err := runTerminal(ctx, conn); err != nil {
 			fmt.Fprintln(os.Stderr, "terminal:", err)
 		}
@@ -162,7 +162,7 @@ func resizeLoop(ctx context.Context, ws *websocket.Conn) {
 // runSync：每2秒一轮三方同步。每轮连sync端点→拉服务端清单→与本地基线Diff→
 // 执行上传/下载/删除/冲突副本→持久化新基线。令牌放Authorization头（禁URL参数）。
 // ctx取消（终端断开/退出）时停止；cleanup模式下同步仍执行下载/删除，只跳过上传。
-func runSync(ctx context.Context, root string, conn control.ConnectionResponse) {
+func runSync(ctx context.Context, root string, c control.Client, cdk, sessionToken string, conn control.ConnectionResponse) {
 	idx := syncpkg.LocalIndex{Root: root}
 	client := &syncpkg.SyncClient{
 		Root:   root,
@@ -173,14 +173,25 @@ func runSync(ctx context.Context, root string, conn control.ConnectionResponse) 
 	defer t.Stop()
 	for {
 		tr, err := syncpkg.DialSync(ctx, conn.SyncURL, conn.SyncToken)
-		if err == nil {
+		if err != nil {
+			// 令牌2分钟过期：自行刷新，不再依赖外层循环（终端连着时外层不刷新）。
+			nc, cerr := c.Connection(ctx, sessionToken)
+			if cerr != nil {
+				if st, eerr := exchangeSession(ctx, c, cdk); eerr == nil {
+					sessionToken = st
+					nc, cerr = c.Connection(ctx, sessionToken)
+				}
+			}
+			if cerr == nil {
+				conn = nc
+			}
+		} else {
 			newBase, serr := client.SyncOnce(ctx, tr)
 			tr.Close()
 			if serr == nil {
 				idx.Save(newBase)
 			}
 		}
-		// token过期或断线：由外层循环重新Connection换新token后再起本函数。
 		select {
 		case <-ctx.Done():
 			return
