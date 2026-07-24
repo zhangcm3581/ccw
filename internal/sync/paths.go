@@ -29,7 +29,7 @@ func SafeRelPath(p string) (string, error) {
 }
 
 var excludedPrefixes = []string{".env", ".cclaude/", ".ssh/", ".aws/", ".claude/",
-	".config/gcloud/", ".azure/", ".kube/", ".npmrc", ".pypirc", ".netrc", ".git-credentials"}
+	".config/gcloud/", ".azure/", ".kube/", ".npmrc", ".pypirc", ".netrc", ".git-credentials", ".git/", "node_modules/", ".DS_Store"}
 
 func DefaultExcluded(p string) bool {
 	for _, pre := range excludedPrefixes {
