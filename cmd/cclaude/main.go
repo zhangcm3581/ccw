@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -26,16 +28,10 @@ func main() {
 	defer stop()
 
 	base := envOr("CCW_API", "https://ccw.example.com")
-	cdk := os.Getenv("CCW_CDK") // 仅测试用；正常从终端隐式读取
-	if cdk == "" {
-		fmt.Fprint(os.Stderr, "CDK: ")
-		b, err := term.ReadPassword(int(os.Stdin.Fd())) // 不回显、不进shell历史
-		fmt.Fprintln(os.Stderr)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "read cdk:", err)
-			os.Exit(1)
-		}
-		cdk = string(b)
+	cdk, cerr := loadOrPromptCDK()
+	if cerr != nil {
+		fmt.Fprintln(os.Stderr, "read cdk:", cerr)
+		os.Exit(1)
 	}
 
 	c := control.Client{Base: base}
@@ -44,7 +40,8 @@ func main() {
 	// session token在内存中随时可用CDK重新换取（审查§5.3）；CDK不落盘、不入日志。
 	sessionToken, err := exchangeSession(ctx, c, cdk)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err) // Client保证错误不含CDK
+		clearCDK() // 缓存的CDK可能已失效，清除以便下次重新输入
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
@@ -197,6 +194,47 @@ func runSync(ctx context.Context, root string, c control.Client, cdk, sessionTok
 			return
 		case <-t.C:
 		}
+	}
+}
+
+// loadOrPromptCDK：优先环境变量 CCW_CDK；其次读缓存文件；都没有则提示输入一次并缓存。
+// 缓存文件 ~/.ccw/cdk 权限 0600，仅当前用户可读。
+func loadOrPromptCDK() (string, error) {
+	if v := os.Getenv("CCW_CDK"); v != "" {
+		return v, nil
+	}
+	if b, rerr := os.ReadFile(cdkCachePath()); rerr == nil {
+		if cdk := strings.TrimSpace(string(b)); cdk != "" {
+			return cdk, nil
+		}
+	}
+	fmt.Fprint(os.Stderr, "CDK: ")
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	cdk := strings.TrimSpace(string(b))
+	if cdk != "" {
+		saveCDK(cdkCachePath(), cdk)
+	}
+	return cdk, nil
+}
+
+func cdkCachePath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".ccw", "cdk")
+}
+
+func saveCDK(path, cdk string) {
+	if os.MkdirAll(filepath.Dir(path), 0o700) == nil {
+		os.WriteFile(path, []byte(cdk), 0o600)
+	}
+}
+
+func clearCDK() {
+	if os.Getenv("CCW_CDK") == "" {
+		os.Remove(cdkCachePath())
 	}
 }
 
