@@ -8,16 +8,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	stdsync "sync"
 	"time"
 
 	"github.com/creack/pty"
 
 	"ccw/internal/config"
+	"ccw/internal/quota"
 	"ccw/internal/storage"
 	"ccw/internal/store"
 	syncpkg "ccw/internal/sync"
 	"ccw/internal/terminal"
+	"ccw/internal/token"
 )
 
 // ptySession把宿主机上的docker exec附着进程包成io.ReadWriteCloser。
@@ -114,8 +117,18 @@ func main() {
 	modeFor := func(projectID string) string { return "rw" }
 
 	mux := http.NewServeMux()
+	registry := terminal.NewConnRegistry()
 	mux.HandleFunc("GET /v1/terminal", func(w http.ResponseWriter, r *http.Request) {
-		terminal.Serve(w, r, cfg.TokenSigningKey, startPTY)
+		claims, verr := token.Verify(cfg.TokenSigningKey, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), token.AudTerminal, time.Now())
+		if verr != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		cctx, cancel := context.WithCancel(ctx)
+		unreg := registry.Add(claims.ProjectID, cancel)
+		defer unreg()
+		defer cancel()
+		terminal.Serve(cctx, w, r, cfg.TokenSigningKey, startPTY)
 	})
 	mux.HandleFunc("GET /v1/sync", func(w http.ResponseWriter, r *http.Request) {
 		syncpkg.ServeSync(w, r, cfg.TokenSigningKey, (1<<30)+(64<<10), modeFor, sessionFactory)
@@ -124,6 +137,30 @@ func main() {
 	// 只监听回环/内网（审查§3.1）；公网由反向代理的443统一入口。
 	// WebSocket升级后连接被Hijack，读写deadline由terminal.Serve自行维护；
 	// 这里设ReadHeaderTimeout防slowloris。
+	// 额度主动执行（审计§9.3）：每30秒检查活跃项目，超额即关闭其全部终端连接。
+	quotaSvc := quota.Service{Reader: st}
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				for _, pid := range registry.ActiveProjects() {
+					p, perr := st.GetProjectByID(ctx, pid)
+					if perr != nil {
+						continue
+					}
+					lim := quota.Limits{FiveHour: p.FiveHourLimit, SevenDay: p.SevenDayLimit, PoolFiveHour: 1 << 62, PoolSevenDay: 1 << 62}
+					if d, qerr := quotaSvc.Check(ctx, pid, p.AccountID, lim, time.Now()); qerr == nil && d.Over {
+						registry.CloseProject(pid)
+					}
+				}
+			}
+		}
+	}()
+
 	srv := &http.Server{
 		Addr:              cfg.AgentListenAddr,
 		Handler:           mux,

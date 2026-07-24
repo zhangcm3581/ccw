@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -34,7 +35,7 @@ type ctrlMsg struct {
 // start由worker-agent注入：为该项目准备并附着PTY（docker exec -it tmux attach）。
 // 断开只关闭PTY附着进程与WebSocket，绝不kill tmux会话。
 // 调用方在调用本函数前必须已实时复查项目额度（审查§3.1：令牌不豁免其后发生的超额）。
-func Serve(w http.ResponseWriter, r *http.Request, key []byte,
+func Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, key []byte,
 	start func(projectID string) (io.ReadWriteCloser, error)) {
 	// 令牌只从Authorization头读取（2分钟短期令牌，可重连）；
 	// URL查询参数会进代理日志，禁止使用。
@@ -49,6 +50,7 @@ func Serve(w http.ResponseWriter, r *http.Request, key []byte,
 		return
 	}
 	defer conn.Close()
+	go func() { <-ctx.Done(); _ = conn.Close() }()
 	conn.SetReadLimit(maxMessageBytes)
 	conn.SetReadDeadline(time.Now().Add(pongWait))
 	conn.SetPongHandler(func(string) error {
