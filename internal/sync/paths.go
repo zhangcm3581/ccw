@@ -28,8 +28,21 @@ func SafeRelPath(p string) (string, error) {
 	return clean, nil
 }
 
-var excludedPrefixes = []string{".env", ".cclaude/", ".ssh/", ".aws/", ".claude/",
-	".config/gcloud/", ".azure/", ".kube/", ".npmrc", ".pypirc", ".netrc", ".git-credentials", ".git/", "node_modules/", ".DS_Store"}
+var excludedPrefixes = []string{
+	// 凭据与敏感配置
+	".env", ".cclaude/", ".ssh/", ".aws/", ".claude/", ".config/gcloud/",
+	".azure/", ".kube/", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
+	// 版本控制与系统垃圾
+	".git/", ".DS_Store",
+	// 依赖目录（可重新安装，不必同步）
+	"node_modules/", "vendor/",
+	// 通用构建产物
+	"target/", "build/", "dist/", "out/",
+	// Java / Gradle
+	".gradle/",
+	// Python 缓存与虚拟环境
+	"__pycache__/", ".venv/", "venv/", ".pytest_cache/", ".mypy_cache/", ".tox/",
+}
 
 func DefaultExcluded(p string) bool {
 	for _, pre := range excludedPrefixes {
