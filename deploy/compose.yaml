@@ -51,6 +51,8 @@ services:
     volumes:
       # 挂docker.sock以exec项目容器；本服务因此等同宿主机高权限，不对公网暴露。
       - /var/run/docker.sock:/var/run/docker.sock
+      - project-a-workspace:/srv/ccw/project-a
+      - project-b-workspace:/srv/ccw/project-b
     depends_on:
       postgres:
         condition: service_healthy

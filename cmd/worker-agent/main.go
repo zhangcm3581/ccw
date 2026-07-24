@@ -42,6 +42,13 @@ func (p *ptySession) Resize(rows, cols uint16) error {
 	return pty.Setsize(p.f, &pty.Winsize{Rows: rows, Cols: cols})
 }
 
+func projectSlug(ctx context.Context, st *store.Store, projectID string) string {
+	if p, err := st.GetProjectByID(ctx, projectID); err == nil && p.Slug != "" {
+		return p.Slug
+	}
+	return projectID
+}
+
 func main() {
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
@@ -90,7 +97,7 @@ func main() {
 	}
 	// 同步会话工厂：绑定 PG 存储、项目 workspace 目录、磁盘配额门、项目锁。
 	sessionFactory := func(projectID, device, mode string) *syncpkg.SyncSession {
-		root := filepath.Join(cfg.WorkspaceRoot, projectID)
+		root := filepath.Join(cfg.WorkspaceRoot, projectSlug(ctx, st, projectID))
 		os.MkdirAll(root, 0o755)
 		var limit int64 = 1 << 40
 		if p, err := st.GetProjectByID(ctx, projectID); err == nil && p.DiskLimit > 0 {
