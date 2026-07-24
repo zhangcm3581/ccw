@@ -2,6 +2,9 @@
 # 版本按deploy/versions.lock固定（审查§3.2）；升级前先用脱敏JSONL样例与tmux恢复测试验证。
 ARG UBUNTU_TAG=24.04
 FROM ubuntu:${UBUNTU_TAG}
+# UTF-8 locale：否则 Claude Code 的 Unicode 界面显示成占位符、且无法输入中文
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 ARG NODE_MAJOR=20
 ARG CLAUDE_CODE_VERSION
 RUN apt-get update \
