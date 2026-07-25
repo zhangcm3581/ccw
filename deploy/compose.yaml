@@ -88,6 +88,10 @@ services:
       # 共享授权：整个 /home/claude 由两个项目共用同一个卷，登录一次即全部可用。
       # 挂整个 home（而非仅 .claude）以同时持久化 .claude.json 与 .claude/.credentials.json。
       - claude-shared:/home/claude
+      # 会话 JSONL 按项目隔离：嵌套挂载只遮蔽 .claude/projects 一个子目录，
+      # 凭据文件 .claude/.credentials.json 是它的兄弟节点，仍在共享卷里——
+      # 因此账号全机仍只授权一次，而用量可以按项目归属（设计 §7.3，解 P0-2）。
+      - project-a-claude-projects:/home/claude/.claude/projects
       - project-a-sync:/var/lib/cclaude-sync
     networks: [ccw]
     restart: unless-stopped
@@ -99,6 +103,7 @@ services:
     volumes:
       - project-b-workspace:/workspace
       - claude-shared:/home/claude          # 同一个共享卷：与 project-a 共用登录凭据
+      - project-b-claude-projects:/home/claude/.claude/projects   # 见 project-a 处说明
       - project-b-sync:/var/lib/cclaude-sync
     networks: [ccw]
     restart: unless-stopped
@@ -109,8 +114,10 @@ volumes:
   caddy-config: {}
   claude-shared: {}          # 两个项目共享的 Claude HOME（授权一次、共用凭据）
   project-a-workspace: {}
+  project-a-claude-projects: {}   # 项目A的会话 JSONL（用量归属的数据源）
   project-a-sync: {}
   project-b-workspace: {}
+  project-b-claude-projects: {}   # 项目B的会话 JSONL
   project-b-sync: {}
 
 networks:

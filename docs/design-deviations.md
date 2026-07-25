@@ -6,26 +6,46 @@
 
 ---
 
-## D1. Claude HOME由"每项目独立卷"改为两个项目共享一个卷
+## D1. Claude HOME共享凭据 + 会话JSONL按项目独立卷
+
+**状态：已定方案**（2026-07-26），取代此前"二选一待决策"。设计依据：`docs/superpowers/specs/2026-07-25-ccw-console-fleet-design.md` §7.3。
 
 | | |
 |---|---|
 | **spec原文** | §6：每项目三个命名卷，`<slug>-claude`→`/home/claude/.claude`，项目间互相隔离 |
-| **实际代码** | `deploy/compose.yaml`：`claude-shared:/home/claude`同时挂给`project-a`与`project-b`；挂的是整个home而非仅`.claude`（为同时持久化`.claude.json`与`.claude/.credentials.json`） |
-| **引入时间** | `3caa271 fix(deploy): shared Claude auth volume with correct ownership` |
+| **实际代码** | `deploy/compose.yaml`：`claude-shared:/home/claude`同时挂给`project-a`与`project-b`（共享凭据）；**另有`<slug>-claude-projects`嵌套挂载到`/home/claude/.claude/projects`**（会话JSONL按项目隔离） |
+| **引入时间** | `3caa271 fix(deploy): shared Claude auth volume with correct ownership`（共享卷）；JSONL独立卷为2026-07-26追加 |
 
-**动机：**规避spec风险R2（双容器同账号OAuth凭据互踢）与"登录后反复要求登录"的现场故障。共享卷意味着管理员**只需登录一次**，两个项目共用同一份凭据。
+**产品硬约束：**Claude账号在一台VPS上**只授权一次**，客户数增加也不得增加授权次数。共享`/home/claude`是满足该约束的手段，不可回退为每项目独立HOME。
 
-**代价（尚未解决）：**
+**方案要点：**凭据与会话JSONL位于不同路径，因此可分别挂载：
 
-1. **按项目计量在原理上不成立。**两个项目的会话JSONL写进同一个Claude HOME，`internal/usage`即使接线也无法区分某条usage属于A还是B。5小时/7天的**项目级**闸门因此失去数据基础——这是spec §10承诺的核心能力之一。
-2. **Phase 1 Step 1（24小时双登录验证）被绕过而非通过。**spec把它列为引入第二项目并行前的上线闸门；共享凭据回避了这个问题，但"两个容器同时用同一份凭据跑"本身没有做过等价的稳定性验证。
-3. **隔离性下降。**A容器内的进程可读到共享HOME里的全部内容，包括B产生的会话记录。spec §1的"完全隔离的项目容器"在凭据维度上不再成立。
+```
+/home/claude/.claude.json                  配置        ← 共享卷
+/home/claude/.claude/.credentials.json     OAuth凭据    ← 共享卷
+/home/claude/.claude/projects/             会话JSONL    ← 每项目独立卷（嵌套挂载遮蔽）
+```
 
-**待决策（二选一，尚未定）：**
+`projects/`是`.credentials.json`的**兄弟目录**，嵌套挂载只遮蔽该子目录，凭据文件不受影响——**授权一次的性质完整保留**，同时按项目计量成立。
 
-- **回到独立卷**：恢复`<slug>-claude`每项目一份，完成24小时双登录验证；失败则按spec降级为分时使用。计量与隔离都恢复。
-- **保留共享卷**：必须为usage找到新的归属依据（例如按JSONL记录里的cwd/workspace路径切分，或改为每项目独立Claude HOME但共享凭据文件），并把这个决定与其代价正式写进spec §6与§10的"系统不保证"清单。
+**根因订正（重要）：**本条目原先记载共享卷的动机是"规避spec风险R2（双容器同账号OAuth凭据互踢）"。这与`deploy/Dockerfile.claude`的注释不符，后者写明当时故障的真实根因是：
+
+> 避免默认root:root导致claude无法写入`.credentials.json`（登录后`loggedIn=false`、**反复要求登录的根因**）
+
+即那次"反复要求登录"是**命名卷ownership问题**，与OAuth凭据轮换无关。两件事在`3caa271`里被同时处理，因而在本文档中被归并成同一个动机。**R2从未被观测到发生过**，也从未被验证过（见下）。保留此订正是为了避免后续读者把ownership问题当作凭据轮换的证据，从而高估调整卷布局的风险。
+
+**同一个ownership陷阱适用于新增卷：**`Dockerfile.claude`须预建`/home/claude/.claude/projects`并`chown claude:claude`，否则新命名卷以root:root初始化，JSONL写不进去。已于2026-07-26补上。
+
+**已解决：**
+
+- **P0-2（按项目计量在原理上不成立）**——JSONL已按项目分卷，归属由挂载关系保证，采集器可直接按卷读取，无需解析JSONL里的`cwd`。
+  **注意：**这只是解除了结构性障碍；`internal/usage`采集器**仍未接线**（P0-1），端到端计量尚未成立，不得记为完成。
+
+**仍未解决：**
+
+1. **Phase 1 Step 1（24小时双登录验证）仍未做。**"两个容器同时用同一份凭据长期运行"的稳定性没有等价验证。现有部署一直在此形态下运行，但从未做过24小时以上的观察。客户数上去后应补做。
+2. **隔离性残留。**共享HOME意味着客户间仍可互相读到`~/.claude/history.jsonl`（命令历史）、`shell-snapshots/`（含环境变量）、`sessions/`、`file-history/`、`todos/`。当前按"客户可信"接受（设计§7.5）。若要收紧，成本是为这几个路径各加一个嵌套卷。
+3. **spec §6文本未修订**，仍描述每项目独立`<slug>-claude`卷。以本条目为准。
 
 ---
 
