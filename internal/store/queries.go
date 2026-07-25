@@ -10,7 +10,8 @@ import (
 )
 
 // PGIndex实现storage.Index：file_index行写入与逻辑字节求和。
-// 真实数据库行为由Task 12的e2e验证（本机无PostgreSQL时仅编译）。
+// 真实数据库行为由tests/e2e验证（本机无PostgreSQL时仅编译）；
+// 该处断言目前仍是skip状态，见docs/STATUS.md的P1-3。
 type PGIndex struct{ Pool *pgxpool.Pool }
 
 func (x PGIndex) Upsert(ctx context.Context, projectID string, e syncpkg.FileEntry) error {

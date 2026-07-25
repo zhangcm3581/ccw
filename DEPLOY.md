@@ -2,9 +2,9 @@
 
 面向运营方管理员。本文档在一台全新Ubuntu 24.04VPS上，用Docker Compose一键起全部服务，创建项目与CDK，供客户端CLI登录并附着云端终端。
 
-> **当前范围说明**
-> 本编排提供：CDK认证、连接令牌、额度门户、**云端终端通道**（tmux会话保持、断线重连）。
-> **文件双向同步（`/v1/sync`）属于Task 12，尚未实现**，本次部署不含该功能。
+> **当前范围说明**（最后核对：2026-07-25）
+> 本编排提供：CDK认证、连接令牌、额度门户、**云端终端通道**（tmux会话保持、断线重连）、**文件双向同步**（`/ws/sync`，已接线可用）。
+> **不含**：用量采集（额度闸门因此不会真正触发）、文件系统硬配额、备份恢复。见第11节。
 > worker-agent挂载docker.sock，等同宿主机高权限，因此**只在内部网络运行、不对公网暴露**。
 
 > **重装用户看这里**：如果你之前部署过（尤其遇到"登录后反复要求登录"），先按 **第 0 节卸载**清掉旧的坏卷，再从第 3 节走一遍。授权模式已改为**共享授权、登录一次**（第 7 节）。
@@ -172,7 +172,7 @@ export CCW_API=https://你的域名.example.com/api
 
 状态栏形如 `[project-a] 5h:10/1000000 7d:60/10000000 disk:0/21474836480 mode:rw`。断网会自动重连；session过期会用内存中的CDK自动重新换取。
 
-> 文件同步（本地目录↔云端workspace）在本版本尚未启用，客户端目前仅提供终端通道。
+> 文件同步已启用：CLI 会把**当前目录**与云端 `/workspace` 双向同步（每2秒一轮）。首次运行前请确认 `cd` 到了正确的项目目录——同步以运行目录为根。凭据类文件（`.env*`、`.ssh/`、`.aws/`、`.claude/` 等）与 `.git/`、`node_modules/` 等目录默认排除，名单见 `internal/sync/paths.go`。本地基线索引存在目录下的 `.cclaude/index.json`，建议加进项目的 `.gitignore`。
 
 ## 9. 用服务器 IP 测试（无域名，纯 HTTP）
 
@@ -230,17 +230,32 @@ docker compose logs | grep -iE 'ccw_[0-9a-f]{16}\.|oauth|refresh_token|access_to
 docker compose exec postgres pg_dump -U ccw ccw | gzip > ccw-$(date +%Y%m%d).sql.gz
 ```
 
-VPS重启后 `docker compose up -d`（或依赖 `restart: unless-stopped` 自动拉起）。tmux内存会话会丢失，worker-agent重新准备会话时对已登录项目执行 `claude --continue` 恢复上下文（该行为的真实验证属Task 12）。
+VPS重启后 `docker compose up -d`（或依赖 `restart: unless-stopped` 自动拉起）。tmux内存会话会丢失，worker-agent重新准备会话时对已登录项目执行 `claude --continue` 恢复上下文（该行为尚未做过真实验证，见 `docs/STATUS.md`）。
 
-## 11. 尚未包含（Task 12/13，需在VPS上继续）
+## 11. 尚未包含（部署前请确认你能接受）
 
-- **文件双向同步**：`/v1/sync` WebSocket端点、客户端同步循环的真实传输、云端workspace watcher
-- **文件系统硬配额**：每项目固定大小loop文件系统（防Claude绕过同步接口写满宿主机）
-- **额度主动执行**：超额时关闭已连接终端输入
-- **完整备份/恢复演练**：加密异机备份与空服务器恢复
-- **反向代理路径合同与e2e自动化验收**
+本编排**已包含**：CDK认证与令牌、云端终端（tmux保持+断线重连）、文件双向同步（`/ws/sync`，含冲突副本与逻辑磁盘配额）、`/usage`门户。
 
-这些的设计与实施步骤见 `docs/superpowers/plans/2026-07-19-remote-claude-workspace-plan.md` 的Task 12、13。
+**尚未包含：**
+
+- **用量采集**：`internal/usage` 的JSONL采集器没有接进 worker-agent，`usage_events` 表始终为空。后果是 **5小时/7天额度闸门不会真正触发**——门户与CLI状态栏的用量恒显示0，超额也不会关闭终端。部署后请自行留意实际消耗。
+- **文件系统硬配额**：`deploy/quota-setup.sh` 已提供（每项目一个固定大小的 ext4 loop 文件系统），但**本编排默认不调用它**，直接用普通命名卷。若不手工执行该脚本，容器内的 Claude 可以绕过同步接口把宿主机磁盘写满。用法见第11.1节。
+- **cleanup模式的服务端降级**：超额时 control-api 会签发 cleanup 模式的同步令牌，但 worker-agent 目前不据此限制写入。
+- **完整备份/恢复演练**：无脚本、无演练记录。第10节只有数据库的 `pg_dump`，卷数据未覆盖。
+- **反向代理路径合同与e2e自动化验收**：`tests/e2e` 的断言全部是 skip 状态。
+
+完整缺口清单与建议推进顺序见 `docs/STATUS.md`；与设计spec的偏离见 `docs/design-deviations.md`。
+
+### 11.1 启用文件系统硬配额（可选但强烈建议）
+
+必须在 `docker compose up` **之前**执行，否则命名卷已按默认方式创建，需要先删卷：
+
+```bash
+sudo ./quota-setup.sh project-a 20     # 给 project-a 的 workspace 封顶 20GiB
+sudo ./quota-setup.sh project-b 20
+```
+
+脚本幂等：建 `/srv/ccw/quota/<slug>.img` → `mkfs.ext4` → 挂到 `/srv/ccw/workspaces/<slug>` → 写 `/etc/fstab` 保证重启自动挂回 → 用 `--opt device=` 把该目录注册成 `<slug>-workspace` 命名卷。之后 compose 复用这个卷，容器内写满只会撑爆自己那个 loop 文件系统，不影响另一个项目与宿主机系统盘。
 
 ## 12. 安全要点
 

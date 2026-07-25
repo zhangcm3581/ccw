@@ -41,8 +41,10 @@ type wsResp struct {
 type SessionFactory func(projectID, device, mode string) *SyncSession
 
 // ServeSync处理一条同步WebSocket连接。
-// 令牌从Authorization头读取（AudSync，禁URL参数）；协议见plan Task 12：
-// hello/manifest/put(+binary)/get(→file+binary)/delete。maxMessage限制单帧（含文件内容）大小。
+// 令牌从Authorization头读取（AudSync，禁URL参数）。
+// 帧协议：hello/manifest/put(+binary)/get(→file+binary)/delete；
+// 完整定义见docs/superpowers/plans/2026-07-19-remote-claude-workspace-plan.md的Task 12。
+// maxMessage限制单帧（含文件内容）大小。
 func ServeSync(w http.ResponseWriter, r *http.Request, key []byte, maxMessage int64,
 	modeFor func(projectID string) string, factory SessionFactory) {
 	raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")

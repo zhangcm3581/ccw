@@ -2,7 +2,8 @@
 //
 // 跨平台（Windows/macOS/Linux）：终端用golang.org/x/term做raw mode，
 // 窗口尺寸用GetSize轮询（避免依赖Unix专属的SIGWINCH），字节流转发。
-// 真实终端与同步的端到端验证在Task 12（需运行中的control-api与worker-agent）。
+// 真实终端与同步的端到端验证在tests/e2e（需运行中的control-api与worker-agent），
+// 目前仍是skip状态，见docs/STATUS.md。
 package main
 
 import (

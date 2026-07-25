@@ -33,8 +33,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 池额度是账号级配置（Task 12从account表读取）；默认极大＝暂不启用池保护，
-	// 由运维通过环境变量注入真实上游额度后才生效。
+	// 池额度目前只从环境变量读；默认极大＝暂不启用池保护，
+	// 由运维注入真实上游额度后才生效。改为从accounts表读取是待办，见docs/STATUS.md。
 	limitsFor := func(p project.Project) quota.Limits {
 		return quota.Limits{
 			FiveHour: p.FiveHourLimit, SevenDay: p.SevenDayLimit,

@@ -1,3 +1,9 @@
+// Package usage解析Claude Code会话JSONL，把token用量转成内部额度单位的事件。
+//
+// ⚠ 本包目前没有任何生产调用方：worker-agent没有起采集goroutine，
+// store里也没有usage_events的写入与usage_offsets的OffsetStore实现。
+// 因此usage_events恒为空、quota.Check恒判定未超额、额度闸门实际不触发。
+// 接线是待办的P0项，见docs/STATUS.md。
 package usage
 
 import (

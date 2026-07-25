@@ -14,7 +14,7 @@
 		reverse_proxy worker-agent:8081
 	}
 
-	# 同步WebSocket：重写到后端/v1/sync（端点在Task 12实现）
+	# 同步WebSocket：重写到后端/v1/sync
 	handle /ws/sync {
 		rewrite * /v1/sync
 		reverse_proxy worker-agent:8081

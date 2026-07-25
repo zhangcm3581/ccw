@@ -1,1 +1,14 @@
 remote-claude-workspace/
+
+# 部署密钥与本地配置
+deploy/.env
+.env
+
+# cclaude CLI 在被同步目录里生成的本地基线索引
+.cclaude/
+
+# 本地构建产物
+/cclaude
+/control-api
+/worker-agent
+/ccwadmin

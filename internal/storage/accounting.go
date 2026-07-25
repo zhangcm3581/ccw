@@ -15,7 +15,8 @@ type Index interface {
 	DiskUsed(ctx context.Context, projectID string) (int64, error)
 }
 
-// MemoryIndex：单元测试与本地使用；生产PGIndex（写file_index表、同事务SUM）在Task 12接入。
+// MemoryIndex：单元测试与本地使用。生产实现是store.PGIndex（写file_index表、同事务SUM），
+// 已由control-api与worker-agent注入。
 type MemoryIndex struct {
 	mu stdsync.Mutex
 	m  map[string]map[string]syncpkg.FileEntry

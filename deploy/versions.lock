@@ -1,0 +1,50 @@
+# deploy/versions.lock —— 版本固定清单（Design Spec §16 / 审查§3.2）
+#
+# 规则：正式实施步骤禁止 @latest 或未固定版本的安装。任何版本变动必须先改本文件，
+# 再改对应的 Dockerfile / compose.yaml / go.mod，两边保持一致。
+# 本文件是人工维护的清单，不被任何构建流程读取——改了别的地方就要回来改这里。
+#
+# 最后核对：2026-07-25（分支 v2，commit 4bbd4c0）
+
+## 语言与工具链
+go                          1.22.5        # go.mod 的 go 指令
+go-build-image              golang:1.22-bookworm
+
+## Go 模块（权威来源是 go.mod / go.sum，此处为可读副本）
+github.com/creack/pty       v1.1.24
+github.com/google/uuid      v1.6.0
+github.com/gorilla/websocket v1.5.3
+github.com/jackc/pgx/v5     v5.7.1
+golang.org/x/crypto         v0.31.0
+golang.org/x/term           v0.27.0
+# 间接依赖
+github.com/jackc/pgpassfile     v1.0.0
+github.com/jackc/pgservicefile  v0.0.0-20240606120523-5a60cdf6a761
+github.com/jackc/puddle/v2      v2.2.2
+golang.org/x/sync               v0.10.0
+golang.org/x/sys                v0.28.0
+golang.org/x/text               v0.21.0
+
+## 基础镜像
+postgres                    16            # deploy/compose.yaml
+caddy                       2.8           # deploy/compose.yaml
+ubuntu                      24.04         # deploy/Dockerfile.claude 的 ARG UBUNTU_TAG
+debian                      bookworm-slim # deploy/Dockerfile.worker-agent 运行层
+distroless                  gcr.io/distroless/static-debian12:nonroot   # deploy/Dockerfile.control-api 运行层
+
+## 容器内软件
+nodejs                      20            # deploy/Dockerfile.claude 的 ARG NODE_MAJOR（NodeSource setup_20.x）
+docker-cli                  debian bookworm 的 docker.io 包版本   # worker-agent 运行层，未单独固定
+tmux                        ubuntu 24.04 的 tmux 包版本            # 项目镜像，未单独固定
+@anthropic-ai/claude-code    未固定 ⚠                              # deploy/.env.example 的 CLAUDE_CODE_VERSION 默认为空＝装最新
+
+## 未固定项（已知欠账，见 docs/STATUS.md 的 P2）
+#
+# 1. 所有镜像按 tag 拉取，未按 digest 固定。tag 会被上游重新推送，
+#    严格复现需要改成 image@sha256:<digest> 的形式并在此记录 digest。
+# 2. CLAUDE_CODE_VERSION 默认为空即安装最新版，与"禁止 @latest"直接冲突。
+#    生产部署必须在 .env 里填具体版本号；升级前先用脱敏 JSONL 样例
+#    （internal/usage/testdata/session-sample.jsonl）跑解析兼容测试，
+#    再跑 tmux 断连恢复验证（Design Spec §16）。
+# 3. apt 安装的 tmux / git / docker.io / nodejs 具体包版本随基础镜像浮动，
+#    未做 apt pinning。

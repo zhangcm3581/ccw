@@ -113,7 +113,9 @@ func main() {
 			MaxBytes: 1 << 30, AllowQuota: gate.Allow, Lock: lockFor(projectID),
 		}
 	}
-	// 同步模式：TODO(12-4) 查项目额度决定 cleanup；当前默认 rw。
+	// 同步模式：应按项目额度/磁盘状态降级为 cleanup（只许下载、删除、缩小），
+	// 当前恒为 rw——control-api 已签发 cleanup 令牌但这里不据此限制写入。
+	// 未实施，影响验收21与27，见 docs/STATUS.md 的 P1-1。
 	modeFor := func(projectID string) string { return "rw" }
 
 	mux := http.NewServeMux()

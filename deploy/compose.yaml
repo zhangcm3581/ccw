@@ -4,7 +4,8 @@
 # 仅在内部ccw网络内被Caddy访问（等效于"只监听内网"）。
 # 项目容器project-a/project-b以sleep infinity运行，等待管理员登录与worker-agent附着。
 #
-# 未启用：文件同步端点/v1/sync（Task 12）；本编排提供认证、连接、门户与终端通道。
+# 提供：认证、连接、门户、终端通道、文件双向同步（/v1/sync）。
+# 未启用：用量采集（额度闸门因此不触发）、文件系统硬配额（见 quota-setup.sh）。详见 DEPLOY.md 第11节。
 
 services:
   postgres:

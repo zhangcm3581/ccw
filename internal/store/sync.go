@@ -10,7 +10,8 @@ import (
 )
 
 // *Store 实现 sync.RevisionStore：基于 file_index 表的权威同步状态。
-// 真实数据库行为由 Task 12 的 e2e 验证（本机无 PostgreSQL 时仅编译）。
+// 真实数据库行为由 tests/e2e 验证（本机无 PostgreSQL 时仅编译）；
+// 该处断言目前仍是 skip 状态，见 docs/STATUS.md 的 P1-3。
 
 func (s *Store) Current(ctx context.Context, projectID, path string) (int64, int64, bool, error) {
 	var rev, size int64

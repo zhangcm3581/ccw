@@ -31,8 +31,9 @@ func NewDirStore(root string) *DirStore { return &DirStore{root: root} }
 //
 // 安全边界（审查§2.5）：本函数的EvalSymlinks实现存在检查与写入之间的
 // TOCTOU窗口，只适合本机/非Linux测试。Linux生产构建前必须替换为openat2
-// （RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS）逐级打开父目录fd的版本——见Task 12
-// 集成阶段的硬化步骤。当前版本能正确拒绝非竞态的符号链接逃逸。
+// （RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS）逐级打开父目录fd的版本。
+// 当前版本能正确拒绝非竞态的符号链接逃逸。
+// 这是已知欠账，不是设计变更：见docs/design-deviations.md的D4与docs/STATUS.md的P1-2。
 func (d *DirStore) resolve(rel string) (string, error) {
 	rel, err := SafeRelPath(rel)
 	if err != nil {
