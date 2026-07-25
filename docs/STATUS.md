@@ -1,6 +1,6 @@
 # 实施状态与缺口清单
 
-**最后核对：**2026-07-25（对照分支`v2`，commit `4bbd4c0`）
+**最后核对：**2026-07-26（对照分支`v2`，工作树含未提交的P0-2改动）
 **核对方式：**通读`cmd/`与`internal/`全部Go源码 + `deploy/`编排 + 跑`go build ./...`与`go test ./...`
 
 > 实施计划`docs/superpowers/plans/2026-07-19-remote-claude-workspace-plan.md`里的71个checkbox**一个都没勾**，不反映真实进度。本文件是进度的唯一可信来源；改动代码后请同步更新。
@@ -26,7 +26,7 @@ Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`�
 | 10 | control-api | 完成（exchange限速、cleanup模式令牌、`/usage`门户） |
 | 11 | 本地CLI | 完成（三平台编译；超额不退出、令牌走header、CDK缓存0600） |
 | 12 | 同步接线、e2e、部署 | **部分**：compose/Caddy/同步端点已接线并可跑；e2e十条断言全是`t.Skip`；反代路径合同无自动化测试；备份恢复完全没做 |
-| 13 | 文件系统硬配额 | **部分**：`deploy/quota-setup.sh`写好了，但没有任何文档或流程调用它，compose直接建普通命名卷 |
+| 13 | 文件系统硬配额 | **部分且不可用**：`deploy/quota-setup.sh`写好了但无流程调用；更关键的是它创建的卷名与compose的**不兼容**，即使调用了也不生效——见下方P1-5 |
 
 ## 缺口清单
 
@@ -42,9 +42,15 @@ Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`�
 
 **影响验收：**12（采集无重复无遗漏）、16（半行补全）、17（同requestId语义）、20（超额关闭已连终端）。
 
-### P0-2 共享Claude HOME使按项目计量在原理上不成立
+### ~~P0-2 共享Claude HOME使按项目计量在原理上不成立~~（2026-07-26已解除结构性障碍）
 
-`deploy/compose.yaml`把`claude-shared:/home/claude`同时挂给`project-a`与`project-b`。两个项目的会话JSONL因此写在同一个卷里，即使把P0-1接上，也无法把usage归属到A还是B。详见`design-deviations.md`。
+原问题：`deploy/compose.yaml`把`claude-shared:/home/claude`同时挂给两个项目，会话JSONL混在同一个卷里，无法把usage归属到A还是B。
+
+**已改：**新增`<slug>-claude-projects`嵌套挂载到`/home/claude/.claude/projects`，JSONL按项目分卷；凭据文件`.claude/.credentials.json`是`projects/`的兄弟节点，仍在共享卷里，**账号只授权一次的性质不变**。`Dockerfile.claude`同步预建该目录并chown，避免命名卷以root初始化。详见`design-deviations.md`的D1与设计文档§7.3。
+
+**未验证：**改动只做了`docker compose config`语法校验，**没有在真实部署上跑过**——JSONL是否确实落进新卷、容器重建后ownership是否保持，都还没有实测证据。
+
+**仍不成立的部分：**端到端的按项目计量依赖P0-1（采集器接线），后者未做，所以`usage_events`仍为空。P0-2解除的只是结构性障碍，不是计量能力本身。
 
 ### P1-1 cleanup模式服务端未实施
 
@@ -59,6 +65,23 @@ Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`�
 ### P1-3 e2e全部skip
 
 `tests/e2e/two_projects_test.go`的十个子测试（bootstrap、CDK隔离、双向同步、冲突副本、逻辑配额、硬配额隔离、终端重连、超额关终端、秘密泄漏）全是`t.Skip`。**没有任何一条真实VPS验收跑过。**（用skip而不是空断言是对的，避免把"没验证"报成"通过"。）
+
+### P1-5 硬配额脚本与compose卷名不兼容，执行了也不生效（2026-07-26新发现）
+
+`deploy/quota-setup.sh`最后创建的是bind到loop挂载点的卷，卷名为`<slug>-workspace`：
+
+```bash
+docker volume create --driver local --opt type=none --opt o=bind \
+  --opt device="/srv/ccw/workspaces/${SLUG}" "${SLUG}-workspace"
+```
+
+但compose创建的卷带项目前缀——`docker compose config`实测输出为`deploy_project-a-workspace`。**两者不是同一个卷。**因此即使执行了该脚本，容器用的仍是不受配额约束的普通命名卷，且**没有任何报错**。
+
+**后果：**Task 13标称"部分完成"实际是"不可用"；多客户共用一台机器时，单个客户写满磁盘会拖垮同机所有人。
+
+**修复方向：**compose用`external: true` + 显式`name:`对齐脚本，或改为直接bind mount宿主机目录。方案对比见`docs/superpowers/plans/2026-07-26-compose-render-plan.md`§4。
+
+**证据强度：**静态代码审查 + `docker compose config`本机输出；**未在真实部署上复现**，实施前应先`docker volume ls`比对确认。
 
 ### P1-4 Phase 1证据缺两份
 
@@ -75,7 +98,9 @@ Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`�
 
 ### P3 工具与管理面
 
-- `ccwadmin`只有`init-project`：没有CDK轮换/禁用、删除项目、查用量、清理tombstone等命令
+- `ccwadmin`只有`init-project`：没有CDK轮换/禁用、删除项目、查用量、清理tombstone等命令。
+  **补充（2026-07-26核实）：CDK轮换的读路径已完备，只缺写入端。**`cdks`表有`disabled_at`/`expires_at`，`internal/store/postgres.go:92`的`ResolveCDK`已校验二者并用数据库`now()`，客户端认证失败时也已会清缓存（`cmd/cclaude/main.go:44`）。缺的只是**写`disabled_at`的代码**——全仓对该列仅有那一处读引用。实现量为`store`加一个方法 + CLI子命令，设计见console-fleet-design §11.1.1
+- **单节点上限未强制**：产品规则定为最多3个项目容器、单项目磁盘配额上限与默认值均为15 GiB（节点规格80 GB盘），但`ccwadmin init-project`既不限项目数也不限`disk_gib`，且`cmd/ccwadmin/main.go:27`的默认值仍是旧的20 GiB。设计见console-fleet-design §7.6
 - 门户只有`/usage`单页，认证复用CDK session token，没有独立管理员登录（spec §11决定是localhost+SSH隧道，Caddy已按此对公网404，与设计一致）
 - CLI同步循环每2秒重新Dial一次WebSocket，无本地fsnotify去抖
 
