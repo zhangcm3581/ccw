@@ -1,0 +1,369 @@
+package console
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	stdsync "sync"
+	"time"
+
+	"ccw/internal/consolestore"
+	"ccw/internal/deploy"
+	"ccw/internal/dns"
+	"ccw/internal/provision"
+)
+
+// 机队管理页（console-fleet-design §4.1、§5.1、C15）。
+// 只有Fleet被注入时才注册这些路由——与Auth同款约束：能力不齐就不上页面。
+
+// FleetStore是机队页需要的存储能力面。
+type FleetStore interface {
+	ListNodes(ctx context.Context) ([]consolestore.Node, error)
+	GetNode(ctx context.Context, id string) (consolestore.Node, error)
+	CreateNode(ctx context.Context, name, host string, port int, user string) (string, error)
+	DomainByNode(ctx context.Context, nodeID string) (consolestore.NodeDomain, error)
+	NodeCredential(ctx context.Context, nodeID string) ([]byte, []byte, string, error)
+	ListZones(ctx context.Context) ([]dns.Zone, error)
+	CreateZone(ctx context.Context, domain, provider, prefix string) (string, error)
+	ListRuns(ctx context.Context, nodeID string, limit int) ([]consolestore.RunSummary, error)
+	GetRun(ctx context.Context, runID string) (consolestore.RunSummary, error)
+}
+
+// Fleet持有机队页的依赖。
+type Fleet struct {
+	Store        FleetStore
+	Orchestrator *provision.Orchestrator
+	Logs         *LogHub
+	// LastInput记住每个节点最近一次纳管的输入，供「继续部署」复用
+	// （不含密码——续跑时已有托管密钥，不需要密码）。
+	lastInput map[string]provision.BootstrapInput
+	mu        stdsync.Mutex
+}
+
+func (s *Server) registerFleet(mux *http.ServeMux) {
+	mux.HandleFunc("GET /admin/nodes", s.Auth.requireAdmin(s.adminNodes))
+	mux.HandleFunc("GET /admin/nodes/new", s.Auth.requireAdmin(s.adminNodeNew))
+	mux.HandleFunc("POST /admin/nodes/new", s.Auth.requireAdmin(s.adminNodeCreate))
+	mux.HandleFunc("GET /admin/nodes/{id}", s.Auth.requireAdmin(s.adminNodeDetail))
+	mux.HandleFunc("POST /admin/nodes/{id}/resume", s.Auth.requireAdmin(s.adminNodeResume))
+	mux.HandleFunc("GET /admin/nodes/{id}/runs/{run}", s.Auth.requireAdmin(s.adminRunDetail))
+	mux.HandleFunc("GET /admin/nodes/{id}/runs/{run}/stream", s.Auth.requireAdmin(s.adminRunStream))
+}
+
+type nodeRow struct {
+	Node        consolestore.Node
+	FQDN        string
+	StatusText  string
+	StatusClass string
+	LastSeen    string
+}
+
+// statusText把内部状态翻成中文并给出配色类。
+func statusText(s string) (string, string) {
+	switch s {
+	case "new":
+		return "待部署", "muted"
+	case "provisioning":
+		return "部署中", ""
+	case "ready":
+		return "就绪", "ok"
+	case "degraded":
+		return "异常", "warn"
+	case "unreachable":
+		return "失联", "warn"
+	case "host_key_changed":
+		return "host key已变更（需确认）", "warn"
+	}
+	return s, "muted"
+}
+
+func humanTime(t *time.Time) string {
+	if t == nil {
+		return "—"
+	}
+	return t.Local().Format("2006-01-02 15:04")
+}
+
+func (s *Server) nodeRow(ctx context.Context, n consolestore.Node) nodeRow {
+	text, class := statusText(n.Status)
+	r := nodeRow{Node: n, StatusText: text, StatusClass: class, LastSeen: humanTime(n.LastSeenAt)}
+	if d, err := s.Fleet.Store.DomainByNode(ctx, n.ID); err == nil {
+		r.FQDN = d.FQDN
+	}
+	return r
+}
+
+func (s *Server) adminNodes(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	nodes, err := s.Fleet.Store.ListNodes(r.Context())
+	if err != nil {
+		s.Logf("console: 列节点失败: %v", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	zones, _ := s.Fleet.Store.ListZones(r.Context())
+	rows := make([]nodeRow, 0, len(nodes))
+	for _, n := range nodes {
+		rows = append(rows, s.nodeRow(r.Context(), n))
+	}
+	s.render(w, "admin_nodes.html", map[string]any{
+		"Nodes": rows, "Zones": zones, "CSRF": s.Auth.issueCSRF(w),
+	})
+}
+
+func (s *Server) adminNodeNew(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	zones, _ := s.Fleet.Store.ListZones(r.Context())
+	s.render(w, "admin_node_new.html", map[string]any{"Zones": zones, "CSRF": s.Auth.issueCSRF(w)})
+}
+
+func (s *Server) adminNodeCreate(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	ctx := r.Context()
+	renderErr := func(msg string) {
+		zones, _ := s.Fleet.Store.ListZones(ctx)
+		w.WriteHeader(http.StatusBadRequest)
+		s.render(w, "admin_node_new.html", map[string]any{
+			"Zones": zones, "CSRF": s.Auth.issueCSRF(w), "Error": msg,
+		})
+	}
+
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	host := strings.TrimSpace(r.PostFormValue("host"))
+	user := strings.TrimSpace(r.PostFormValue("ssh_user"))
+	password := r.PostFormValue("password")
+	// 密码用完即弃：不写进任何结构体字段、不落库、不进日志（§8.4）。
+	defer provision.ZeroString(&password)
+
+	port := 22
+	if v := strings.TrimSpace(r.PostFormValue("ssh_port")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 65535 {
+			renderErr("SSH端口不合法")
+			return
+		}
+		port = n
+	}
+	if name == "" || host == "" || user == "" || password == "" {
+		renderErr("节点名称、IP、用户名与密码都必填")
+		return
+	}
+
+	// slug校验与ccwadmin/渲染器共用同一条规则，避免建完节点才在节点侧被拒。
+	var slugs []string
+	for _, sl := range strings.Split(r.PostFormValue("slugs"), ",") {
+		if sl = strings.TrimSpace(sl); sl != "" {
+			slugs = append(slugs, sl)
+		}
+	}
+	if err := deploy.ValidateSlugs(slugs); err != nil {
+		renderErr(err.Error())
+		return
+	}
+
+	zoneID := r.PostFormValue("zone_id")
+	if nz := strings.TrimSpace(r.PostFormValue("new_zone_domain")); nz != "" {
+		id, err := s.Fleet.Store.CreateZone(ctx, nz, "manual", "api")
+		if err != nil {
+			renderErr("创建zone失败：" + err.Error())
+			return
+		}
+		zoneID = id
+	}
+	if zoneID == "" {
+		renderErr("请选择或创建一个zone")
+		return
+	}
+
+	nodeID, err := s.Fleet.Store.CreateNode(ctx, name, host, port, user)
+	if err != nil {
+		renderErr("创建节点失败：" + err.Error())
+		return
+	}
+	if aerr := s.Auth.audit(ctx, consolestore.AuditEntry{
+		Actor: sess.UserID, Action: "node.bootstrap", Target: name, Result: "ok",
+		Detail: map[string]any{"host": host, "slugs": slugs}, ClientIP: clientIP(r),
+	}); aerr != nil {
+		s.Logf("console: 审计写入失败，纳管中止: %v", aerr)
+		renderErr("服务暂时不可用，请稍后再试")
+		return
+	}
+
+	in := provision.BootstrapInput{
+		NodeID: nodeID, ZoneID: zoneID, Password: password,
+		Slugs: slugs, TriggeredBy: sess.UserID,
+	}
+	runID, err := s.Fleet.Orchestrator.Bootstrap(ctx, in)
+	if err != nil {
+		renderErr("启动部署失败：" + err.Error())
+		return
+	}
+	// 记住输入供「继续部署」复用；**不含密码**（续跑用托管密钥）。
+	s.Fleet.remember(nodeID, provision.BootstrapInput{
+		NodeID: nodeID, ZoneID: zoneID, Slugs: slugs, TriggeredBy: sess.UserID,
+	})
+	http.Redirect(w, r, fmt.Sprintf("/admin/nodes/%s/runs/%s", nodeID, runID), http.StatusFound)
+}
+
+func (f *Fleet) remember(nodeID string, in provision.BootstrapInput) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lastInput == nil {
+		f.lastInput = map[string]provision.BootstrapInput{}
+	}
+	f.lastInput[nodeID] = in
+}
+
+func (f *Fleet) recall(nodeID string) (provision.BootstrapInput, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	in, ok := f.lastInput[nodeID]
+	return in, ok
+}
+
+func (s *Server) adminNodeDetail(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	ctx := r.Context()
+	node, err := s.Fleet.Store.GetNode(ctx, r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	row := s.nodeRow(ctx, node)
+	runs, _ := s.Fleet.Store.ListRuns(ctx, node.ID, 20)
+	type runRow struct{ ID, Kind, Status, Started string }
+	var rrs []runRow
+	for _, run := range runs {
+		rrs = append(rrs, runRow{run.ID, run.Kind, run.Status, run.StartedAt.Local().Format("2006-01-02 15:04")})
+	}
+	_, _, _, cerr := s.Fleet.Store.NodeCredential(ctx, node.ID)
+	d, derr := s.Fleet.Store.DomainByNode(ctx, node.ID)
+
+	data := map[string]any{
+		"Node": node, "StatusText": row.StatusText, "StatusClass": row.StatusClass,
+		"FQDN": row.FQDN, "LastSeen": row.LastSeen, "Runs": rrs,
+		"HasCredential": cerr == nil,
+		"CanResume":     node.Status != "provisioning",
+		"CSRF":          s.Auth.issueCSRF(w),
+	}
+	if derr == nil && d.RecordState == "pending" {
+		data["DomainPending"] = true
+		data["DNSInstruction"] = dns.Instructions(d.FQDN, d.TargetIP)
+	}
+	s.render(w, "admin_node.html", data)
+}
+
+// adminNodeResume从上次失败处继续部署（A9）。
+// 续跑不需要密码——托管密钥已经在库里；若凭据交接那一步就失败了，
+// 则需要重新走「新增节点」（会再要一次密码）。
+func (s *Server) adminNodeResume(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	nodeID := r.PathValue("id")
+	in, ok := s.Fleet.recall(nodeID)
+	if !ok {
+		// Console重启后内存里的输入没了：从最近一次运行恢复不了slug列表，
+		// 如实告诉管理员而不是用猜的参数去跑。
+		http.Error(w, "本次Console启动后没有该节点的部署参数，请重新走「新增节点」流程", http.StatusBadRequest)
+		return
+	}
+	if _, _, _, err := s.Fleet.Store.NodeCredential(r.Context(), nodeID); err != nil {
+		http.Error(w, "该节点尚未建立托管密钥，请重新走「新增节点」流程（需要再次输入密码）", http.StatusBadRequest)
+		return
+	}
+	if aerr := s.Auth.audit(r.Context(), consolestore.AuditEntry{
+		Actor: sess.UserID, Action: "node.resume", Target: nodeID, Result: "ok", ClientIP: clientIP(r),
+	}); aerr != nil {
+		s.Logf("console: 审计写入失败: %v", aerr)
+		http.Error(w, "服务暂时不可用", http.StatusInternalServerError)
+		return
+	}
+	in.TriggeredBy = sess.UserID
+	runID, err := s.Fleet.Orchestrator.Bootstrap(r.Context(), in)
+	if err != nil {
+		http.Error(w, "启动失败："+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, fmt.Sprintf("/admin/nodes/%s/runs/%s", nodeID, runID), http.StatusFound)
+}
+
+func (s *Server) adminRunDetail(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	run, err := s.Fleet.Store.GetRun(r.Context(), r.PathValue("run"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	node, err := s.Fleet.Store.GetNode(r.Context(), r.PathValue("id"))
+	if err != nil || run.NodeID != node.ID {
+		http.NotFound(w, r) // 防止用别的节点ID拼URL看到不属于它的运行
+		return
+	}
+	history, ch, cancel := s.Fleet.Logs.Subscribe(run.ID)
+	cancel() // 只取历史，不订阅
+	_ = ch
+	s.render(w, "admin_run.html", map[string]any{
+		"Run": run, "NodeID": node.ID, "NodeName": node.Name, "History": history,
+	})
+}
+
+// adminRunStream是SSE端点（§5.4）：把流水线日志实时推给浏览器。
+func (s *Server) adminRunStream(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	runID := r.PathValue("run")
+	run, err := s.Fleet.Store.GetRun(r.Context(), runID)
+	if err != nil || run.NodeID != r.PathValue("id") {
+		http.NotFound(w, r)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // 防止反代缓冲整条流
+
+	history, ch, cancel := s.Fleet.Logs.Subscribe(runID)
+	defer cancel()
+	for _, line := range history {
+		writeSSE(w, "message", line)
+	}
+	flusher.Flush()
+	if s.Fleet.Logs.IsDone(runID) {
+		writeSSE(w, "done", "")
+		flusher.Flush()
+		return
+	}
+
+	// 心跳：反代与浏览器都会掐断长时间无数据的连接。
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case line, open := <-ch:
+			if !open {
+				return
+			}
+			if line == doneMarker {
+				writeSSE(w, "done", "")
+				flusher.Flush()
+				return
+			}
+			writeSSE(w, "message", line)
+			flusher.Flush()
+		case <-ticker.C:
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+// writeSSE按SSE格式输出。多行内容要逐行加data:前缀，否则浏览器只收到第一行。
+func writeSSE(w http.ResponseWriter, event, data string) {
+	if event != "message" {
+		fmt.Fprintf(w, "event: %s\n", event)
+	}
+	for _, line := range strings.Split(data, "\n") {
+		fmt.Fprintf(w, "data: %s\n", line)
+	}
+	fmt.Fprint(w, "\n")
+}

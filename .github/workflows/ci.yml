@@ -38,6 +38,18 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: nodefiles与deploy/一致
+        # cmd/ccw-console/nodefiles/是deploy/下同名文件的副本（go:embed不能引用包外路径）。
+        # 不一致会让Console部署出的节点与手动部署的节点行为不同，且极难发现。
+        run: |
+          for f in Caddyfile Dockerfile.claude Dockerfile.control-api Dockerfile.worker-agent; do
+            if ! diff -q "deploy/$f" "cmd/ccw-console/nodefiles/$f" > /dev/null; then
+              echo "deploy/$f 与 cmd/ccw-console/nodefiles/$f 不一致——跑 scripts/sync-nodefiles.sh"
+              exit 1
+            fi
+          done
+          echo "nodefiles一致"
+
       - name: build
         run: go build ./...
 

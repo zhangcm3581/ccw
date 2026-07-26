@@ -1,0 +1,16 @@
+# worker-agent：需要docker CLI以exec项目容器（附着tmux终端）。
+# 注意：挂载docker.sock使本服务等同宿主机高权限，不对公网暴露（仅内部网络）。
+FROM golang:1.22-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/worker-agent ./cmd/worker-agent
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends docker.io ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/worker-agent /usr/local/bin/worker-agent
+EXPOSE 8081
+ENTRYPOINT ["worker-agent"]

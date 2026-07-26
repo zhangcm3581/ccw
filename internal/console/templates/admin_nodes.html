@@ -1,0 +1,45 @@
+{{define "title"}}机队 · ccw{{end}}
+{{define "content"}}
+<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+  <h1 style="font-size:24px;margin:0">机队</h1>
+  <a class="btn" href="/admin/nodes/new">新增节点</a>
+</div>
+
+{{if not .Nodes}}
+<div class="notice">还没有纳管任何节点。点「新增节点」填写服务器信息即可开始部署。</div>
+{{else}}
+<div class="scroll" style="margin-top:20px">
+<table>
+  <tr><th>节点</th><th>状态</th><th>地址</th><th>域名</th><th>系统</th><th>最近连通</th></tr>
+  {{range .Nodes}}
+  <tr>
+    <td><a href="/admin/nodes/{{.Node.ID}}">{{.Node.Name}}</a></td>
+    <td><span class="{{.StatusClass}}">{{.StatusText}}</span></td>
+    <td>{{.Node.SSHUser}}@{{.Node.Host}}:{{.Node.SSHPort}}</td>
+    <td>{{if .FQDN}}<code>{{.FQDN}}</code>{{else}}<span class="muted">未分配</span>{{end}}</td>
+    <td>{{if .Node.OSRelease}}{{.Node.OSRelease}}{{else}}<span class="muted">—</span>{{end}}</td>
+    <td>{{.LastSeen}}</td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{end}}
+
+<h2>域名（zone）</h2>
+{{if not .Zones}}
+<div class="notice">还没有配置 zone。新增节点时可以直接创建第一个。</div>
+{{else}}
+<div class="scroll">
+<table>
+  <tr><th>域名</th><th>模式</th><th>子域名前缀</th></tr>
+  {{range .Zones}}
+  <tr><td><code>{{.Domain}}</code></td><td>{{.Provider}}</td><td>{{.SubdomainPrefix}}-NN</td></tr>
+  {{end}}
+</table>
+</div>
+{{end}}
+
+<p style="margin-top:28px">
+  <a href="/admin">返回总览</a>
+</p>
+{{end}}

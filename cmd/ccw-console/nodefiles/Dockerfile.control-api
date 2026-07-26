@@ -1,0 +1,14 @@
+# control-api与ccwadmin：静态Go二进制，distroless运行。
+FROM golang:1.22-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/control-api ./cmd/control-api \
+ && CGO_ENABLED=0 go build -o /out/ccwadmin ./cmd/ccwadmin
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/control-api /control-api
+COPY --from=build /out/ccwadmin /ccwadmin
+EXPOSE 8080
+ENTRYPOINT ["/control-api"]

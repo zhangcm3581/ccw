@@ -26,6 +26,9 @@ type ConsoleConfig struct {
 	AdminAllowlist string
 	// AdminInsecureCookie=true时会话cookie不带Secure属性，仅供本地HTTP调试。
 	AdminInsecureCookie bool
+	// LogDir存放流水线运行日志（每run一个文件，0600）。空值＝只在内存里保留，
+	// Console重启后历史日志丢失。
+	LogDir string
 }
 
 // LoadConsole沿用「缺失即硬失败、无默认值」（CLAUDE.md）；
@@ -41,6 +44,7 @@ func LoadConsole(getenv func(string) string) (ConsoleConfig, error) {
 		ListenAddr:          or(getenv("CCW_CONSOLE_LISTEN_ADDR"), "127.0.0.1:8090"),
 		AdminAllowlist:      getenv("CCW_ADMIN_ALLOWLIST"),
 		AdminInsecureCookie: getenv("CCW_ADMIN_INSECURE_COOKIE") == "1",
+		LogDir:              or(getenv("CCW_LOG_DIR"), "/var/lib/ccw-console/logs"),
 	}
 	if c.DatabaseURL == "" {
 		return ConsoleConfig{}, fmt.Errorf("config: CCW_CONSOLE_DATABASE_URL is required; no default is provided")

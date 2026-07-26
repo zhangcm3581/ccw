@@ -43,6 +43,8 @@ type Server struct {
 
 	// Auth为nil时**不注册任何/admin路由**：没有认证就不上管理页面。
 	Auth *Auth
+	// Fleet为nil时不注册机队管理页（需要SSH执行层与信封加密齐备才有意义）。
+	Fleet *Fleet
 
 	rlMu     stdsync.Mutex
 	attempts map[string][]time.Time
@@ -57,7 +59,8 @@ func New(store SiteStore, distDir string, logf func(string, ...any)) *Server {
 	s := &Server{Store: store, DistDir: distDir, Logf: logf,
 		attempts: map[string][]time.Time{}, tmpl: map[string]*template.Template{}}
 	for _, page := range []string{"home.html", "download.html", "quickstart.html", "connect.html",
-		"admin_login.html", "admin_home.html"} {
+		"admin_login.html", "admin_home.html", "admin_nodes.html", "admin_node_new.html",
+		"admin_node.html", "admin_run.html"} {
 		s.tmpl[page] = template.Must(template.ParseFS(tmplFS, "templates/layout.html", "templates/"+page))
 	}
 	return s
@@ -78,6 +81,9 @@ func (s *Server) Handler() http.Handler {
 	})
 	if s.Auth != nil {
 		s.registerAdmin(mux)
+		if s.Fleet != nil {
+			s.registerFleet(mux)
+		}
 	}
 	return mux
 }

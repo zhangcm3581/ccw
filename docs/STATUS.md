@@ -103,7 +103,17 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
 - **C3管理员认证**：Argon2id密码 + TOTP（`internal/totp`自实现，RFC 6238官方向量验证）+ 服务端会话表（撤销立即生效、12h绝对/30min空闲超时、禁用用户即时失效）+ 每IP与每用户名双维限速 + 应用层独立IP白名单（白名单外404）+ double-submit CSRF + 审计（写入失败则动作失败）。统一错误经"三种失败响应逐字节相同"的测试守卫（A4）。`ccw-console create-admin`生成账号与两步验证密钥（密码不做命令行参数，有源码级守卫）
 - **端到端冒烟（本机真实PG）**：create-admin→登录页→错密码401→正确登录302→带会话访问总览→白名单外404，全部实测通过
 
-**未实施**：C4（SSH引擎）、C6（凭据生命周期）、C7（流水线）、C8–C11（DNS/证书预算/bootstrap）、C15–C17/C19（节点与CDK管理UI、巡检）、C22（真实VPS纳管验收）与C21剩余（备份恢复演练）。后台目前只有登录与总览骨架页。`cdk_issues`等表尚无写入方（等C17/巡检），`/connect`当前查库必为空，需Console侧数据接入后才有实际产出。
+- **C4 SSH执行层**：TOFU host key（不符即中止，A25）、流式输出、**在最靠近数据源处脱敏**、超时与1 MiB截断。内存SSH server做单测；AST守卫禁止`InsecureIgnoreHostKey`
+- **C7 流水线引擎**：precheck跳过、失败即停（后续保持pending）、断点续跑、记账失败即中止、步骤panic隔离。11条引擎单测 + 接真实PG跑"失败→续跑→成功"（A9在真实库上成立）
+- **C6 凭据生命周期**：ed25519生成→注入authorized_keys（追加不覆盖、幂等）→**用新私钥重新拨号验证**→才加密落库；密码只活在调用栈里，不落库不进日志（有测试守卫）
+- **C8 DNS**：Provider接口 + manual实现（双解析器交叉校验）+ 子域名分配器（序号单调递增、永不回收、保留名单）+ CAA预检（用x/net的dnsmessage自实现，标准库无CAA支持）
+- **C11 bootstrap 11步**：probe（发行版白名单、磁盘核算）→harden→install-docker→dns-allocate→push-artifacts（sha256 precheck）→render-env（**密钥节点本地生成**）→compose-up→cert-wait→healthcheck→init-projects→disk-guard。硬顺序dns-allocate在compose-up之前有测试守卫；**CDK明文只经回调一次、绝不进日志**（有测试守卫）
+- **C15 后台UI**：机队总览、新增节点向导、节点详情（含待添加的DNS记录提示）、运行详情与**SSE实时日志**；跨节点访问运行会404；日志落盘+推流前再脱敏一次；慢订阅者丢行不阻塞流水线
+- **本机端到端冒烟**：向导提交→纳管goroutine启动→日志落盘→节点入库→超上限当场拒绝，全部实测
+
+**未实施**：C9（Route 53自动化）、C10（证书预算记账）、C16（域名管理UI）、C17（后台CDK签发/轮换、超卖水位）、C19（审计页与节点巡检）、C22（真实VPS纳管验收）、C21剩余（备份恢复演练）、解除纳管流水线。
+
+**未验证（诚实表述）**：**纳管全流程从未在真实VPS上跑过**——A7（全新Ubuntu走完bootstrap）、A8（浏览器实时日志）、A9（断点续跑）、A25（host key变更中止）都只有单测与本机冒烟证据。`node_projects`/`cdk_issues`仍无写入方，`/connect`因此仍查不到数据。「继续部署」的参数存在Console内存里，重启后失效。
 
 ### P3 工具与管理面
 

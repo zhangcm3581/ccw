@@ -1,0 +1,57 @@
+{{define "title"}}{{.Node.Name}} · ccw{{end}}
+{{define "content"}}
+<h1 style="font-size:24px">{{.Node.Name}}</h1>
+<p class="lead">
+  <span class="{{.StatusClass}}">{{.StatusText}}</span> ·
+  {{.Node.SSHUser}}@{{.Node.Host}}:{{.Node.SSHPort}}
+  {{if .FQDN}} · <code>{{.FQDN}}</code>{{end}}
+</p>
+
+<div class="grid">
+  <div class="card"><h3>系统</h3><p>{{if .Node.OSRelease}}{{.Node.OSRelease}}{{if .Node.Arch}} / {{.Node.Arch}}{{end}}{{else}}尚未探测{{end}}</p></div>
+  <div class="card"><h3>host key 指纹</h3><p style="word-break:break-all;font-size:12px">{{if .Node.HostKeyFP}}{{.Node.HostKeyFP}}{{else}}未记录{{end}}</p></div>
+  <div class="card"><h3>托管密钥</h3><p>{{if .HasCredential}}已保存（加密）{{else}}<span class="warn">未建立</span>{{end}}</p></div>
+  <div class="card"><h3>最近连通</h3><p>{{.LastSeen}}</p></div>
+</div>
+
+{{if .DomainPending}}
+<div class="notice warn">
+  <strong>等待 DNS 记录生效。</strong>请在你的 DNS 服务商处添加：<br>
+  <code>{{.DNSInstruction}}</code><br>
+  添加后回到最近一次运行页点「继续部署」。
+</div>
+{{end}}
+
+<h2>部署历史</h2>
+{{if not .Runs}}
+<p class="muted">还没有运行记录。</p>
+{{else}}
+<div class="scroll">
+<table>
+  <tr><th>类型</th><th>状态</th><th>开始</th><th></th></tr>
+  {{range .Runs}}
+  <tr>
+    <td>{{.Kind}}</td>
+    <td>{{.Status}}</td>
+    <td>{{.Started}}</td>
+    <td><a href="/admin/nodes/{{$.Node.ID}}/runs/{{.ID}}">查看日志</a></td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{end}}
+
+<h2>操作</h2>
+<form method="POST" action="/admin/nodes/{{.Node.ID}}/resume" style="display:inline">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <button class="btn" type="submit"{{if not .CanResume}} disabled{{end}}>继续/重新部署</button>
+</form>
+<span class="muted" style="margin-left:12px;font-size:13px">从上次失败的步骤继续；已完成的步骤会被跳过。</span>
+
+<div class="notice" style="margin-top:24px">
+  尚未实施的操作：更换域名、轮换托管密钥、签发/轮换 CDK、收集诊断、解除纳管。
+  这些目前请用 SSH + <code>ccwadmin</code>（见 <code>DEPLOY.md</code>）。
+</div>
+
+<p style="margin-top:24px"><a href="/admin/nodes">返回机队列表</a></p>
+{{end}}

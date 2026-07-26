@@ -22,6 +22,9 @@ import (
 	"ccw/internal/config"
 	"ccw/internal/console"
 	"ccw/internal/consolestore"
+	"ccw/internal/deploy"
+	"ccw/internal/dns"
+	"ccw/internal/provision"
 	"ccw/internal/secretbox"
 )
 
@@ -88,7 +91,22 @@ func serve() {
 			Store: st, Box: box, Allowlist: nets,
 			Secure: !cfg.AdminInsecureCookie,
 		}
-		logf("管理后台已启用（白名单%d条）", len(nets))
+		// 机队管理：SSH执行层 + 流水线 + 日志广播。与Auth同批启用——
+		// 它的每个入口都在requireAdmin之后。
+		hub := console.NewLogHub(cfg.LogDir)
+		srv.Fleet = &console.Fleet{
+			Store: st, Logs: hub,
+			Orchestrator: &provision.Orchestrator{
+				Store: st, Box: box, DNS: &dns.Manual{},
+				Dial:               provision.DefaultDialer(20 * time.Second),
+				Log:                hub.Append,
+				Finish:             hub.Finish,
+				Artifacts:          nodeArtifacts,
+				ArtifactDir:        "/srv/ccw",
+				ComposeProjectName: "ccw",
+			},
+		}
+		logf("管理后台与机队管理已启用（白名单%d条，日志目录%s）", len(nets), cfg.LogDir)
 	} else {
 		// 说清楚为什么没开，否则运维会以为后台坏了。
 		logf("管理后台未启用：需要同时设置CCW_SECRET_KEY与CCW_ADMIN_ALLOWLIST；/admin路由未注册")
@@ -134,4 +152,27 @@ func mustInit() (config.ConsoleConfig, *consolestore.Store) {
 		os.Exit(1)
 	}
 	return cfg, st
+}
+
+// nodeArtifacts渲染要推送到节点的编排文件。
+//
+// compose.yaml由internal/deploy渲染——**与ccwadmin render-compose是同一个渲染器**，
+// 因此Console部署出来的编排与管理员手动渲染的字节级一致（模板契约I1–I8同样成立）。
+// Caddyfile与Dockerfile用仓库内的版本（go:embed）。
+func nodeArtifacts(slugs []string) (map[string]string, error) {
+	composeYAML, err := deploy.RenderCompose(deploy.ComposeInput{Projects: slugs})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{"compose.yaml": composeYAML}
+	for _, name := range []string{
+		"Caddyfile", "Dockerfile.claude", "Dockerfile.control-api", "Dockerfile.worker-agent",
+	} {
+		b, err := nodeFilesFS.ReadFile("nodefiles/" + name)
+		if err != nil {
+			return nil, fmt.Errorf("读取内置%s失败: %w", name, err)
+		}
+		out[name] = string(b)
+	}
+	return out, nil
 }
