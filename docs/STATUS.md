@@ -41,8 +41,9 @@ Task 1–13的代码都写过一遍，`go test ./...`与`-race`全绿。2026-07-
 - `internal/usage/identity_linux.go`：`fileIdentity`取dev:inode，同路径重建不再沿用旧游标
 - `002_account_pool_limits.sql`：`accounts`加池上限两列；worker不再写死`1<<62`，账号级闸门首次真正可用
 - `cmd/worker-agent/quota.go`：`modeFor`实时查额度，超额降级cleanup，**查询失败按超额处理**（fail closed）
+- `internal/quota`的`Assemble`：**control-api与worker-agent共用同一个限额组装函数与同一个数据源**。此前control-api读`CCW_POOL_5H`/`CCW_POOL_7D`环境变量、worker读`accounts`表，会出现"门户显示未超额、同步却已降级"；那两个环境变量已废弃，安全余量改由`CCW_POOL_RESERVE`/`CCW_POOL_SAFETY_MARGIN`经`config`统一注入两侧
 
-**测试：**12条新单测（`cmd/worker-agent` 12条 + `internal/config` 4条）全绿；`internal/store`首批测试与CI的Postgres集成job覆盖幂等键与GREATEST语义。
+**测试：**21条新单测（`cmd/worker-agent` 14条 + `internal/config` 7条）全绿；`internal/store`首批测试与CI的Postgres集成job覆盖幂等键与GREATEST语义。
 
 **未验证：**以上全部只在本机单测层面成立。**没有在真实部署上跑过**——JSONL是否确实被扫到、用量是否真的进库、超额是否真的关终端，都还没有实测证据。
 

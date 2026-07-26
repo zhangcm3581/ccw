@@ -22,6 +22,33 @@ type Decision struct {
 	FiveHourUsed, SevenDayUsed int64
 }
 
+// PoolLimitReader提供账号级池上限；生产实现是store查accounts表。
+type PoolLimitReader interface {
+	AccountPoolLimits(ctx context.Context, accountID string) (fiveHour, sevenDay int64, err error)
+}
+
+// Margins是池保护的安全余量，来自部署配置（CCW_POOL_RESERVE / CCW_POOL_SAFETY_MARGIN）。
+type Margins struct{ Reserve, SafetyMargin int64 }
+
+// Assemble组装项目级 + 账号级的双层限额。
+//
+// **control-api与worker-agent必须共用本函数。**此前两者各自组装：worker读accounts表、
+// control-api读环境变量，结果是同一个项目在门户里显示"未超额"、在worker那里却已被
+// 降级为cleanup。限额只应有一个真相源（accounts表 + 同一份余量配置），
+// 两处各写一份迟早漂移。
+func Assemble(ctx context.Context, r PoolLimitReader, accountID string,
+	fiveHour, sevenDay int64, m Margins) (Limits, error) {
+	pool5h, pool7d, err := r.AccountPoolLimits(ctx, accountID)
+	if err != nil {
+		return Limits{}, err
+	}
+	return Limits{
+		FiveHour: fiveHour, SevenDay: sevenDay,
+		PoolFiveHour: pool5h, PoolSevenDay: pool7d,
+		Reserve: m.Reserve, SafetyMargin: m.SafetyMargin,
+	}, nil
+}
+
 type Service struct{ Reader UsageReader }
 
 func (s Service) Check(ctx context.Context, projectID, accountID string, l Limits, now time.Time) (Decision, error) {

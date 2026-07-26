@@ -48,9 +48,9 @@ func newTestServer(t *testing.T, fiveHourUsed int64) (*Server, string) {
 	}
 	q := quota.Service{Reader: fixedReader{perProject: map[string]int64{"pa": fiveHourUsed}}}
 	s := New(resolver, getProject, testKey, q, storage.NewMemoryIndex(),
-		func(p project.Project) quota.Limits {
+		func(_ context.Context, p project.Project) (quota.Limits, error) {
 			return quota.Limits{FiveHour: p.FiveHourLimit, SevenDay: p.SevenDayLimit,
-				PoolFiveHour: 1 << 40, PoolSevenDay: 1 << 40}
+				PoolFiveHour: 1 << 40, PoolSevenDay: 1 << 40}, nil
 		}, "wss://ccw.example.com/ws")
 	return s, cdkA
 }

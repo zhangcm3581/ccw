@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,6 +241,74 @@ func TestPanicInOneProjectDoesNotStopOthers(t *testing.T) {
 			t.Errorf("错误应标明panic：%v", e)
 		}
 	}
+}
+
+// U8：日志与错误信息里绝不能出现JSONL内容——那是完整的会话正文。
+// 上一版把这条标成"由单测覆盖"，实际所有测试的logf都是空函数、没有任何断言；
+// 这就是把"没验证"报成了"通过"。本用例真正捕获日志文本来检查。
+func TestLogsNeverContainJSONLContent(t *testing.T) {
+	const secret = "MY-PRIVATE-CONVERSATION-TEXT"
+	root := t.TempDir()
+	dir := filepath.Join(root, "alpha")
+	// 一个坏行（JSON不合法）+ 一个正常行，坏行里带着可识别的"会话正文"。
+	writeJSONL(t, dir, "s.jsonl",
+		`{"type":"assistant","requestId":"bad","text":"`+secret+`"`+"\n"+jsonlLine("req-ok", 10, 0))
+
+	sink, offs := newFakeSink(), newFakeOffsets()
+	u := newUsageCollectors(root, testWeights, sink, offs)
+	projects := []project.Project{proj("id-a", "alpha")}
+
+	var logged []string
+	for _, e := range u.runOnce(context.Background(), projects) {
+		logged = append(logged, e.Error())
+	}
+
+	// 再跑一遍完整循环，把runUsageLoop自己打的日志（含坏行计数）也收进来。
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var mu sync.Mutex
+	go func() {
+		runUsageLoop(ctx, fakeLister{projects}, u, time.Millisecond,
+			func(format string, a ...any) {
+				mu.Lock()
+				logged = append(logged, fmt.Sprintf(format, a...))
+				mu.Unlock()
+			})
+		close(done)
+	}()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logged) == 0 {
+		t.Fatal("没有捕获到任何日志，用例本身失效了")
+	}
+	for _, line := range logged {
+		if strings.Contains(line, secret) {
+			t.Errorf("日志泄漏了JSONL内容：%q", line)
+		}
+	}
+	// 坏行必须被计数（不静默丢弃），只是不带内容。
+	if u.BadLines() == 0 {
+		t.Error("坏行应被计数")
+	}
+}
+
+// U7：执行侧的panic也必须被隔离。Go的panic不分goroutine——
+// 只在采集侧recover等于做了一半，一次意外仍会把整个进程带走。
+func TestGuardRecoversAndKeepsLooping(t *testing.T) {
+	var logged []string
+	guard("测试", func(format string, a ...any) {
+		logged = append(logged, fmt.Sprintf(format, a...))
+	}, func() { panic("boom") })
+
+	if len(logged) != 1 || !strings.Contains(logged[0], "panic") {
+		t.Fatalf("panic应被捕获并记日志，实际：%v", logged)
+	}
+	// 捕获后调用方继续存活：这一行能执行到就是证据。
+	guard("测试", func(string, ...any) {}, func() {})
 }
 
 // 循环本身：ctx取消后必须退出，不能泄漏goroutine。

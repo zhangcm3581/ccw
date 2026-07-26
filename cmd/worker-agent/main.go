@@ -67,6 +67,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 统一的日志出口：凭据与JSONL内容绝不进日志（CLAUDE.md）。
+	logln := func(format string, a ...any) {
+		fmt.Fprintf(os.Stderr, "worker-agent: "+format+"\n", a...)
+	}
+
 	ctx := context.Background()
 	st, err := store.New(ctx, cfg.DatabaseURL) // 内部Ping，失败即非零退出
 	if err != nil {
@@ -126,9 +131,7 @@ func main() {
 	// 只看令牌会让刚超额的项目在窗口内继续上传。查询失败按超额处理（fail closed）。
 	quotaSvc := quota.Service{Reader: st}
 	modeFor := func(projectID string) string {
-		return syncModeFor(ctx, st, quotaSvc, projectID, time.Now(), func(format string, a ...any) {
-			fmt.Fprintf(os.Stderr, "worker-agent: "+format+"\n", a...)
-		})
+		return syncModeFor(ctx, st, quotaSvc, projectID, cfg.PoolMargins, time.Now(), logln)
 	}
 
 	mux := http.NewServeMux()
@@ -161,13 +164,23 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				// 只遍历有活跃连接的项目——没有连接就没有东西可关。
-				// （采集必须遍历全部项目，那是另一个循环，见下方runUsageLoop。）
-				for _, pid := range registry.ActiveProjects() {
-					if d, qerr := checkProject(ctx, st, quotaSvc, pid, time.Now()); qerr == nil && d.Over {
-						registry.CloseProject(pid)
+				// guard：panic不分goroutine，这里不recover的话一次意外会连采集一起带走。
+				guard("额度执行", logln, func() {
+					// 只遍历有活跃连接的项目——没有连接就没有东西可关。
+					// （采集必须遍历全部项目，那是另一个循环，见下方runUsageLoop。）
+					for _, pid := range registry.ActiveProjects() {
+						d, qerr := checkProject(ctx, st, quotaSvc, pid, cfg.PoolMargins, time.Now())
+						if qerr != nil {
+							// 查不到额度就不敢断言"没超"，但也不能凭空关掉正在用的终端：
+							// 记日志让人看得见，实际拦截交给同步侧的fail-closed降级。
+							logln("额度执行：项目%s额度查询失败，本轮不处理：%v", pid, qerr)
+							continue
+						}
+						if d.Over {
+							registry.CloseProject(pid)
+						}
 					}
-				}
+				})
 			}
 		}
 	}()
@@ -176,9 +189,7 @@ func main() {
 	// 与上面的执行循环分成两个goroutine——采集遍历全部项目、执行只遍历有连接的项目，
 	// 且采集失败不应影响"超额就关终端"这条链路。
 	collectors := newUsageCollectors(cfg.UsageRoot, cfg.UsageWeights, st, st)
-	go runUsageLoop(ctx, st, collectors, 30*time.Second, func(format string, a ...any) {
-		fmt.Fprintf(os.Stderr, "worker-agent: "+format+"\n", a...)
-	})
+	go runUsageLoop(ctx, st, collectors, 30*time.Second, logln)
 
 	srv := &http.Server{
 		Addr:              cfg.AgentListenAddr,

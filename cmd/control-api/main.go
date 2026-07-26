@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"ccw/internal/config"
@@ -33,14 +32,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 池额度目前只从环境变量读；默认极大＝暂不启用池保护，
-	// 由运维注入真实上游额度后才生效。改为从accounts表读取是待办，见docs/STATUS.md。
-	limitsFor := func(p project.Project) quota.Limits {
-		return quota.Limits{
-			FiveHour: p.FiveHourLimit, SevenDay: p.SevenDayLimit,
-			PoolFiveHour: envInt("CCW_POOL_5H", 1<<62), PoolSevenDay: envInt("CCW_POOL_7D", 1<<62),
-			Reserve: envInt("CCW_POOL_RESERVE", 0), SafetyMargin: envInt("CCW_POOL_SAFETY_MARGIN", 0),
-		}
+	// 池上限从accounts表读，与worker-agent同一个真相源（quota.Assemble）。
+	// 此前这里读CCW_POOL_5H/7D环境变量，而worker读数据库，结果是门户显示"未超额"、
+	// worker那边却已经降级为cleanup。那两个环境变量已废弃。
+	limitsFor := func(ctx context.Context, p project.Project) (quota.Limits, error) {
+		return quota.Assemble(ctx, st, p.AccountID, p.FiveHourLimit, p.SevenDayLimit, cfg.PoolMargins)
 	}
 
 	agentBase := os.Getenv("CCW_AGENT_WS_BASE")
@@ -65,13 +61,4 @@ func main() {
 		fmt.Fprintln(os.Stderr, "control-api:", err)
 		os.Exit(1)
 	}
-}
-
-func envInt(k string, def int64) int64 {
-	if v := os.Getenv(k); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-			return n
-		}
-	}
-	return def
 }

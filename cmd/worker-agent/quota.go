@@ -14,32 +14,17 @@ type quotaLookup interface {
 	AccountPoolLimits(ctx context.Context, accountID string) (int64, int64, error)
 }
 
-// limitsFor组装项目级与账号级的双层限额。
-//
-// 池上限来自accounts表（002迁移新增）。此前这里写死1<<62，池闸门从未生效——
-// 多个项目共用一个上游账号时，那等于没有任何机制阻止"各自都没超限、加起来把账号打爆"。
-//
-// Reserve与SafetyMargin暂留0：安全余量只有在限额本身是真实值之后才有意义，
-// 而当前处于"先记账、后校准"的第一阶段（限额刻意设得很大、不真正拦人）。
-// 校准阶段定下真实限额时，应一并给出余量取值。
-func limitsFor(ctx context.Context, q quotaLookup, p project.Project) (quota.Limits, error) {
-	pool5h, pool7d, err := q.AccountPoolLimits(ctx, p.AccountID)
-	if err != nil {
-		return quota.Limits{}, err
-	}
-	return quota.Limits{
-		FiveHour: p.FiveHourLimit, SevenDay: p.SevenDayLimit,
-		PoolFiveHour: pool5h, PoolSevenDay: pool7d,
-	}, nil
-}
-
 // checkProject查一个项目当前是否超额。
-func checkProject(ctx context.Context, q quotaLookup, svc quota.Service, projectID string, now time.Time) (quota.Decision, error) {
+//
+// 限额组装走quota.Assemble——与control-api同一个函数、同一个数据源（accounts表）。
+// 两处各写一份的后果是门户显示"未超额"而worker已经降级为cleanup，见Assemble的注释。
+func checkProject(ctx context.Context, q quotaLookup, svc quota.Service, projectID string,
+	margins quota.Margins, now time.Time) (quota.Decision, error) {
 	p, err := q.GetProjectByID(ctx, projectID)
 	if err != nil {
 		return quota.Decision{}, err
 	}
-	lim, err := limitsFor(ctx, q, p)
+	lim, err := quota.Assemble(ctx, q, p.AccountID, p.FiveHourLimit, p.SevenDayLimit, margins)
 	if err != nil {
 		return quota.Decision{}, err
 	}
@@ -57,8 +42,8 @@ func checkProject(ctx context.Context, q quotaLookup, svc quota.Service, project
 //  2. 查询失败时返回cleanup而不是rw。额度状态未知时按"可能已超额"处理——
 //     宁可让客户暂时传不上去，也不要在闸门失灵时敞开写入。
 func syncModeFor(ctx context.Context, q quotaLookup, svc quota.Service, projectID string,
-	now time.Time, logf func(string, ...any)) string {
-	d, err := checkProject(ctx, q, svc, projectID, now)
+	margins quota.Margins, now time.Time, logf func(string, ...any)) string {
+	d, err := checkProject(ctx, q, svc, projectID, margins, now)
 	if err != nil {
 		logf("额度查询失败，同步降级为cleanup（项目%s）：%v", projectID, err)
 		return "cleanup"

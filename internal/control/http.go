@@ -46,8 +46,10 @@ type Server struct {
 	Key        []byte
 	Quota      quota.Service
 	Index      storage.Index
-	LimitsFor  func(project.Project) quota.Limits
-	AgentBase  string
+	// LimitsFor返回error：池上限来自数据库，读不到时不能假装拿到了限额。
+	// 此前它无error且从环境变量读，与worker-agent的口径不一致（见quota.Assemble的说明）。
+	LimitsFor func(context.Context, project.Project) (quota.Limits, error)
+	AgentBase string
 
 	MaxAuthAttempts int // 每分钟每客户端的exchange尝试上限（0=默认20）
 
@@ -57,7 +59,7 @@ type Server struct {
 
 func New(r project.Resolver, getProject func(context.Context, string) (project.Project, error),
 	key []byte, q quota.Service, idx storage.Index,
-	limitsFor func(project.Project) quota.Limits, agentBase string) *Server {
+	limitsFor func(context.Context, project.Project) (quota.Limits, error), agentBase string) *Server {
 	return &Server{Resolver: r, GetProject: getProject, Key: key, Quota: q, Index: idx,
 		LimitsFor: limitsFor, AgentBase: agentBase, attempts: map[string][]time.Time{}}
 }
@@ -138,7 +140,14 @@ func (s *Server) connection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	d, err := s.Quota.Check(r.Context(), p.ID, p.AccountID, s.LimitsFor(p), now)
+	lim, err := s.LimitsFor(r.Context(), p)
+	if err != nil {
+		// 读不到限额时返回500，而不是退化成"无限额"或"已超额"：
+		// 前者会放行本该被拦的请求，后者会对客户谎称额度耗尽。
+		httpErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	d, err := s.Quota.Check(r.Context(), p.ID, p.AccountID, lim, now)
 	if err != nil {
 		httpErr(w, http.StatusInternalServerError, "internal")
 		return
@@ -173,7 +182,12 @@ func (s *Server) usagePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := template.Must(template.ParseFS(templatesFS, "templates/usage.html"))
-	d, _ := s.Quota.Check(r.Context(), p.ID, p.AccountID, s.LimitsFor(p), time.Now())
+	lim, err := s.LimitsFor(r.Context(), p)
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	d, _ := s.Quota.Check(r.Context(), p.ID, p.AccountID, lim, time.Now())
 	disk, _ := s.Index.DiskUsed(r.Context(), p.ID)
 	t.Execute(w, map[string]any{"Project": p, "Decision": d, "DiskUsed": disk})
 }

@@ -98,6 +98,21 @@ func (u *usageCollectors) scanOne(ctx context.Context, p project.Project) (err e
 	return u.collectorFor(p).Scan(ctx)
 }
 
+// guard捕获一轮循环里的panic，让长驻goroutine活下去。
+//
+// **Go的panic不分goroutine：任何一个未recover的panic都会终止整个进程。**
+// 因此"采集goroutine的panic不影响执行goroutine，反之亦然"这条不变量，
+// 必须两个循环各自recover才成立——只在其中一侧加recover是做了一半。
+// 少了它，一次数据库驱动的意外panic会把采集、闸门、HTTP服务一起带走。
+func guard(name string, logf func(string, ...any), fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			logf("%s：本轮panic已捕获，循环继续：%v", name, r)
+		}
+	}()
+	fn()
+}
+
 // BadLines汇总各项目的坏行计数，供日志暴露；不静默丢弃解析失败。
 func (u *usageCollectors) BadLines() int64 {
 	var n int64
@@ -121,20 +136,22 @@ func runUsageLoop(ctx context.Context, lister projectLister, u *usageCollectors,
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			projects, err := lister.ListProjects(ctx)
-			if err != nil {
-				logf("用量采集：列项目失败：%v", err)
-				continue
-			}
-			for _, e := range u.runOnce(ctx, projects) {
-				logf("%v", e)
-			}
-			// 坏行只在增量出现时报一次，避免每轮刷屏；
-			// 注意绝不打印行内容——JSONL里是完整的会话正文。
-			if bad := u.BadLines(); bad > lastBad {
-				logf("用量采集：累计跳过%d个无法解析的行（不含内容）", bad)
-				lastBad = bad
-			}
+			guard("用量采集", logf, func() {
+				projects, err := lister.ListProjects(ctx)
+				if err != nil {
+					logf("用量采集：列项目失败：%v", err)
+					return
+				}
+				for _, e := range u.runOnce(ctx, projects) {
+					logf("%v", e)
+				}
+				// 坏行只在增量出现时报一次，避免每轮刷屏；
+				// 注意绝不打印行内容——JSONL里是完整的会话正文。
+				if bad := u.BadLines(); bad > lastBad {
+					logf("用量采集：累计跳过%d个无法解析的行（不含内容）", bad)
+					lastBad = bad
+				}
+			})
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ccw/internal/quota"
 	"ccw/internal/usage"
 )
 
@@ -22,6 +23,11 @@ type Config struct {
 	// 由worker-agent启动时调RequireUsage二次校验（见该方法的说明）。
 	UsageRoot    string        // 会话JSONL的挂载根，采集目录为 <UsageRoot>/<slug>
 	UsageWeights usage.Weights // 四种token折算成内部额度单位的权重
+
+	// PoolMargins是账号级池保护的安全余量。control-api与worker-agent都从这里取，
+	// 保证两者判定口径一致（此前只有control-api读环境变量，worker硬编码0）。
+	// 余量只有在限额本身是真实值之后才有意义，故默认0——见用量接线计划§3.1的两阶段说明。
+	PoolMargins quota.Margins
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -49,6 +55,10 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	c.TokenSigningKey = key
 
+	c.PoolMargins = quota.Margins{
+		Reserve:      envInt(getenv, "CCW_POOL_RESERVE", 0),
+		SafetyMargin: envInt(getenv, "CCW_POOL_SAFETY_MARGIN", 0),
+	}
 	c.UsageRoot = getenv("CCW_USAGE_ROOT")
 	if raw := getenv("CCW_USAGE_WEIGHTS"); raw != "" {
 		w, werr := parseWeights(raw)
@@ -102,6 +112,17 @@ func (c Config) RequireUsage() error {
 			"(all-zero weights record every event as 0 units, which silently disables the quota gate)")
 	}
 	return nil
+}
+
+// envInt读可选的整数配置；缺失或格式错误时用默认值。
+// 这两个余量是可选调优项，不适用"缺失即硬失败"——默认0等于不留余量，语义明确。
+func envInt(getenv func(string) string, k string, def int64) int64 {
+	if v := getenv(k); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n
+		}
+	}
+	return def
 }
 
 func or(v, def string) string {
