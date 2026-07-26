@@ -41,6 +41,9 @@ type Server struct {
 	Logf             func(format string, a ...any)
 	MaxResolvePerMin int // 0=默认10（设计§6.6）
 
+	// Auth为nil时**不注册任何/admin路由**：没有认证就不上管理页面。
+	Auth *Auth
+
 	rlMu     stdsync.Mutex
 	attempts map[string][]time.Time
 
@@ -53,7 +56,8 @@ func New(store SiteStore, distDir string, logf func(string, ...any)) *Server {
 	}
 	s := &Server{Store: store, DistDir: distDir, Logf: logf,
 		attempts: map[string][]time.Time{}, tmpl: map[string]*template.Template{}}
-	for _, page := range []string{"home.html", "download.html", "quickstart.html", "connect.html"} {
+	for _, page := range []string{"home.html", "download.html", "quickstart.html", "connect.html",
+		"admin_login.html", "admin_home.html"} {
 		s.tmpl[page] = template.Must(template.ParseFS(tmplFS, "templates/layout.html", "templates/"+page))
 	}
 	return s
@@ -72,6 +76,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
+	if s.Auth != nil {
+		s.registerAdmin(mux)
+	}
 	return mux
 }
 

@@ -1,0 +1,26 @@
+{{define "title"}}管理登录 · ccw{{end}}
+{{define "content"}}
+<div style="max-width:420px;margin:40px auto">
+  <h1 style="font-size:24px">管理后台</h1>
+  {{if .Error}}<div class="notice warn">{{.Error}}</div>{{end}}
+  <form method="POST" action="/admin/login" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <p>
+      <label class="muted" for="u">用户名</label><br>
+      <input type="text" id="u" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+    </p>
+    <p>
+      <label class="muted" for="p">密码</label><br>
+      <input type="password" id="p" name="password" autocomplete="current-password" required
+             style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font-size:14px">
+    </p>
+    <p>
+      <label class="muted" for="c">两步验证码</label><br>
+      <input type="text" id="c" name="code" inputmode="numeric" pattern="[0-9 ]*" maxlength="9"
+             autocomplete="one-time-code" placeholder="6位数字" required>
+    </p>
+    <p><button class="btn" type="submit">登录</button></p>
+  </form>
+  <p class="muted" style="font-size:13px">密码与两步验证码缺一不可。多次失败会被临时限速。</p>
+</div>
+{{end}}

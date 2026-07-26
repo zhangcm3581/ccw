@@ -98,8 +98,12 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
 - 落地页措辞有测试守卫：出现"官方订阅/保证不超过"等越界措辞即失败
 
 - **C21部署物（部分）**：`deploy/Dockerfile.console`（distroless）、`deploy/console/{compose.yaml,Caddyfile,.env.example}`（按§8.3双域名分流+管理域名IP白名单404）、`DEPLOY-CONSOLE.md`。Console的Postgres数据bind到data-root之外（对齐N4第2项）。`docker compose config`本机与CI均通过；**未在真实Console主机部署过**，备份恢复演练（A33）未做
+- **C2信封加密**：`internal/secretbox`（AES-256-GCM，AAD绑定用途标签防止密文跨列搬运）；密文不可预测、篡改/错密钥/错上下文均检出、错误信息不含内容——各有单测
+- **C5日志脱敏**：`internal/redact`覆盖设计§5.4要求的五类（CDK明文、私钥块、令牌密钥、密码各写法、AWS凭据）+ 连接串密码与`sudo -S`管道；同时有"正常输出不被误伤"的反向测试。**目前只有登录/登出两处调用方**，流水线推流接入随C7
+- **C3管理员认证**：Argon2id密码 + TOTP（`internal/totp`自实现，RFC 6238官方向量验证）+ 服务端会话表（撤销立即生效、12h绝对/30min空闲超时、禁用用户即时失效）+ 每IP与每用户名双维限速 + 应用层独立IP白名单（白名单外404）+ double-submit CSRF + 审计（写入失败则动作失败）。统一错误经"三种失败响应逐字节相同"的测试守卫（A4）。`ccw-console create-admin`生成账号与两步验证密钥（密码不做命令行参数，有源码级守卫）
+- **端到端冒烟（本机真实PG）**：create-admin→登录页→错密码401→正确登录302→带会话访问总览→白名单外404，全部实测通过
 
-**未实施**：C2–C7（信封加密、TOTP认证、SSH引擎、脱敏、流水线）、C8–C11（DNS/证书预算/bootstrap）、C15–C17/C19（后台UI、审计巡检）、C22（真实VPS纳管验收）与C21剩余（备份恢复演练）。`/admin/*`路由**刻意未注册**——没有认证之前不上任何管理页面。`cdk_issues`等表尚无写入方（等C17/巡检），`/connect`当前查库必为空，需Console侧数据接入后才有实际产出。
+**未实施**：C4（SSH引擎）、C6（凭据生命周期）、C7（流水线）、C8–C11（DNS/证书预算/bootstrap）、C15–C17/C19（节点与CDK管理UI、巡检）、C22（真实VPS纳管验收）与C21剩余（备份恢复演练）。后台目前只有登录与总览骨架页。`cdk_issues`等表尚无写入方（等C17/巡检），`/connect`当前查库必为空，需Console侧数据接入后才有实际产出。
 
 ### P3 工具与管理面
 

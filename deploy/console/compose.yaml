@@ -37,6 +37,10 @@ services:
       # （与节点侧control-api同款，见docs/design-deviations.md的D2）
       CCW_CONSOLE_LISTEN_ADDR: 0.0.0.0:8090
       CCW_DIST_DIR: /srv/dist
+      # 管理后台：两者都设置才启用（缺任一项则/admin路由不注册）。
+      # 白名单在应用层独立复核，不只依赖下面Caddy的remote_ip匹配（设计§8.3）。
+      CCW_SECRET_KEY: "${CCW_SECRET_KEY:-}"
+      CCW_ADMIN_ALLOWLIST: "${CCW_ADMIN_ALLOWLIST:-}"
     volumes:
       # 客户端产物：把 make release 的输出同步到宿主机这个目录即可。
       # 只读——Console只发文件，不写；登记入库走 register-release 子命令。
