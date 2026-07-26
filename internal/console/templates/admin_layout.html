@@ -83,9 +83,13 @@ a:hover{text-decoration:underline}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
 /* ── 骨架：左轨 + 内容 ───────────────────────────── */
-/* minmax(0,1fr)而不是1fr：网格列的默认min-width是auto，
-   宽表格会把这一列撑破视口，横向滚动条出现在<body>而不是表格自己身上。 */
-.shell{display:grid;grid-template-columns:236px minmax(0,1fr);min-height:100%}
+/* **这套后台只面向 PC**（2026-07-27定）：它是纳管服务器用的操作台，
+   步骤表、日志流、SSH 参数表单没有一个适合在手机上操作。
+   因此不做窄屏适配，改为给整个外壳一个下限宽度——窗口比这窄就整体横滚，
+   而不是把布局折成一个能打开、但没法用的形态。
+   minmax(0,1fr)而不是1fr：网格列的默认min-width是auto，
+   宽表格会把这一列撑破，横向滚动条出现在<body>而不是表格自己身上。 */
+.shell{display:grid;grid-template-columns:236px minmax(0,1fr);min-height:100%;min-width:1080px}
 .rail{
   background:var(--rail);border-right:1px solid var(--line);
   display:flex;flex-direction:column;position:sticky;top:0;height:100vh;z-index:20;
@@ -149,15 +153,11 @@ a:hover{text-decoration:underline}
   position:sticky;top:0;z-index:5;
 }
 .topbar h1{font-size:20px;margin:0;letter-spacing:-.015em;font-weight:650}
-.menu-btn{
-  display:none;align-items:center;justify-content:center;width:32px;height:32px;flex:none;
-  border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--ink-2);cursor:pointer;
-}
-.menu-btn svg{width:16px;height:16px}
-.scrim{display:none}
 .topbar .sub{font-family:var(--mono);font-size:12px;color:var(--ink-3)}
 .topbar .spacer{margin-left:auto}
-.content{padding:26px 30px 64px;max-width:1180px}
+/* 1560是表格的可读上限：再宽下去「节点—状态—地址」之间的横向跨度
+   会大到眼睛要来回找行。超宽屏上留白比拉伸更好读。 */
+.content{padding:26px 30px 64px;max-width:1560px}
 
 /* ── 通用件 ─────────────────────────────────────── */
 .btn{
@@ -178,8 +178,18 @@ a:hover{text-decoration:underline}
 .card-hd .spacer{margin-left:auto}
 .card-bd{padding:18px}
 .grid{display:grid;gap:16px}
-.g3{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+
+/* ── 总览的两栏工作区 ─────────────────────────────
+   左栏是「要做的事」：待办 + 部署流水，随内容长；
+   右栏是「当前是什么状态」：机队、发布、域名，各自短小、只读。
+   把它们并排而不是纵向摞成一长条——后者在 1440 屏上要滚一屏才看完，
+   而这台机器的全部状态本来就装得下一屏。 */
+.workspace{display:grid;grid-template-columns:minmax(0,1fr) 336px;gap:22px;align-items:start}
+.workspace .stack{display:flex;flex-direction:column;gap:22px;min-width:0}
+/* 表单不跟着屏幕一起变宽：一个 IP 输入框拉到 700px 只会更难填，
+   而且眼睛要在标签与输入框之间横跨半屏。 */
+.narrow{max-width:1080px}
 
 .eyebrow{
   font-family:var(--mono);font-size:10.5px;letter-spacing:.15em;text-transform:uppercase;
@@ -288,12 +298,8 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 /* ── 运行详情：步骤表 + 终端 ─────────────────────── */
 /* 日志是这一页的主体，所以让它吃满视口高度；步骤表跟着滚动固定住，
    翻长日志时「现在跑到第几步」始终在视线里。 */
-.runsplit{display:grid;grid-template-columns:260px minmax(0,1fr);gap:22px;align-items:start}
+.runsplit{display:grid;grid-template-columns:274px minmax(0,1fr);gap:22px;align-items:start}
 .runsplit .side{position:sticky;top:96px}
-@media (max-width:1000px){
-  .runsplit{grid-template-columns:minmax(0,1fr)}
-  .runsplit .side{position:static}
-}
 
 .term{background:var(--term-bg);border-radius:8px;overflow:hidden;border:1px solid var(--line)}
 .term-hd{
@@ -318,31 +324,11 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 .term-empty code{background:rgba(255,255,255,.07);color:#9fb0c2;padding:2px 6px}
 .term-bd::selection{background:var(--accent);color:var(--accent-ink)}
 
-/* 窄屏：左轨改成抽屉。**不把它压成一条横向导航条**——
-   导航项一多就横向溢出，页面整体出现横滚，操作台最忌讳这个。 */
-@media (max-width:860px){
-  .shell{grid-template-columns:minmax(0,1fr)}
-  .rail{
-    position:fixed;left:0;top:0;width:250px;
-    transform:translateX(-100%);transition:transform .18s ease;
-    box-shadow:var(--shadow);
-  }
-  .shell.nav-open .rail{transform:none}
-  .shell.nav-open .scrim{
-    display:block;position:fixed;inset:0;z-index:15;
-    background:rgba(8,12,17,.42);border:none;padding:0;
-  }
-  .menu-btn{display:inline-flex}
-  .topbar{padding:14px 18px}
-  .topbar h1{font-size:18px}
-  .content{padding:20px 18px 56px}
-}
 </style>
 </head>
 <body>
-<div class="shell" id="shell">
-  <button class="scrim" id="scrim" type="button" aria-label="关闭菜单" tabindex="-1"></button>
-  <aside class="rail" id="rail">
+<div class="shell">
+  <aside class="rail">
     <div class="rail-brand"><b>ccw</b><span>控制台</span></div>
     <nav class="rail-nav">
       <div class="nav-label">运维</div>
@@ -377,11 +363,6 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 
   <div class="main">
     <header class="topbar">
-      <button class="menu-btn" id="menu" type="button" aria-label="菜单" aria-expanded="false" aria-controls="rail">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-          <path d="M2 4h12M2 8h12M2 12h12"/>
-        </svg>
-      </button>
       <h1>{{block "pagetitle" .}}控制台{{end}}</h1>
       {{block "pagesub" .}}{{end}}
       <span class="spacer"></span>
@@ -414,18 +395,6 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
       mark(v);
     });
   });
-
-  // 窄屏抽屉：遮罩点击与 Esc 关闭它。
-  // 点导航项不需要单独处理——那是整页跳转，抽屉状态本来就不跨页面保留。
-  var shell = document.getElementById('shell');
-  var menu = document.getElementById('menu');
-  function close() { shell.classList.remove('nav-open'); menu.setAttribute('aria-expanded', 'false'); }
-  menu.addEventListener('click', function () {
-    var open = shell.classList.toggle('nav-open');
-    menu.setAttribute('aria-expanded', open ? 'true' : 'false');
-  });
-  document.getElementById('scrim').addEventListener('click', close);
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
 })();
 </script>
 </body>

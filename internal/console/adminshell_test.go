@@ -55,16 +55,15 @@ func TestAdminPagesShareShell(t *testing.T) {
 	}
 }
 
-// 主题三态与窄屏抽屉都靠外壳里的那段脚本驱动。它们是纯前端行为、
-// 没有服务端状态可断言，但**控件必须在页面上**——少了任一个，
-// 深色偏好与窄屏导航就悄无声息地失效了。
-func TestAdminShellHasThemeAndDrawerControls(t *testing.T) {
+// 主题三态靠外壳里的那段脚本驱动。它是纯前端行为、没有服务端状态可断言，
+// 但**三个档位必须都在页面上**——少了auto，选过浅/深的人就再也回不到
+// 跟随系统。
+func TestAdminShellHasThemeControl(t *testing.T) {
 	s, _, sess, _ := newFleetServer(t)
 	body := authGet(t, s, "/admin", sess).Body.String()
 
 	for _, want := range []string{
-		`data-theme-set="auto"`, `data-theme-set="light"`, `data-theme-set="dark"`,
-		`id="menu"`, `id="scrim"`, "ccw-theme",
+		`data-theme-set="auto"`, `data-theme-set="light"`, `data-theme-set="dark"`, "ccw-theme",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("外壳缺%q", want)

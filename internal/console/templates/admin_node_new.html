@@ -2,6 +2,7 @@
 {{define "pagetitle"}}新增节点{{end}}
 {{define "pageactions"}}<a class="btn ghost" href="/admin/nodes">取消</a>{{end}}
 {{define "content"}}
+<div class="narrow">
 
 {{if .Error}}<div class="note bad" style="margin-bottom:20px">{{.Error}}</div>{{end}}
 
@@ -91,4 +92,5 @@
   </div>
 </form>
 
+</div>
 {{end}}
