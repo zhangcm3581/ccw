@@ -25,10 +25,19 @@ import (
 	syncpkg "ccw/internal/sync"
 )
 
+// buildVersion由发布流水线经-ldflags "-X main.buildVersion=..."注入（设计§3.2）；
+// cclaude --version输出它（验收A3：与下载页版本号一致）。
+var buildVersion = "dev"
+
 func main() {
 	// 域名可以做参数（不是机密）；CDK绝不做参数——参数会进shell history与ps输出（A24）。
 	apiFlag := flag.String("api", "", "服务端API地址（如 https://api-01.example.com）；显式指定时写入本地配置")
+	showVersion := flag.Bool("version", false, "输出版本号后退出")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("cclaude", buildVersion)
+		return
+	}
 
 	dir := configDir()
 	if flag.Arg(0) == "logout" {

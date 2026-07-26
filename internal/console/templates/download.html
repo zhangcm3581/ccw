@@ -1,0 +1,39 @@
+{{define "title"}}下载 cclaude · ccw{{end}}
+{{define "content"}}
+<h1>下载 cclaude 客户端</h1>
+{{if not .Has}}
+<div class="notice">暂无发布版本。请联系管理员完成首次发布。</div>
+{{else}}
+<p class="lead">当前版本 <code>{{.Release.Version}}</code>{{if .Release.Notes}} · {{.Release.Notes}}{{end}}</p>
+
+{{if .Rec}}
+<div class="card" style="margin:16px 0">
+  <h3>为你推荐（依据浏览器标识，仅供参考）</h3>
+  <p style="margin-top:10px">
+    <a class="btn" href="/dist/{{.Rec.Filename}}">下载 {{.Rec.OS}}/{{.Rec.Arch}}</a>
+    <span class="muted" style="margin-left:10px">{{.Rec.Filename}}（{{.Rec.SizeHuman}}）</span>
+  </p>
+</div>
+{{end}}
+
+<h2>全部平台</h2>
+<div class="scroll">
+<table>
+  <tr><th>系统</th><th>架构</th><th>文件</th><th>大小</th><th>SHA256</th></tr>
+  {{range .Arts}}
+  <tr>
+    <td>{{.OS}}</td><td>{{.Arch}}</td>
+    <td><a href="/dist/{{.Filename}}">{{.Filename}}</a></td>
+    <td>{{.SizeHuman}}</td>
+    <td class="sha" title="{{.SHA256}}">{{.SHA256}}</td>
+  </tr>
+  {{end}}
+</table>
+</div>
+
+<h2>校验完整性</h2>
+<p>下载 <a href="/dist/SHA256SUMS">SHA256SUMS</a> 到产物同一目录，然后：</p>
+<pre><code>shasum -a 256 -c SHA256SUMS --ignore-missing   # Linux 用 sha256sum -c --ignore-missing</code></pre>
+<p class="muted">下载后 macOS/Linux 需 <code>chmod +x</code>；使用步骤见<a href="/quickstart">快速开始</a>。</p>
+{{end}}
+{{end}}

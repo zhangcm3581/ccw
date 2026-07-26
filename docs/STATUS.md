@@ -88,6 +88,17 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
 - ~~无CI~~：已加`.github/workflows/ci.yml`（build/vet/test/-race/gofmt + 一个带Postgres service的store集成job）。~~`internal/store`零测试~~：已补首批，需真实PG，本机无库时skip
 - **三平台真实冒烟未做**（spec §13明确"交叉编译通过不算数"）
 
+### Console层进展（console-fleet-design，2026-07-26开始实施）
+
+已实施（同日，均只有单测+本机冒烟证据，未在真实Console主机部署过）：
+
+- **C1骨架**：`ccw-console`二进制（默认serve，回环8090）、`config.LoadConsole`（缺失即硬失败）、`internal/consolestore`独立库与迁移`001_console_initial.sql`（设计§10全量schema照录）。CLAUDE.md迁移规则已按设计§10要求改写为"每库一份源"
+- **C20官网与发布**：落地页/下载页/quickstart（html/template+embed，零外部CDN，深浅色），`/dist`只发已发布版本登记过的文件（半成品不可达），`SHA256SUMS`从库生成；`scripts/build-release.sh`交叉编译六目标+版本注入（`cclaude --version`，A3）、`ccw-console register-release [--publish]`入库。**本机端到端冒烟通过**：构建→登记→发布→下载→`shasum -c OK`（A2的本机版）
+- **C18查询页**：`/connect`浏览器本地切分CDK、只POST public-id；服务端收到含`.`立即400且不记录请求体（有日志捕获测试+突变检查）、格式错/未知/已撤销统一`not_found`、每IP每分钟10次限速。解析链cdk_issues→node_projects→nodes→node_domains有PG集成测试
+- 落地页措辞有测试守卫：出现"官方订阅/保证不超过"等越界措辞即失败
+
+**未实施**：C2–C7（信封加密、TOTP认证、SSH引擎、脱敏、流水线）、C8–C11（DNS/证书预算/bootstrap）、C15–C17/C19（后台UI、审计巡检）、C21–C22（Console部署物与真实VPS验收）。`/admin/*`路由**刻意未注册**——没有认证之前不上任何管理页面。`cdk_issues`等表尚无写入方（等C17/巡检），`/connect`当前查库必为空，需Console侧数据接入后才有实际产出。
+
 ### P3 工具与管理面
 
 - ~~compose硬编码双项目~~：**C13已实施**（2026-07-26）——`ccwadmin render-compose`渲染任意1–3个项目的compose，`deploy/compose.yaml`已改为渲染产物（文件头有再生成命令，勿手工编辑）；契约I1–I8有单测，输出经`docker compose config`与原手写文件比对语义相同。**B9（真实节点加第3个项目、现有客户tmux现场完好）未真机验证。**

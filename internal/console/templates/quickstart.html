@@ -1,0 +1,39 @@
+{{define "title"}}快速开始 · ccw{{end}}
+{{define "content"}}
+<h1>快速开始</h1>
+<p class="lead">前提：已从<a href="/download">下载页</a>获取客户端，并拿到管理员签发的 CDK。</p>
+
+<ol class="steps">
+  <li>
+    <strong>安装客户端</strong>
+    <pre><code># macOS / Linux：授予执行权限并放入PATH（文件名以下载页为准）
+chmod +x cclaude_*
+sudo mv cclaude_* /usr/local/bin/cclaude
+
+# Windows：把 cclaude_*.exe 重命名为 cclaude.exe，放到任意PATH目录</code></pre>
+  </li>
+  <li>
+    <strong>确认接入地址</strong>
+    <p>管理员通常会连同 CDK 一起给出 API 域名；忘了或没拿到时，在<a href="/connect">查询页</a>粘贴 CDK 即可查到（只上传公开前半段，密钥不离开你的设备）。</p>
+  </li>
+  <li>
+    <strong>首次运行</strong>
+    <pre><code>cd ~/my-project                      # 同步以当前目录为根，先进入正确的项目目录
+cclaude --api https://api-01.example.com    # 换成你的API域名；地址会记住，下次直接 cclaude
+# 按提示输入CDK（不回显）</code></pre>
+    <p>登录后前台是云端 Claude 终端，后台每2秒同步当前目录。<span class="muted">API地址与CDK保存在 <code>~/.ccw/config.json</code>（仅当前用户可读）。</span></p>
+  </li>
+</ol>
+
+<h2>日常使用</h2>
+<div class="grid">
+  <div class="card"><h3>断线重连</h3><p>网络断开、休眠、关终端都不影响云端会话；重新运行 <code>cclaude</code> 即回到 tmux 现场。</p></div>
+  <div class="card"><h3>同步范围</h3><p>以运行目录为根双向同步。凭据类文件（<code>.env*</code>、<code>.ssh/</code> 等）、<code>.git/</code>、<code>node_modules/</code> 与符号链接不参与同步。</p></div>
+  <div class="card"><h3>冲突处理</h3><p>两端同时改同一文件时，不覆盖你的本地版本，云端版本另存为 <code>*.conflict-remote-*</code> 副本。</p></div>
+  <div class="card"><h3>额度受限时</h3><p>项目内部额度用尽会临时降级：终端暂停、同步只允许下载/删除/缩小；窗口恢复后自动回到正常模式，客户端不需要退出。</p></div>
+</div>
+
+<h2>常见问题</h2>
+<div class="notice"><strong>提示 invalid_cdk？</strong> CDK可能已被轮换或撤销。客户端会自动清除本地缓存的CDK（保留API地址），向管理员索取新CDK后重新运行输入即可，云端会话现场不受影响。</div>
+<div class="notice"><strong>换机器/换项目？</strong> <code>cclaude --api ...</code> 可随时切换接入地址；<code>cclaude logout</code> 清除本机保存的地址与CDK。</div>
+{{end}}

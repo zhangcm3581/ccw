@@ -1,0 +1,74 @@
+{{define "title"}}查询接入地址 · ccw{{end}}
+{{define "content"}}
+<h1>用 CDK 查询接入地址</h1>
+<p class="lead">粘贴你的 CDK，查出该连接的 API 域名与完整命令。</p>
+
+<div class="notice">隐私说明：CDK 形如 <code>ccw_公开ID.密钥</code>。本页在<strong>你的浏览器本地</strong>切分，
+只把公开ID（<code>ccw_</code> 与 <code>.</code> 之间的部分）发送到服务器；<strong>密钥部分永不离开你的设备</strong>，服务器也拒绝接收任何含密钥格式的输入。</div>
+
+<noscript><div class="notice warn">本页需要启用 JavaScript——切分在本地完成正是为了保证密钥不被上传，因此不提供无 JS 的回退表单。</div></noscript>
+
+<p style="margin-top:24px">
+  <input type="text" id="cdk" placeholder="ccw_xxxxxxxxxxxxxxxx.****（粘贴完整CDK或仅公开ID）"
+         autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+</p>
+<p><button class="btn" id="go">查询</button></p>
+
+<div id="out" style="display:none" class="card">
+  <h3 class="ok">找到了</h3>
+  <p>API 地址：<code id="api"></code></p>
+  <p>接入命令（在你的项目目录里执行）：</p>
+  <pre><code id="cmd"></code></pre>
+  <p><button class="btn ghost" id="copy">复制命令</button> <span id="copied" class="ok" style="display:none">已复制</span></p>
+</div>
+<div id="err" style="display:none" class="notice warn"></div>
+
+<script>
+(function () {
+  var input = document.getElementById('cdk');
+  var out = document.getElementById('out'), err = document.getElementById('err');
+
+  // 本地切分：无论用户粘贴什么，发出去的只可能是公开ID——含"."的内容绝不上传。
+  function publicIDOf(raw) {
+    var s = raw.trim();
+    if (s.indexOf('ccw_') === 0) s = s.slice(4);
+    var dot = s.indexOf('.');
+    if (dot >= 0) s = s.slice(0, dot);
+    return s;
+  }
+
+  function fail(msg) { out.style.display = 'none'; err.style.display = 'block'; err.textContent = msg; }
+
+  function go() {
+    var pid = publicIDOf(input.value);
+    if (!/^[0-9a-f]{16}$/.test(pid)) {
+      fail('这不像一个有效的CDK：公开ID应为16位十六进制。请粘贴完整CDK（ccw_开头）。');
+      return;
+    }
+    fetch('/v1/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ public_id: pid })
+    }).then(function (r) {
+      if (r.status === 429) { fail('查询太频繁，请稍后再试。'); return null; }
+      if (!r.ok) { fail('未找到。请核对CDK是否正确；若刚完成轮换，请使用新CDK。'); return null; }
+      return r.json();
+    }).then(function (d) {
+      if (!d) return;
+      err.style.display = 'none'; out.style.display = 'block';
+      document.getElementById('api').textContent = d.api;
+      document.getElementById('cmd').textContent = 'cclaude --api ' + d.api;
+    }).catch(function () { fail('网络错误，请重试。'); });
+  }
+
+  document.getElementById('go').addEventListener('click', go);
+  input.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+  document.getElementById('copy').addEventListener('click', function () {
+    navigator.clipboard.writeText(document.getElementById('cmd').textContent).then(function () {
+      var c = document.getElementById('copied');
+      c.style.display = 'inline'; setTimeout(function () { c.style.display = 'none'; }, 1500);
+    });
+  });
+})();
+</script>
+{{end}}

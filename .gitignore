@@ -13,3 +13,4 @@ deploy/.env
 /worker-agent
 /ccwadmin
 /cclaude.exe
+dist/

@@ -1,0 +1,29 @@
+{{define "content"}}
+<h1>云端 Claude Code 工作空间<br>断线不中断，本地目录实时同步</h1>
+<p class="lead">Claude Code 跑在云端服务器的 tmux 里：合上笔记本、换个网络，回来会话还在原处。
+本地项目目录与云端 workspace 双向同步，本地编辑器照常用。</p>
+
+<p>
+  <a class="btn" href="/download">下载客户端</a>
+  <a class="btn ghost" href="/connect" style="margin-left:10px">已有CDK？查询接入地址</a>
+</p>
+
+<h2>三步开始</h2>
+<ol class="steps">
+  <li>在 <a href="/download">下载页</a> 获取你所在平台的 <code>cclaude</code> 客户端</li>
+  <li>拿到管理员签发的 CDK；不知道该连哪个地址时，到 <a href="/connect">查询页</a> 用 CDK 查出 API 域名</li>
+  <li>进入本地项目目录运行：<pre><code>cd ~/my-project
+cclaude --api https://api-01.example.com   # 换成你查到的域名
+# 按提示输入CDK（不回显），即接入云端终端</code></pre></li>
+</ol>
+
+<h2>它解决什么</h2>
+<div class="grid">
+  <div class="card"><h3>断线不中断</h3><p>会话保活在云端 tmux 里；网络抖动、休眠、换设备都不打断正在运行的任务，重连即回到现场。</p></div>
+  <div class="card"><h3>本地目录双向同步</h3><p>每2秒一轮清单同步：本地改动上云，云端产出回落本地。冲突绝不静默覆盖，自动生成冲突副本。</p></div>
+  <div class="card"><h3>项目相互隔离</h3><p>每个项目独立容器、独立 workspace 与磁盘配额；CDK 只能访问自己的项目。</p></div>
+  <div class="card"><h3>内部额度闸门</h3><p>按项目计量（内部额度单位），单个项目超限会被降级限制，避免挤占同节点其他项目。</p></div>
+</div>
+
+<div class="notice">凭据类文件（<code>.env*</code>、<code>.ssh/</code> 等）与 <code>.git/</code>、<code>node_modules/</code> 默认不参与同步；符号链接不同步。</div>
+{{end}}

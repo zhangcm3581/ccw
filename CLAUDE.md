@@ -51,7 +51,8 @@ CCW_TEST_DATABASE_URL=postgres://... go test ./internal/store -v
 | `cclaude` | — | 本地CLI（Win/mac/Linux）：exchange CDK → 后台同步 + 前台终端 |
 | `control-api` | `127.0.0.1:8080` | CDK验证、签发短期令牌、额度查询、`/usage`门户、跑数据库迁移 |
 | `worker-agent` | `127.0.0.1:8081` | Docker编排、WS终端、WS同步、**用量采集**、额度主动执行；**唯一持docker.sock的进程** |
-| `ccwadmin` | — | `init-project <slug>`：建项目并打印一次性CDK |
+| `ccwadmin` | — | 节点管理CLI：`init-project`/`issue-cdk`/`rotate-cdk`/`list-cdks`/`status`（全部`--json`）、`render-compose`；强制3项目/15GiB上限 |
+| `ccw-console` | `127.0.0.1:8090` | **Console控制平面（独立主机、独立数据库）**：公开站点、下载分发、`/connect`CDK查询；管理后台与SSH引擎未实施（C2–C7+） |
 
 唯一公网入口是Caddy的443。**公开路径→后端路径是合同**（`deploy/Caddyfile`与spec §3必须同步改，否则客户端连不上）：
 
@@ -85,7 +86,7 @@ CCW_TEST_DATABASE_URL=postgres://... go test ./internal/store -v
 - 服务默认只监听回环地址；`worker-agent`持有docker.sock等同宿主机root，绝不对公网暴露。
 - 同步路径一律UTF-8 forward-slash相对路径；拒绝绝对路径、任何`..`段、NUL。`internal/sync/paths.go`的排除名单是安全边界的一部分（`.env*`/`.ssh/`/`.aws/`/`.claude/`等凭据文件必须排除）。
 - 所有时间窗口用数据库`now()`与UTC。
-- 迁移只有`internal/store/migrations/`一份源（embed），靠`schema_migrations`表保证只执行一次；**禁止在仓库别处复制第二份**。
+- **每个数据库的迁移各有唯一一份源**（Console设计§10的改写）：节点库在`internal/store/migrations/`、Console库在`internal/consolestore/migrations/`，各自embed、各靠自己库里的`schema_migrations`表保证只执行一次。两者schema无交集；**禁止同一套迁移在仓库出现两份拷贝**。
 - 用量对外一律称"内部额度单位"，**不得**标注为官方订阅百分比——内部计量只是估算，spec §10列明了系统保证与不保证的边界，措辞不得越界。
 - 版本固定：禁止`@latest`或未固定版本安装；版本记录在`deploy/versions.lock`。
 - **诚实表述**：未验证的功能不写成"已完成"；e2e里没实现的断言用`t.Skip`而不是空过——避免把"没验证"误报成"通过"。
