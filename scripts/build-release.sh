@@ -11,7 +11,12 @@ set -euo pipefail
 DIST="${DIST_DIR:-dist}"
 mkdir -p "$DIST"
 
-targets="darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64"
+# 默认编全六个目标；只需要部分平台时用 TARGETS 覆盖，例如：
+#   TARGETS="darwin/arm64 darwin/amd64 windows/amd64" VERSION=v0.1.0 ./scripts/build-release.sh
+# 没编的平台只会在 register-release 时打印一行警告，不影响发布。
+# 注意 Mac 是两个目标：arm64（M系列）与 amd64（Intel）。
+targets="${TARGETS:-}"
+[ -n "$targets" ] || targets="darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64"
 for t in $targets; do
   os="${t%/*}"; arch="${t#*/}"
   out="$DIST/cclaude_${VERSION}_${os}_${arch}"
@@ -33,7 +38,8 @@ done
   fi
 )
 
+n=$(printf '%s\n' $targets | wc -l | tr -d ' ')
 echo
-echo "完成：$DIST/ 下6个产物 + SHA256SUMS"
+echo "完成：$DIST/ 下 $n 个产物 + SHA256SUMS"
 echo "下一步（在Console主机、产物同步到CCW_DIST_DIR之后）："
 echo "  ccw-console register-release --version ${VERSION} --publish"

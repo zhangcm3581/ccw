@@ -420,11 +420,26 @@ curl -s -o /dev/null -w '%{http_code}\n' https://my-ops-panel.net/download      
 
 ## B4 发布客户端
 
-**在开发机上**交叉编译六个平台：
+**在开发机上**（＝你本地装了 Go 的机器，不是 Console 主机）交叉编译：
 
 ```bash
-make release VERSION=v0.1.0        # 输出到 dist/，含 SHA256SUMS
+make release VERSION=v0.1.0        # 默认六个平台，输出到 dist/，含 SHA256SUMS
 ```
+
+**只需要部分平台就用 `TARGETS` 指定**，没编的平台只会在登记时打印一行警告，不影响发布：
+
+```bash
+make release VERSION=v0.1.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64"
+```
+
+| 目标 | 给谁 |
+|---|---|
+| `darwin/arm64` | M 系列 Mac |
+| `darwin/amd64` | Intel Mac |
+| `windows/amd64` | Windows（arm64 的 Windows 极少，通常可略） |
+| `linux/amd64`、`linux/arm64` | Linux 用户；没有就不用编 |
+
+> **Mac 是两个目标**，别只编一个——M 系列跑不了 amd64 的包（Rosetta 只对已签名的应用生效，命令行二进制会直接报架构不符）。
 
 同步到 Console 主机并登记：
 
