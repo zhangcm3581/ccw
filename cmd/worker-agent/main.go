@@ -59,6 +59,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 用量采集是worker-agent独有的职责，配置缺失即拒绝启动：
+	// 带着空UsageRoot或零权重跑起来，采集器看上去一切正常但usage_events恒为空，
+	// 与接线前的现象无法区分。
+	if err := cfg.RequireUsage(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
 	ctx := context.Background()
 	st, err := store.New(ctx, cfg.DatabaseURL) // 内部Ping，失败即非零退出
 	if err != nil {
@@ -113,10 +121,15 @@ func main() {
 			MaxBytes: 1 << 30, AllowQuota: gate.Allow, Lock: lockFor(projectID),
 		}
 	}
-	// 同步模式：应按项目额度/磁盘状态降级为 cleanup（只许下载、删除、缩小），
-	// 当前恒为 rw——control-api 已签发 cleanup 令牌但这里不据此限制写入。
-	// 未实施，影响验收21与27，见 docs/STATUS.md 的 P1-1。
-	modeFor := func(projectID string) string { return "rw" }
+	// 同步模式：超额降级为 cleanup（只许下载、删除、缩小）。
+	// 每次接受连接都实时查库，不信任令牌里的模式——连接令牌2分钟有效且允许重连，
+	// 只看令牌会让刚超额的项目在窗口内继续上传。查询失败按超额处理（fail closed）。
+	quotaSvc := quota.Service{Reader: st}
+	modeFor := func(projectID string) string {
+		return syncModeFor(ctx, st, quotaSvc, projectID, time.Now(), func(format string, a ...any) {
+			fmt.Fprintf(os.Stderr, "worker-agent: "+format+"\n", a...)
+		})
+	}
 
 	mux := http.NewServeMux()
 	registry := terminal.NewConnRegistry()
@@ -140,7 +153,6 @@ func main() {
 	// WebSocket升级后连接被Hijack，读写deadline由terminal.Serve自行维护；
 	// 这里设ReadHeaderTimeout防slowloris。
 	// 额度主动执行（审计§9.3）：每30秒检查活跃项目，超额即关闭其全部终端连接。
-	quotaSvc := quota.Service{Reader: st}
 	go func() {
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
@@ -149,19 +161,24 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-t.C:
+				// 只遍历有活跃连接的项目——没有连接就没有东西可关。
+				// （采集必须遍历全部项目，那是另一个循环，见下方runUsageLoop。）
 				for _, pid := range registry.ActiveProjects() {
-					p, perr := st.GetProjectByID(ctx, pid)
-					if perr != nil {
-						continue
-					}
-					lim := quota.Limits{FiveHour: p.FiveHourLimit, SevenDay: p.SevenDayLimit, PoolFiveHour: 1 << 62, PoolSevenDay: 1 << 62}
-					if d, qerr := quotaSvc.Check(ctx, pid, p.AccountID, lim, time.Now()); qerr == nil && d.Over {
+					if d, qerr := checkProject(ctx, st, quotaSvc, pid, time.Now()); qerr == nil && d.Over {
 						registry.CloseProject(pid)
 					}
 				}
 			}
 		}
 	}()
+
+	// 用量采集（解P0-1）：每30秒扫一遍全部项目的会话JSONL并写usage_events。
+	// 与上面的执行循环分成两个goroutine——采集遍历全部项目、执行只遍历有连接的项目，
+	// 且采集失败不应影响"超额就关终端"这条链路。
+	collectors := newUsageCollectors(cfg.UsageRoot, cfg.UsageWeights, st, st)
+	go runUsageLoop(ctx, st, collectors, 30*time.Second, func(format string, a ...any) {
+		fmt.Fprintf(os.Stderr, "worker-agent: "+format+"\n", a...)
+	})
 
 	srv := &http.Server{
 		Addr:              cfg.AgentListenAddr,

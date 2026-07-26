@@ -50,11 +50,21 @@ services:
       CCW_TOKEN_KEY: ${CCW_TOKEN_KEY}
       CCW_WORKSPACE_ROOT: /srv/ccw
       CCW_AGENT_LISTEN_ADDR: 0.0.0.0:8081
+      # 用量采集：JSONL按项目挂在这个根下（<usage_root>/<slug>），只读。
+      CCW_USAGE_ROOT: /srv/ccw/usage
+      # 四种token折算为"内部额度单位"的权重：input,output,cache_read,cache_write。
+      # 当前取值是估算的起点，不是官方口径；跑够真实数据后校准（见用量接线计划§3.1）。
+      CCW_USAGE_WEIGHTS: ${CCW_USAGE_WEIGHTS:-1,5,1,1}
     volumes:
       # 挂docker.sock以exec项目容器；本服务因此等同宿主机高权限，不对公网暴露。
       - /var/run/docker.sock:/var/run/docker.sock
       - project-a-workspace:/srv/ccw/project-a
       - project-b-workspace:/srv/ccw/project-b
+      # 会话JSONL（用量采集的数据源）：只读挂进来，采集器只读文件、游标写PG。
+      # 缺这两行的后果是采集器安静地扫一个空目录——不报错、usage_events永远为空，
+      # 与接线前的现象完全一样，极难排查。见用量接线计划§2.2。
+      - project-a-claude-projects:/srv/ccw/usage/project-a:ro
+      - project-b-claude-projects:/srv/ccw/usage/project-b:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,0 +1,81 @@
+# CI：编译、单测、竞态、格式检查。
+#
+# 全部单测无外部依赖（Docker与数据库逻辑用假API/内存实现），因此不需要service容器；
+# 需要真实PostgreSQL的store集成测试靠CCW_TEST_DATABASE_URL开关，未设置时自动skip。
+#
+# Go版本固定为deploy/versions.lock里的值——改这里必须同时改那里（CLAUDE.md：禁止未固定版本）。
+name: ci
+
+on:
+  push:
+    branches: [main, v2]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.5' # 与 deploy/versions.lock 的 go 一致
+          cache: true
+
+      - name: gofmt
+        # gofmt -l 列出未格式化的文件；有输出即失败（CLAUDE.md：应无输出）
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "以下文件未格式化："
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      - name: test
+        run: go test ./...
+
+      - name: test -race
+        run: go test -race ./...
+
+  # store的用量写入端（幂等键、GREATEST语义、游标往返）只能对真实PostgreSQL验证：
+  # 那些行为在SQL里，假实现测不到。没有这个job，internal/store的测试会永远停在skip，
+  # 等于"没验证"被当成"通过"——正是CLAUDE.md禁止的那种误报。
+  store-integration:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16 # 与 deploy/compose.yaml 及 versions.lock 一致
+        env:
+          POSTGRES_USER: ccw
+          POSTGRES_PASSWORD: ccw-ci
+          POSTGRES_DB: ccw_test
+        options: >-
+          --health-cmd "pg_isready -U ccw"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.5'
+          cache: true
+
+      - name: store集成测试
+        env:
+          CCW_TEST_DATABASE_URL: postgres://ccw:ccw-ci@127.0.0.1:5432/ccw_test?sslmode=disable
+        # -run限定到用量相关用例；-v让skip与pass在日志里可分辨（避免skip被当成通过）
+        run: go test -v -race ./internal/store/...

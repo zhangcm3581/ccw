@@ -1,9 +1,12 @@
 // Package usage解析Claude Code会话JSONL，把token用量转成内部额度单位的事件。
 //
-// ⚠ 本包目前没有任何生产调用方：worker-agent没有起采集goroutine，
-// store里也没有usage_events的写入与usage_offsets的OffsetStore实现。
-// 因此usage_events恒为空、quota.Check恒判定未超额、额度闸门实际不触发。
-// 接线是待办的P0项，见docs/STATUS.md。
+// 生产调用方是worker-agent：cmd/worker-agent/usage.go每30秒对全部项目跑一轮Scan，
+// Sink与OffsetStore的PG实现在internal/store/usage.go。
+//
+// ⚠ 加权系数（Weights）当前处于"先记账、后校准"的第一阶段：取值是按公开定价相对
+// 量级估的起点，不是官方口径。积累足够真实数据后需按实际分布校准，
+// 见docs/superpowers/plans/2026-07-26-usage-wiring-plan.md §3.1。
+// 对外一律称"内部额度单位"，不得标注为官方订阅百分比。
 package usage
 
 import (
@@ -112,9 +115,11 @@ type Collector struct {
 	BadLines  int64 // 指标：坏行/超长行/读取错误累计，由worker暴露，不静默丢弃
 }
 
-// fileIdentity在Linux上应取dev:inode（处理轮转/重建）；退化实现取路径。
-// 生产版可在collector_linux.go以syscall.Stat_t实现，此处默认用路径。
-func fileIdentity(path string, fi os.FileInfo) string { return path }
+// fileIdentity标识"同一个文件"，游标按它持久化。
+//
+// Linux（生产）取dev:inode，见collector_linux.go：同路径被删除重建时inode变化，
+// 游标随之从0开始，不会因为沿用旧偏移而跳过新文件开头的事件。
+// 其他平台退化为路径——仅用于本机开发与测试。
 
 func (c *Collector) load(ctx context.Context, id string) (fileCursor, error) {
 	if c.Offsets == nil {

@@ -42,6 +42,18 @@ func (s *Store) WindowUsed(ctx context.Context, projectID string, since time.Tim
 	return n, err
 }
 
+// AccountPoolLimits返回账号级池的双窗口上限（内部额度单位）。
+//
+// 这是"多个项目共用一个上游账号"时的第二道闸门：项目级限额防单个项目失控，
+// 池级限额防各项目都没超限、加起来却把账号打爆。002迁移之前这两个值没有存储，
+// worker只能写死极大值，池闸门从未生效。
+func (s *Store) AccountPoolLimits(ctx context.Context, accountID string) (fiveHour, sevenDay int64, err error) {
+	err = s.Pool.QueryRow(ctx,
+		`SELECT pool_five_hour_limit, pool_seven_day_limit FROM accounts WHERE id=$1`, accountID).
+		Scan(&fiveHour, &sevenDay)
+	return fiveHour, sevenDay, err
+}
+
 func (s *Store) PoolUsed(ctx context.Context, accountID string, since time.Time) (int64, error) {
 	var n int64
 	err := s.Pool.QueryRow(ctx, `

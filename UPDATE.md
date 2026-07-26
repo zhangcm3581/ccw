@@ -47,6 +47,17 @@ git reset --hard origin/main      # 对齐 GitHub。.env 是未跟踪文件，�
 
 > 若你改过 `deploy/Caddyfile`（如切成 IP/HTTP 测试版），先备份：`cp deploy/Caddyfile deploy/Caddyfile.local`，reset 后再拷回。或直接用 `deploy/Caddyfile.http`（已在仓库）。
 
+> ⚠ **2026-07-26 之后的版本新增了一个必填变量。**`.env` 是未跟踪文件，`git reset` 不会帮你补上，而 **worker-agent 缺了它会直接拒绝启动**（这是有意的，见下）：
+>
+> ```bash
+> cd /opt/ccw/deploy
+> grep -q '^CCW_USAGE_WEIGHTS=' .env || echo 'CCW_USAGE_WEIGHTS=1,5,1,1' >> .env
+> ```
+>
+> `CCW_USAGE_ROOT` 已写在 `compose.yaml` 里，不用管。之所以宁可拒绝启动也不给默认值：带着空配置跑起来时，采集器看上去一切正常但 `usage_events` 永远为空，与没接线时的现象完全一样，极难排查。
+>
+> 本次更新还会执行一个新迁移（`002_account_pool_limits.sql`，给 `accounts` 加两列池上限），由 control-api 启动时自动跑，无需手动操作。
+
 **以后每次更新，三步：**
 
 ```bash
@@ -86,6 +97,17 @@ docker compose ps                                   # 全部 Up
 docker exec ccw-project-a claude auth status        # 仍 loggedIn: true（登录未丢）
 git -C /opt/ccw log -1 --format='当前版本: %h %s'   # 确认代码版本
 ```
+
+**首次升到含用量采集的版本时，额外确认三条**（详细步骤见 `DEPLOY.md` 第11.2节）：
+
+```bash
+docker compose logs worker-agent --tail=20 | grep -i 'usage\|config:'   # 无配置报错
+docker compose exec worker-agent ls /srv/ccw/usage/project-a            # 目录存在
+docker compose exec postgres psql -U ccw -d ccw -c \
+  "SELECT count(*) FROM usage_events;"                                  # 跑过会话后应 > 0
+```
+
+> **首轮采集会把历史 JSONL 全部入账。**已经运行一段时间的部署，升级后第一轮扫描会把过去积累的会话记录一次性写进 `usage_events`，用量数字会突然跳高。这是预期行为不是 bug——那些用量本来就消耗了真实额度，如实计入更诚实。
 
 ---
 

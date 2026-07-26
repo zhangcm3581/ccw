@@ -1,13 +1,13 @@
 # 实施状态与缺口清单
 
-**最后核对：**2026-07-26（对照分支`v2`，commit `feedb06`；P0-2改动已于`4093e3d`提交）
+**最后核对：**2026-07-26（对照分支`v2`；本次含N1+N2用量接线的改动）
 **核对方式：**通读`cmd/`与`internal/`全部Go源码 + `deploy/`编排 + 跑`go build ./...`与`go test ./...`
 
 > 实施计划`docs/superpowers/plans/2026-07-19-remote-claude-workspace-plan.md`已于2026-07-26**归档**（71个checkbox一个都没勾，且Task 13等内容已被推翻）。本文件是进度的唯一可信来源；改动代码后请同步更新。
 
 ## 一句话现状
 
-Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`全绿（约4.5k行Go）；但**用量采集链未接线、cleanup模式服务端未实施、e2e全部skip**，因此额度与配额相关的验收标准实际尚未成立。
+Task 1–13的代码都写过一遍，`go test ./...`与`-race`全绿。2026-07-26接线了用量采集与cleanup模式（N1+N2），**额度闸门在代码层面首次成为闭环**；但**全部只有单测证据、没有在真实部署上跑过**，且e2e十条断言仍是skip，因此额度相关的验收标准尚不能记为成立。
 
 ## 按任务
 
@@ -15,14 +15,14 @@ Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`�
 |---|---|---|
 | 0 | 架构阻断验证 | **部分**：只有Step 3（`docs/phase1-evidence/jsonl-semantics.md`）。Step 1双登录24小时验证未做（被共享凭据方案绕过，见`design-deviations.md`）；Step 2 tmux容器原型无记录 |
 | 1 | 骨架与配置加载 | 完成 |
-| 2 | 迁移、CDK认证、项目绑定 | 完成（`store`包本身零测试） |
+| 2 | 迁移、CDK认证、项目绑定 | 完成（`store`首批测试已补，需真实PG，CI有Postgres集成job） |
 | 3 | HMAC短期连接令牌 | 完成 |
 | 4 | 容器运行时与持久卷 | 完成（假Docker API单测；PID 1为`sleep infinity`、非root、资源上限齐全） |
 | 5 | tmux会话与WS终端 | 完成（`-it`双TTY、断开不kill session、resize/ping/pong/上限齐全） |
 | 6 | 清单同步与冲突保护 | 完成（三方判断、CAS、冲突副本、tombstone） |
 | 7 | 磁盘配额与文件索引记账 | 完成（项目级锁+预留/提交） |
-| 8 | JSONL用量采集器 | **代码完成但未接线**，见P0-1 |
-| 9 | 额度窗口与双层闸门 | 逻辑完成（5h/7d + 池双窗口），但输入恒为空，见P0-1 |
+| 8 | JSONL用量采集器 | **已接线**（2026-07-26），未真机验证，见P0-1 |
+| 9 | 额度窗口与双层闸门 | **双层均已可用**：项目级5h/7d + 账号池（002迁移补上池上限存储，此前写死`1<<62`故池闸门从未生效），未真机验证 |
 | 10 | control-api | 完成（exchange限速、cleanup模式令牌、`/usage`门户） |
 | 11 | 本地CLI | 完成（三平台编译；超额不退出、令牌走header、CDK缓存0600） |
 | 12 | 同步接线、e2e、部署 | **部分**：compose/Caddy/同步端点已接线并可跑；e2e十条断言全是`t.Skip`；反代路径合同无自动化测试；备份恢复完全没做 |
@@ -30,17 +30,23 @@ Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`�
 
 ## 缺口清单
 
-### P0-1 用量采集链断开，额度闸门空转
+### ~~P0-1 用量采集链断开，额度闸门空转~~（2026-07-26已接线，**未真机验证**）
 
-`internal/usage/collector.go`（184行，含offset持久化、半行拼接、requestId最终值语义）**没有任何文件import**：
+**已做（N1+N2，见`plans/2026-07-26-usage-wiring-plan.md`）：**
 
-- `worker-agent`里没有采集goroutine
-- `internal/store`里没有`usage_events`的INSERT，也没有`usage_offsets`表的`OffsetStore`实现
-- 加权系数`usage.Weights`只出现在测试里，生产无配置入口
+- `internal/store/usage.go`：`usage.Sink`（`ON CONFLICT ... GREATEST`幂等）与`usage.OffsetStore`的PG实现
+- `cmd/worker-agent/usage.go`：每30秒对**全部项目**（不是仅活跃项目）跑一轮采集，单项目panic隔离，目录缺失显式报错
+- `internal/config`：`CCW_USAGE_ROOT`与`CCW_USAGE_WEIGHTS`；worker启动时`RequireUsage()`硬校验，全零权重也拒绝
+- `deploy/compose.yaml`：`<slug>-claude-projects`只读挂进worker-agent——**没有这一步采集器会安静地扫空目录**
+- `internal/usage/identity_linux.go`：`fileIdentity`取dev:inode，同路径重建不再沿用旧游标
+- `002_account_pool_limits.sql`：`accounts`加池上限两列；worker不再写死`1<<62`，账号级闸门首次真正可用
+- `cmd/worker-agent/quota.go`：`modeFor`实时查额度，超额降级cleanup，**查询失败按超额处理**（fail closed）
 
-后果链：`usage_events`永远为空 → `WindowUsed`恒为0 → `quota.Check`永远`Over=false` → worker的30秒主动执行循环永远不关终端 → `/usage`门户与CLI状态栏永远显示0。
+**测试：**12条新单测（`cmd/worker-agent` 12条 + `internal/config` 4条）全绿；`internal/store`首批测试与CI的Postgres集成job覆盖幂等键与GREATEST语义。
 
-**影响验收：**12（采集无重复无遗漏）、16（半行补全）、17（同requestId语义）、20（超额关闭已连终端）。
+**未验证：**以上全部只在本机单测层面成立。**没有在真实部署上跑过**——JSONL是否确实被扫到、用量是否真的进库、超额是否真的关终端，都还没有实测证据。
+
+**仍待办：**加权系数处于"先记账、后校准"的第一阶段，取值是估算起点；跑够真实数据后必须校准，否则闸门看着已完成、实际从未拦过任何人。校准触发条件见计划§8。
 
 ### ~~P0-2 共享Claude HOME使按项目计量在原理上不成立~~（2026-07-26已解除结构性障碍）
 
@@ -50,13 +56,13 @@ Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`�
 
 **未验证：**改动只做了`docker compose config`语法校验，**没有在真实部署上跑过**——JSONL是否确实落进新卷、容器重建后ownership是否保持，都还没有实测证据。
 
-**仍不成立的部分：**端到端的按项目计量依赖P0-1（采集器接线），后者未做，所以`usage_events`仍为空。P0-2解除的只是结构性障碍，不是计量能力本身。
+**端到端计量：**采集器已于同日接线（见P0-1），归属由挂载关系保证。但**两端都缺真机证据**——结构（JSONL是否落进各自卷）与采集（是否被扫到并入库）都只有单测层面的成立。
 
-### P1-1 cleanup模式服务端未实施
+### ~~P1-1 cleanup模式服务端未实施~~（2026-07-26已实施，**未真机验证**）
 
-`cmd/worker-agent/main.go`的`modeFor`恒返回`"rw"`（代码里就标着`TODO(12-4)`）。`control-api`已经会在超额时签发cleanup模式的sync令牌，但worker不据此降级，超额状态下仍接受上传。
+`modeFor`现在每次接受连接都实时查库（`cmd/worker-agent/quota.go`的`syncModeFor`），超额返回`cleanup`。**不信任令牌里的模式**——连接令牌2分钟有效且允许重连，只看令牌会让刚超额的项目在窗口内继续上传。**查询失败返回`cleanup`而不是`rw`**：额度状态未知时按可能已超额处理。
 
-**影响验收：**21（超额仍能下载/删除/缩小）、27（cleanup端到端可达）。
+**未验证：**验收21（超额仍能下载/删除/缩小）与27（cleanup端到端可达）需要真实部署，尚未跑过。
 
 ### P1-2 路径安全未达到生产边界
 
@@ -76,7 +82,7 @@ Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`�
 - **备份/恢复完全没有**：无脚本、无演练runbook（验收24）
 - **反代路径合同无自动化测试**（验收25）：`deploy/Caddyfile`有路由，但没有逐条命中的集成测试
 - **云端watcher不是spec §8的形态**：现在是客户端请求manifest时顺带`reconcileCloud`全量扫目录，不是fsnotify + 500ms静默窗口 + 前后双哈希入账；`fsnotify`根本不在`go.mod`里。大目录下每2秒一轮全量扫描开销明显
-- **无CI**（没有`.github/`）、`internal/store`零测试
+- ~~无CI~~：已加`.github/workflows/ci.yml`（build/vet/test/-race/gofmt + 一个带Postgres service的store集成job）。~~`internal/store`零测试~~：已补首批，需真实PG，本机无库时skip
 - **三平台真实冒烟未做**（spec §13明确"交叉编译通过不算数"）
 
 ### P3 工具与管理面
@@ -109,8 +115,9 @@ Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`�
 
 ## 建议推进顺序
 
-1. ~~定`claude-shared`的去留（P0-2）~~——已于2026-07-26解决：JSONL按项目分卷，凭据仍共享（`4093e3d`）。**但未在真实部署上验证**
-2. 接线用量采集（P0-1）：worker起collector goroutine + `usage_events`/`usage_offsets`的PG实现 + 权重配置化。**注意：设计§12.1把N1标为依赖C13，该依赖已随`4093e3d`解除，现在即可开工**
-3. `modeFor`查额度（P1-1）：改动量小，但直接影响两条验收
+1. ~~定`claude-shared`的去留（P0-2）~~——已于2026-07-26解决（`4093e3d`）
+2. ~~接线用量采集（P0-1）~~与~~`modeFor`查额度（P1-1）~~——已于2026-07-26完成，**但只有单测证据**
+3. **在真实部署上验证N1+N2**（当前最高优先级）：确认JSONL被扫到、`usage_events`非空、超额真的关终端与降级cleanup。**在此之前不得把额度闸门称为"可用"**
 4. `openat2`路径解析（P1-2）：Linux生产必需
-5. 补CI与digest固定，然后在真实VPS上把e2e十条skip逐条填实（P1-3）
+5. 镜像digest固定，然后在真实VPS上把e2e十条skip逐条填实（P1-3）
+6. 加权系数校准（计划§8的开放问题1）——数据够了之后做，否则闸门永远不会真正拦人

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `ccw`（remote-claude-workspace）是**远程Claude Code工作空间**：一台Linux VPS上跑多个隔离的Claude Code容器（单节点上限3个），本地用`cclaude` CLI凭CDK登录，附着云端tmux会话（断线不中断），本地目录与云端workspace双向同步，并对每个项目施加磁盘配额与5小时/7天内部额度闸门。
 
-**使用形态（2026-07-26定）：**一台节点只授权一次Claude账号，该节点上的全部项目共用这一个上游账号的额度；项目可以全归管理员自己，也可以分配给他人使用。**因此内部额度闸门不是锦上添花而是必需品**——它是唯一能阻止某个项目吃光全机额度的机制，而它当前空转（见「当前已知缺口」第1条）。此前文档写的"仅供本人两个项目使用"已作废，见`docs/design-deviations.md`的D6。
+**使用形态（2026-07-26定）：**一台节点只授权一次Claude账号，该节点上的全部项目共用这一个上游账号的额度；项目可以全归管理员自己，也可以分配给他人使用。**因此内部额度闸门不是锦上添花而是必需品**——它是唯一能阻止某个项目吃光全机额度的机制。它已于2026-07-26接线，但未经真机验证且尚未校准（见「当前已知缺口」第1、2条）。此前文档写的"仅供本人两个项目使用"已作废，见`docs/design-deviations.md`的D6。
 
 个人版、单管理员。**非目标**：多租户（多个互不信任的付费客户共用一套控制面与计费）、LLM Gateway计费代理、分块增量同步、Kubernetes、浏览器终端。
 
@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. `docs/superpowers/specs/2026-07-19-remote-claude-workspace-audit-corrections.md`
 3. `docs/superpowers/specs/2026-07-19-remote-claude-workspace-design.md`（Design Spec v3，已批准）
 4. `docs/superpowers/specs/2026-07-25-ccw-console-fleet-design.md`（v2 Console层设计，未实施；含产品硬性上限§7.6）
-5. `docs/superpowers/plans/2026-07-26-usage-wiring-plan.md`（N1+N2用量接线与闸门闭环，未实施，**下一个开工项**）
+5. `docs/superpowers/plans/2026-07-26-usage-wiring-plan.md`（N1+N2用量接线与闸门闭环，**代码已实施、未真机验证**）
 6. `docs/superpowers/plans/2026-07-26-compose-render-plan.md`（C13 compose渲染，未实施）
 
 `docs/superpowers/plans/2026-07-19-remote-claude-workspace-plan.md`（Task 0–13）已于2026-07-26**归档**——保留为历史记录，**不再作为实施依据**，其中Task 13等内容已被明确推翻。文件顶部有归档横幅。
@@ -35,6 +35,9 @@ go test ./...                                     # 全部单测（无外部依�
 go test -race ./...                               # 提交前跑一次
 go test ./internal/sync -run TestSafeRelPath -v   # 跑单个测试
 gofmt -l .                                        # 格式检查（应无输出）
+
+# store的用量写入端（幂等键、GREATEST语义）需要真实PG，否则自动skip；CI里有Postgres job
+CCW_TEST_DATABASE_URL=postgres://... go test ./internal/store -v
 ```
 
 部署与运维在`DEPLOY.md`（全新VPS一键部署）与`UPDATE.md`（更新已部署实例）。本机跑服务需要PostgreSQL与`CCW_TOKEN_KEY`等环境变量，见`deploy/.env.example`；`config.Load`对缺失变量一律硬失败，没有默认值可依赖。
@@ -47,7 +50,7 @@ gofmt -l .                                        # 格式检查（应无输出�
 |---|---|---|
 | `cclaude` | — | 本地CLI（Win/mac/Linux）：exchange CDK → 后台同步 + 前台终端 |
 | `control-api` | `127.0.0.1:8080` | CDK验证、签发短期令牌、额度查询、`/usage`门户、跑数据库迁移 |
-| `worker-agent` | `127.0.0.1:8081` | Docker编排、WS终端、WS同步、额度主动执行；**唯一持docker.sock的进程** |
+| `worker-agent` | `127.0.0.1:8081` | Docker编排、WS终端、WS同步、**用量采集**、额度主动执行；**唯一持docker.sock的进程** |
 | `ccwadmin` | — | `init-project <slug>`：建项目并打印一次性CDK |
 
 唯一公网入口是Caddy的443。**公开路径→后端路径是合同**（`deploy/Caddyfile`与spec §3必须同步改，否则客户端连不上）：
@@ -67,7 +70,9 @@ gofmt -l .                                        # 格式检查（应无输出�
 
 **同步：**客户端每2秒连一次`/ws/sync`，拉服务端manifest → 与本地`.cclaude/index.json`基线做**三方判断**（`base_revision` + `base_sha256` + `current_sha256` + 本地状态）→ 上传走CAS（`base_revision`不匹配即conflict，绝不静默覆盖，冲突时生成`.conflict-remote-<UTC>`副本）。服务端在`HandleManifest`时顺带`reconcileCloud`，把容器内Claude直接改的文件扫进`file_index`并分配新revision。
 
-**额度：**`internal/usage`解析Claude HOME里的会话JSONL → `usage_events`（唯一键`(project_id, source_event_id)`去重）→ `quota.Service`同时算项目5h/7d与账号级池的双窗口安全余量 → 超额时worker的30秒循环关闭该项目全部终端连接，同步降级为cleanup（只许下载/删除/缩小）。**注意：采集器目前未接线**，见`docs/STATUS.md`。
+**额度：**`internal/usage`解析Claude HOME里的会话JSONL → `usage_events`（唯一键`(project_id, source_event_id)`去重）→ `quota.Service`同时算项目5h/7d与账号级池的双窗口安全余量 → 超额时worker的30秒循环关闭该项目全部终端连接，同步降级为cleanup（只许下载/删除/缩小）。
+
+采集链路（2026-07-26接线）：`cmd/worker-agent/usage.go`每30秒遍历**全部项目**（不是仅有活跃连接的项目——tmux断开后仍在跑，用量照常产生）→ `internal/store/usage.go`的`Insert`按`ON CONFLICT ... GREATEST`幂等入库 → 游标存`usage_offsets`，Sink失败时不前进、下轮重扫。**JSONL目录必须由compose只读挂进worker-agent**（`<slug>-claude-projects` → `<CCW_USAGE_ROOT>/<slug>`），漏挂的表现是"采集器在跑、日志正常、`usage_events`永远为空"。
 
 ## 不可违反的规则
 
@@ -96,8 +101,8 @@ gofmt -l .                                        # 格式检查（应无输出�
 
 完整清单在`docs/STATUS.md`。最需要注意的三条：
 
-1. `internal/usage`的采集器写完了但**没有任何文件import它**，`usage_events`永远为空 → 所有额度闸门实际不触发。
-2. `cmd/worker-agent/main.go`的`modeFor`恒返回`"rw"`，超额时不降级为cleanup —— `control-api`已经会签发cleanup模式令牌，worker不据此限制写入。
+1. **额度闸门已接线但未经真机验证**（2026-07-26的N1+N2）：采集器已接进worker-agent、`modeFor`已实时查额度、账号池上限已有存储。**全部只有单测证据**——JSONL是否真被扫到、超额是否真的关终端，都还没在真实部署上跑过。改这条链路时先读`plans/2026-07-26-usage-wiring-plan.md`。
+2. **加权系数处于"先记账、后校准"第一阶段**：`CCW_USAGE_WEIGHTS`当前是估算起点、限额刻意设得很宽，闸门**实际不会拦人**。跑够真实数据后必须校准，否则它会永远停在"看着完成、从未生效"。
 3. **文件系统硬配额已决定不做**（`docs/STATUS.md`的T1）：`deploy/quota-setup.sh`创建的卷名与compose实际使用的不是同一个，执行了也不生效且无报错——**不要执行它，也不要把它接进任何流程**。后果是容器内直接写盘可撑爆宿主机磁盘，这是明示的取舍。
 
 会话JSONL已于`4093e3d`按项目分卷（`<slug>-claude-projects`），凭据仍共享以保证「一台机器只授权一次」；这是对spec §6的偏离，详见`docs/design-deviations.md`的D1。**该改动尚未在真实部署上验证。**

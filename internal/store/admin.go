@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	"ccw/internal/auth"
+	"ccw/internal/project"
 )
 
 // EnsureAccount返回同名account的id，不存在则创建。
@@ -29,6 +30,31 @@ func (s *Store) CreateProject(ctx context.Context, accountID, slug, containerNam
 		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		id, accountID, slug, containerName, diskLimit, fiveHour, sevenDay)
 	return id, err
+}
+
+// ListProjects返回全部项目，按slug排序。
+//
+// 用量采集必须遍历全部项目，而不是只遍历有活跃终端连接的项目：tmux会话在客户端
+// 断开后继续运行，Claude照常消耗额度。只采活跃项目会丢掉无人值守期间的用量，
+// 而闸门恰恰要在那时生效。见用量接线计划§2.3。
+func (s *Store) ListProjects(ctx context.Context) ([]project.Project, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT id, account_id, slug, container_name, disk_limit_bytes, five_hour_limit, seven_day_limit
+		FROM projects ORDER BY slug`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []project.Project
+	for rows.Next() {
+		var p project.Project
+		if err := rows.Scan(&p.ID, &p.AccountID, &p.Slug, &p.ContainerName,
+			&p.DiskLimit, &p.FiveHourLimit, &p.SevenDayLimit); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // CreateCDK为项目签发一张新CDK，返回一次性显示的明文；库中只存Argon2id哈希。
