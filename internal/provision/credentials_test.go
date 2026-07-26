@@ -3,6 +3,7 @@ package provision
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -16,6 +17,11 @@ type fakeRunner struct {
 	cmds    []string
 	results map[string]sshexec.Result // 前缀匹配
 	err     error
+}
+
+func (f *fakeRunner) RunStdin(_ context.Context, cmd string, in io.Reader) (sshexec.Result, error) {
+	io.Copy(io.Discard, in)
+	return f.Run(context.Background(), cmd)
 }
 
 func (f *fakeRunner) Run(_ context.Context, cmd string) (sshexec.Result, error) {

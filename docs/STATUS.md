@@ -107,11 +107,13 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
 - **C7 流水线引擎**：precheck跳过、失败即停（后续保持pending）、断点续跑、记账失败即中止、步骤panic隔离。11条引擎单测 + 接真实PG跑"失败→续跑→成功"（A9在真实库上成立）
 - **C6 凭据生命周期**：ed25519生成→注入authorized_keys（追加不覆盖、幂等）→**用新私钥重新拨号验证**→才加密落库；密码只活在调用栈里，不落库不进日志（有测试守卫）
 - **C8 DNS**：Provider接口 + manual实现（双解析器交叉校验）+ 子域名分配器（序号单调递增、永不回收、保留名单）+ CAA预检（用x/net的dnsmessage自实现，标准库无CAA支持）
-- **C11 bootstrap 11步**：probe（发行版白名单、磁盘核算）→harden→install-docker→dns-allocate→push-artifacts（sha256 precheck）→render-env（**密钥节点本地生成**）→compose-up→cert-wait→healthcheck→init-projects→disk-guard。硬顺序dns-allocate在compose-up之前有测试守卫；**CDK明文只经回调一次、绝不进日志**（有测试守卫）
+- **C11 bootstrap 12步**：probe（发行版白名单、磁盘核算）→harden→install-docker→dns-allocate→push-source（**推完整源码包**，节点靠它构建镜像）→push-artifacts（渲染的compose.yaml，sha256 precheck）→render-env（**密钥节点本地生成**）→compose-up→cert-wait→healthcheck→init-projects→disk-guard。硬顺序dns-allocate在compose-up之前有测试守卫；**CDK明文只经回调一次、绝不进日志**（有测试守卫）
 - **C15 后台UI**：机队总览、新增节点向导、节点详情（含待添加的DNS记录提示）、运行详情与**SSE实时日志**；跨节点访问运行会404；日志落盘+推流前再脱敏一次；慢订阅者丢行不阻塞流水线
 - **本机端到端冒烟**：向导提交→纳管goroutine启动→日志落盘→节点入库→超上限当场拒绝，全部实测
 
 **未实施**：C9（Route 53自动化）、C10（证书预算记账）、C16（域名管理UI）、C17（后台CDK签发/轮换、超卖水位）、C19（审计页与节点巡检）、C22（真实VPS纳管验收）、C21剩余（备份恢复演练）、解除纳管流水线。
+
+**2026-07-26代码审查修掉的两个阻断项**：①此前只推4个编排文件到扁平目录，而compose用`context: ..`+`dockerfile: deploy/X`且Dockerfile从Go源码构建——compose-up必然失败；现改为推完整源码包（`push-source`步骤+`scripts/build-node-src.sh`+Console镜像内置），缺源码包时机队管理直接不启用。②`LogHub`的cancel会close通道，与Append并发时`panic: send on closed channel`（已复现），触发路径是部署中关掉日志页；现改为只注销不close，并给运行详情页加只读的`History()`。同批还修了：Console日志目录未挂卷（重建即丢）、install-docker注释声称配了data-root实际没有、凭据交接不进provision_steps、CSRF每次渲染换token导致多标签403、CAA查询固定query ID、日志缓冲map无上限。
 
 **未验证（诚实表述）**：**纳管全流程从未在真实VPS上跑过**——A7（全新Ubuntu走完bootstrap）、A8（浏览器实时日志）、A9（断点续跑）、A25（host key变更中止）都只有单测与本机冒烟证据。`node_projects`/`cdk_issues`仍无写入方，`/connect`因此仍查不到数据。「继续部署」的参数存在Console内存里，重启后失效。
 

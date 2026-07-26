@@ -38,17 +38,16 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      - name: nodefiles与deploy/一致
-        # cmd/ccw-console/nodefiles/是deploy/下同名文件的副本（go:embed不能引用包外路径）。
-        # 不一致会让Console部署出的节点与手动部署的节点行为不同，且极难发现。
+      - name: 节点源码包可生成且含构建所需文件
+        # 纳管时这个包被推到节点、节点靠它构建镜像。少了任何一样，
+        # compose-up会在真机上才失败——本地就把它挡住。
         run: |
-          for f in Caddyfile Dockerfile.claude Dockerfile.control-api Dockerfile.worker-agent; do
-            if ! diff -q "deploy/$f" "cmd/ccw-console/nodefiles/$f" > /dev/null; then
-              echo "deploy/$f 与 cmd/ccw-console/nodefiles/$f 不一致——跑 scripts/sync-nodefiles.sh"
-              exit 1
-            fi
+          ./scripts/build-node-src.sh /tmp/node-src.tar.gz
+          for f in ./go.mod ./deploy/Dockerfile.control-api ./deploy/Caddyfile \
+                   ./cmd/control-api/main.go ./internal/store/migrations/001_initial.sql; do
+            tar tzf /tmp/node-src.tar.gz | grep -qx "$f" || { echo "源码包缺 $f"; exit 1; }
           done
-          echo "nodefiles一致"
+          echo "节点源码包完整"
 
       - name: build
         run: go build ./...

@@ -28,7 +28,9 @@ type fakeServer struct {
 	password string
 	// handler返回stdout/stderr/exitCode；nil时回显命令本身。
 	handler func(cmd string) (string, string, int)
-	wg      sync.WaitGroup
+	// handlerStdin在设置时先读完stdin再返回结果（测RunStdin）。
+	handlerStdin func(cmd string, stdin []byte) (string, string, int)
+	wg           sync.WaitGroup
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -112,7 +114,11 @@ func (s *fakeServer) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		req.Reply(true, nil)
 
 		out, errOut, code := payload.Command, "", 0
-		if s.handler != nil {
+		switch {
+		case s.handlerStdin != nil:
+			in, _ := io.ReadAll(ch)
+			out, errOut, code = s.handlerStdin(payload.Command, in)
+		case s.handler != nil:
 			out, errOut, code = s.handler(payload.Command)
 		}
 		io.WriteString(ch, out)
@@ -329,5 +335,46 @@ func TestNoInsecureHostKeyCallback(t *testing.T) {
 				return true
 			})
 		}
+	}
+}
+
+// RunStdin：内容经stdin而不是命令行——命令行在节点上对所有用户可见（ps aux）。
+func TestRunStdinFeedsInput(t *testing.T) {
+	s := newFakeServer(t)
+	var got string
+	s.handlerStdin = func(cmd string, stdin []byte) (string, string, int) {
+		got = string(stdin)
+		return "received " + fmt.Sprint(len(stdin)), "", 0
+	}
+	c, err := dialTest(t, s, "", ssh.Password(s.password))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	payload := strings.Repeat("SOURCE-TARBALL-BYTES", 1000) // 20KB，远超命令行安全长度
+	res, err := c.RunStdin(context.Background(), "tar xz", strings.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != payload {
+		t.Errorf("stdin内容不完整：收到%d字节，期望%d", len(got), len(payload))
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("exit=%d", res.ExitCode)
+	}
+}
+
+func TestRunStdinPropagatesExitCode(t *testing.T) {
+	s := newFakeServer(t)
+	s.handlerStdin = func(string, []byte) (string, string, int) { return "", "tar: bad archive\n", 2 }
+	c, _ := dialTest(t, s, "", ssh.Password(s.password))
+	defer c.Close()
+	res, err := c.RunStdin(context.Background(), "tar xz", strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 2 || !strings.Contains(res.Stderr, "bad archive") {
+		t.Errorf("got %+v", res)
 	}
 }

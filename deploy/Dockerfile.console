@@ -11,7 +11,18 @@ RUN CGO_ENABLED=0 go build -trimpath \
       -ldflags "-s -w -X main.buildVersion=${CONSOLE_VERSION}" \
       -o /out/ccw-console ./cmd/ccw-console
 
+# 节点源码包：纳管时推送到节点，节点靠它构建自己的镜像。
+# **必须包含完整Go源码**——节点的compose.yaml用 `context: ..` +
+# `dockerfile: deploy/Dockerfile.X`，而各Dockerfile都 `COPY . .` 后从源码构建。
+# 排除.git与文档：节点不需要，且能显著减小传输量。
+RUN tar czf /out/node-src.tar.gz \
+      --exclude=./.git --exclude=./docs --exclude=./dist \
+      --exclude=./.github --exclude=./tests \
+      -C /src . \
+ && ls -lh /out/node-src.tar.gz
+
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/ccw-console /ccw-console
+COPY --from=build /out/node-src.tar.gz /node-src.tar.gz
 EXPOSE 8090
 ENTRYPOINT ["/ccw-console"]

@@ -98,7 +98,13 @@ func newFleetServer(t *testing.T) (*Server, *fakeFleetStore, *http.Cookie, *http
 	code, _ := totp.Code(secret, time.Now())
 	form, cookies := loginForm(t, s, "admin", testPassword, code)
 	w := postForm(t, s, "/admin/login", form, cookies, "203.0.113.5")
+	// CSRF token在会话内复用，登录响应不重发——沿用登录页那次发的。
 	var sess, csrf *http.Cookie
+	for _, c := range cookies {
+		if c.Name == csrfCookie {
+			csrf = c
+		}
+	}
 	for _, c := range w.Result().Cookies() {
 		switch c.Name {
 		case sessionCookie:
@@ -107,8 +113,8 @@ func newFleetServer(t *testing.T) (*Server, *fakeFleetStore, *http.Cookie, *http
 			csrf = c
 		}
 	}
-	if sess == nil {
-		t.Fatal("登录失败")
+	if sess == nil || csrf == nil {
+		t.Fatal("登录失败或未取得CSRF token")
 	}
 	return s, fs, sess, csrf
 }

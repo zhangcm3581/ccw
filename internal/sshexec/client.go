@@ -117,6 +117,65 @@ type Result struct {
 // （如cat大文件）不该把Console的内存吃光。超出部分丢弃并在末尾标注。
 const maxCapture = 1 << 20 // 1 MiB
 
+// RunStdin执行命令并把input喂给它的stdin。
+//
+// 用stdin而不是把内容拼进命令行：命令行在节点上对**所有用户**可见（`ps aux`），
+// 且长度有上限。推送源码包这类大内容必须走这里。
+//
+// 输出同样在源头脱敏；退出码非0不算错误（与Run一致）。
+func (c *Client) RunStdin(ctx context.Context, cmd string, input io.Reader) (Result, error) {
+	sess, err := c.conn.NewSession()
+	if err != nil {
+		return Result{}, fmt.Errorf("sshexec: new session: %w", err)
+	}
+	defer sess.Close()
+
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		return Result{}, err
+	}
+	var out, errOut strings.Builder
+	sess.Stdout = &limitedWriter{w: &out, limit: maxCapture}
+	sess.Stderr = &limitedWriter{w: &errOut, limit: maxCapture}
+
+	if err := sess.Start(cmd); err != nil {
+		stdin.Close()
+		return Result{}, fmt.Errorf("sshexec: start: %w", err)
+	}
+	copyErr := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(stdin, input)
+		// 必须关stdin：远端命令（tar/base64）要靠EOF知道输入结束，否则双方互等。
+		stdin.Close()
+		copyErr <- err
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- sess.Wait() }()
+
+	select {
+	case <-ctx.Done():
+		sess.Signal(ssh.SIGKILL)
+		sess.Close()
+		return Result{}, ctx.Err()
+	case werr := <-done:
+		if cerr := <-copyErr; cerr != nil {
+			return Result{}, fmt.Errorf("sshexec: 写入stdin失败: %w", cerr)
+		}
+		res := Result{Stdout: redact.String(out.String()), Stderr: redact.String(errOut.String())}
+		var ee *ssh.ExitError
+		switch {
+		case werr == nil:
+			return res, nil
+		case errors.As(werr, &ee):
+			res.ExitCode = ee.ExitStatus()
+			return res, nil
+		default:
+			return res, fmt.Errorf("sshexec: wait: %w", werr)
+		}
+	}
+}
+
 // Run执行一条命令并捕获输出。
 //
 // **输出在这里就过脱敏**（§5.4）：调用方拿到的Stdout/Stderr已经是可以安全落盘

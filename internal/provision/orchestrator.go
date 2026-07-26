@@ -28,10 +28,12 @@ type Orchestrator struct {
 	Log    func(runID, line string)
 	Finish func(runID string)
 
-	// Artifacts返回要推送到节点的编排文件（compose.yaml等）。
+	// Artifacts返回要写入节点的编排文件（路径相对RepoRoot；目前只有deploy/compose.yaml）。
 	Artifacts func(slugs []string) (map[string]string, error)
-	// ArtifactDir与ComposeProjectName是节点上的落点。
-	ArtifactDir        string
+	// SourceTar返回仓库源码包；节点靠它才有Dockerfile与Go源码可构建。
+	SourceTar func() ([]byte, error)
+	// RepoRoot与ComposeProjectName是节点上的落点。
+	RepoRoot           string
 	ComposeProjectName string
 	// StepTimeout是单步上限（compose-up要构建镜像，需要足够长）。
 	StepTimeout time.Duration
@@ -131,10 +133,20 @@ func (o *Orchestrator) runBootstrap(ctx context.Context, runID string, in Bootst
 	}
 	defer cli.Close()
 
-	// ---- harden：凭据交接（仅在尚无托管密钥时执行）----
-	if _, _, _, cerr := o.Store.NodeCredential(ctx, in.NodeID); errors.Is(cerr, consolestore.ErrNotFound) {
-		log("生成托管密钥并注入节点")
-		hr, err := Harden(ctx, cli, o.Dial, target, in.Password, log)
+	// ---- 凭据交接：包成闭包交给流水线的harden步骤执行 ----
+	// 放进流水线而不是在这里直接跑，是为了让它进provision_steps记账：
+	// 失败时运行详情页能看到是harden挂的，而不是只留一行日志。
+	hardenFn := func(hctx context.Context, hlog pipeline.Logf) error {
+		_, _, _, cerr := o.Store.NodeCredential(hctx, in.NodeID)
+		if cerr == nil {
+			hlog("已有托管密钥，跳过凭据交接")
+			return nil
+		}
+		if !errors.Is(cerr, consolestore.ErrNotFound) {
+			return cerr
+		}
+		hlog("生成托管密钥并注入节点")
+		hr, err := Harden(hctx, cli, o.Dial, target, in.Password, hlog)
 		if err != nil {
 			return err
 		}
@@ -143,14 +155,11 @@ func (o *Orchestrator) runBootstrap(ctx context.Context, runID string, in Bootst
 			return err
 		}
 		// **验证通过之后才落库**（§9）
-		if err := o.Store.SaveNodeCredential(ctx, in.NodeID, enc, nonce, hr.KeyPair.AuthorizedKey); err != nil {
+		if err := o.Store.SaveNodeCredential(hctx, in.NodeID, enc, nonce, hr.KeyPair.AuthorizedKey); err != nil {
 			return err
 		}
-		log("托管密钥已加密保存；首登密码不再需要，也从未落库")
-	} else if cerr != nil {
-		return cerr
-	} else {
-		log("已有托管密钥，跳过凭据交接")
+		hlog("托管密钥已加密保存；首登密码不再需要，也从未落库")
+		return nil
 	}
 
 	// ---- 域名分配（幂等：已分配则复用）----
@@ -171,8 +180,9 @@ func (o *Orchestrator) runBootstrap(ctx context.Context, runID string, in Bootst
 	deps := Deps{
 		Exec: cli, Sudo: sudo, DNS: o.DNS, Zone: zone, FQDN: fqdn,
 		PublicIP: node.Host, Slugs: in.Slugs,
-		ArtifactDir: o.ArtifactDir, Artifacts: artifacts,
+		RepoRoot: o.RepoRoot, Artifacts: artifacts, SourceTar: o.SourceTar,
 		ComposeProjectName: o.ComposeProjectName,
+		Harden:             hardenFn,
 		OnHostFacts: func(osRelease, arch string) {
 			o.Store.SetNodeFacts(ctx, in.NodeID, osRelease, arch)
 		},

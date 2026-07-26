@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	stdsync "sync"
 	"time"
@@ -207,8 +208,15 @@ func (a *Auth) setCookie(w http.ResponseWriter, name, value string, maxAge int) 
 	})
 }
 
-// issueCSRF为登录页与管理页发放CSRF token（同时写cookie与返回值供模板渲染）。
-func (a *Auth) issueCSRF(w http.ResponseWriter) string {
+// issueCSRF为登录页与管理页提供CSRF token。
+//
+// **已有合法token时复用，不每次渲染都换**：换了会让此前打开的其它标签页
+// 手里的表单立刻作废，提交时莫名其妙得到403。token是随机的、随会话过期，
+// 在会话生命周期内复用不降低防护（double-submit防的是跨站方读不到cookie）。
+func (a *Auth) issueCSRF(w http.ResponseWriter, r *http.Request) string {
+	if c, err := r.Cookie(csrfCookie); err == nil && csrfTokenRe.MatchString(c.Value) {
+		return c.Value
+	}
 	tok, err := randomToken()
 	if err != nil {
 		return ""
@@ -216,6 +224,9 @@ func (a *Auth) issueCSRF(w http.ResponseWriter) string {
 	a.setCookie(w, csrfCookie, tok, int(sessionAbsolute.Seconds()))
 	return tok
 }
+
+// csrfTokenRe校验cookie里的token形态，避免把客户端塞进来的任意值当成自己发的。
+var csrfTokenRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // login执行密码+TOTP双因子校验。
 //

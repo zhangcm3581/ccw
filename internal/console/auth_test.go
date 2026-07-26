@@ -299,7 +299,13 @@ func TestLogoutRevokesSession(t *testing.T) {
 	form, cookies := loginForm(t, s, "admin", testPassword, code)
 	w := postForm(t, s, "/admin/login", form, cookies, "203.0.113.5")
 
+	// CSRF token在会话内复用，登录响应不会重发——沿用登录页那次发的。
 	var sess, csrf *http.Cookie
+	for _, c := range cookies {
+		if c.Name == csrfCookie {
+			csrf = c
+		}
+	}
 	for _, c := range w.Result().Cookies() {
 		switch c.Name {
 		case sessionCookie:
@@ -307,6 +313,9 @@ func TestLogoutRevokesSession(t *testing.T) {
 		case csrfCookie:
 			csrf = c
 		}
+	}
+	if csrf == nil {
+		t.Fatal("应有CSRF cookie可用")
 	}
 	out := postForm(t, s, "/admin/logout", url.Values{"csrf_token": {csrf.Value}},
 		[]*http.Cookie{sess, csrf}, "203.0.113.5")
@@ -349,5 +358,64 @@ func TestNoCredentialEchoInHTML(t *testing.T) {
 	body := w.Body.String()
 	if strings.Contains(body, testPassword) || strings.Contains(body, "123456") {
 		t.Error("失败页面不得回显密码或验证码")
+	}
+}
+
+// CSRF token在会话内复用：否则打开第二个标签页会让第一个页面的表单作废（403）。
+func TestCSRFTokenReusedAcrossPages(t *testing.T) {
+	s, _, secret := newAuthServer(t)
+	code, _ := totp.Code(secret, time.Now())
+	form, cookies := loginForm(t, s, "admin", testPassword, code)
+	w := postForm(t, s, "/admin/login", form, cookies, "203.0.113.5")
+
+	var sess *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookie {
+			sess = c
+		}
+	}
+	var csrf *http.Cookie
+	for _, c := range cookies {
+		if c.Name == csrfCookie {
+			csrf = c
+		}
+	}
+
+	// 连开两次总览页：都不应重发新的CSRF cookie，页面里的token与既有cookie一致。
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("GET", "/admin", nil)
+		req.Header.Set("X-Forwarded-For", "203.0.113.5")
+		req.AddCookie(sess)
+		req.AddCookie(csrf)
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("第%d次访问总览失败: %d", i+1, rec.Code)
+		}
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == csrfCookie && c.Value != csrf.Value {
+				t.Fatalf("第%d次渲染换掉了CSRF token——会让其它标签页的表单作废", i+1)
+			}
+		}
+		if !strings.Contains(rec.Body.String(), csrf.Value) {
+			t.Errorf("页面里的csrf_token应与cookie一致")
+		}
+	}
+
+	// 伪造的cookie值不被采信：必须是本服务发的形态。
+	req := httptest.NewRequest("GET", "/admin", nil)
+	req.Header.Set("X-Forwarded-For", "203.0.113.5")
+	req.AddCookie(sess)
+	req.AddCookie(&http.Cookie{Name: csrfCookie, Value: "not-a-real-token"})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	fresh := false
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == csrfCookie && csrfTokenRe.MatchString(c.Value) {
+			fresh = true
+		}
+	}
+	if !fresh {
+		t.Error("形态不合法的CSRF cookie应被换成新发的")
 	}
 }

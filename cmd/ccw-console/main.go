@@ -13,8 +13,12 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"time"
@@ -93,20 +97,29 @@ func serve() {
 		}
 		// 机队管理：SSH执行层 + 流水线 + 日志广播。与Auth同批启用——
 		// 它的每个入口都在requireAdmin之后。
-		hub := console.NewLogHub(cfg.LogDir)
-		srv.Fleet = &console.Fleet{
-			Store: st, Logs: hub,
-			Orchestrator: &provision.Orchestrator{
-				Store: st, Box: box, DNS: &dns.Manual{},
-				Dial:               provision.DefaultDialer(20 * time.Second),
-				Log:                hub.Append,
-				Finish:             hub.Finish,
-				Artifacts:          nodeArtifacts,
-				ArtifactDir:        "/srv/ccw",
-				ComposeProjectName: "ccw",
-			},
+		// 节点源码包必须存在才启用机队管理：节点靠它构建镜像，
+		// 缺了它纳管会一路跑到compose-up才失败，白白改了目标机器的状态。
+		srcTar, srcErr := loadNodeSource(cfg.NodeSrcPath)
+		if srcErr != nil {
+			logf("机队管理未启用：%v", srcErr)
+		} else {
+			hub := console.NewLogHub(cfg.LogDir)
+			srv.Fleet = &console.Fleet{
+				Store: st, Logs: hub,
+				Orchestrator: &provision.Orchestrator{
+					Store: st, Box: box, DNS: &dns.Manual{},
+					Dial:               provision.DefaultDialer(20 * time.Second),
+					Log:                hub.Append,
+					Finish:             hub.Finish,
+					Artifacts:          nodeArtifacts,
+					SourceTar:          func() ([]byte, error) { return srcTar, nil },
+					RepoRoot:           "/srv/ccw",
+					ComposeProjectName: "ccw",
+				},
+			}
+			logf("机队管理已启用（源码包%d KiB，日志目录%s）", len(srcTar)/1024, cfg.LogDir)
 		}
-		logf("管理后台与机队管理已启用（白名单%d条，日志目录%s）", len(nets), cfg.LogDir)
+		logf("管理后台已启用（白名单%d条）", len(nets))
 	} else {
 		// 说清楚为什么没开，否则运维会以为后台坏了。
 		logf("管理后台未启用：需要同时设置CCW_SECRET_KEY与CCW_ADMIN_ALLOWLIST；/admin路由未注册")
@@ -154,25 +167,55 @@ func mustInit() (config.ConsoleConfig, *consolestore.Store) {
 	return cfg, st
 }
 
-// nodeArtifacts渲染要推送到节点的编排文件。
+// nodeArtifacts渲染要覆盖写入节点的编排文件（路径相对RepoRoot）。
 //
-// compose.yaml由internal/deploy渲染——**与ccwadmin render-compose是同一个渲染器**，
-// 因此Console部署出来的编排与管理员手动渲染的字节级一致（模板契约I1–I8同样成立）。
-// Caddyfile与Dockerfile用仓库内的版本（go:embed）。
+// 只有compose.yaml：它要按本节点的项目列表渲染。Caddyfile与三个Dockerfile
+// 来自源码包，不在这里重复推送——两处各存一份迟早漂移。
+//
+// 渲染器与`ccwadmin render-compose`是同一个，因此Console部署出来的编排与
+// 管理员手动渲染的字节级一致（模板契约I1–I8同样成立）。
 func nodeArtifacts(slugs []string) (map[string]string, error) {
 	composeYAML, err := deploy.RenderCompose(deploy.ComposeInput{Projects: slugs})
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]string{"compose.yaml": composeYAML}
-	for _, name := range []string{
-		"Caddyfile", "Dockerfile.claude", "Dockerfile.control-api", "Dockerfile.worker-agent",
-	} {
-		b, err := nodeFilesFS.ReadFile("nodefiles/" + name)
-		if err != nil {
-			return nil, fmt.Errorf("读取内置%s失败: %w", name, err)
-		}
-		out[name] = string(b)
+	return map[string]string{"deploy/compose.yaml": composeYAML}, nil
+}
+
+// loadNodeSource读取节点源码包并做最小完整性校验——
+// 缺关键文件时立刻说清楚，而不是等纳管跑到构建那一步才炸在别人的机器上。
+func loadNodeSource(path string) ([]byte, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("读不到节点源码包%s（生成：scripts/build-node-src.sh，或用deploy/Dockerfile.console构建的镜像）: %w", path, err)
 	}
-	return out, nil
+	gz, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		return nil, fmt.Errorf("节点源码包不是合法gzip: %w", err)
+	}
+	defer gz.Close()
+	need := map[string]bool{
+		"./go.mod": false, "./deploy/Dockerfile.control-api": false,
+		"./deploy/Dockerfile.worker-agent": false, "./deploy/Dockerfile.claude": false,
+		"./deploy/Caddyfile": false,
+	}
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("节点源码包无法读取: %w", err)
+		}
+		if _, ok := need[h.Name]; ok {
+			need[h.Name] = true
+		}
+	}
+	for name, found := range need {
+		if !found {
+			return nil, fmt.Errorf("节点源码包缺%s——节点将无法构建镜像", name)
+		}
+	}
+	return b, nil
 }

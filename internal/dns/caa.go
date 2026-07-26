@@ -2,6 +2,8 @@ package dns
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -44,8 +46,15 @@ func LookupCAA(ctx context.Context, resolver, domain string) ([]CAARecord, error
 	}
 	// dnsmessage没有TypeCAA常量，直接写IANA的类型号257；
 	// 应答里它会成为UnknownResource，由parseCAARdata按RFC 8659解RDATA。
+	// 随机query ID并在应答里校验：固定ID的UDP查询容易被离路径攻击者抢答，
+	// 伪造一条"允许LE"的CAA会让预检失去意义。
+	var idBuf [2]byte
+	if _, err := rand.Read(idBuf[:]); err != nil {
+		return nil, err
+	}
+	queryID := binary.BigEndian.Uint16(idBuf[:])
 	msg := dnsmessage.Message{
-		Header: dnsmessage.Header{ID: 0, RecursionDesired: true},
+		Header: dnsmessage.Header{ID: queryID, RecursionDesired: true},
 		Questions: []dnsmessage.Question{{
 			Name:  name,
 			Type:  typeCAA,
@@ -78,6 +87,14 @@ func LookupCAA(ctx context.Context, resolver, domain string) ([]CAARecord, error
 	var resp dnsmessage.Message
 	if err := resp.Unpack(buf[:n]); err != nil {
 		return nil, fmt.Errorf("dns: 应答无法解析: %w", err)
+	}
+	// ID与question都要对上：只看ID仍可能收到别的查询的应答。
+	if resp.Header.ID != queryID || !resp.Header.Response {
+		return nil, fmt.Errorf("dns: 应答与查询不匹配（可能是伪造或串包）")
+	}
+	if len(resp.Questions) != 1 || resp.Questions[0].Type != typeCAA ||
+		!strings.EqualFold(resp.Questions[0].Name.String(), name.String()) {
+		return nil, fmt.Errorf("dns: 应答的question段与查询不符")
 	}
 	if resp.Header.RCode != dnsmessage.RCodeSuccess {
 		if resp.Header.RCode == dnsmessage.RCodeNameError {

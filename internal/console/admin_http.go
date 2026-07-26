@@ -29,7 +29,7 @@ func (s *Server) adminLoginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin", http.StatusFound)
 		return
 	}
-	s.render(w, "admin_login.html", map[string]any{"CSRF": s.Auth.issueCSRF(w)})
+	s.render(w, "admin_login.html", map[string]any{"CSRF": s.Auth.issueCSRF(w, r)})
 }
 
 func (s *Server) adminLoginSubmit(w http.ResponseWriter, r *http.Request) {
@@ -79,13 +79,13 @@ func (s *Server) adminLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Auth.setCookie(w, sessionCookie, token, int(sessionAbsolute.Seconds()))
-	s.Auth.issueCSRF(w)
+	s.Auth.issueCSRF(w, r)
 	http.Redirect(w, r, "/admin", http.StatusFound)
 }
 
 func (s *Server) renderLoginError(w http.ResponseWriter, r *http.Request, msg string) {
 	w.WriteHeader(http.StatusUnauthorized)
-	s.render(w, "admin_login.html", map[string]any{"CSRF": s.Auth.issueCSRF(w), "Error": msg})
+	s.render(w, "admin_login.html", map[string]any{"CSRF": s.Auth.issueCSRF(w, r), "Error": msg})
 }
 
 func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
@@ -106,5 +106,5 @@ func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request, sess consol
 }
 
 func (s *Server) adminHome(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
-	s.render(w, "admin_home.html", map[string]any{"Session": sess, "CSRF": s.Auth.issueCSRF(w)})
+	s.render(w, "admin_home.html", map[string]any{"Session": sess, "CSRF": s.Auth.issueCSRF(w, r)})
 }

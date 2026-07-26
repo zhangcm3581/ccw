@@ -3,6 +3,7 @@ package provision
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 // scriptRunner按命令内容匹配返回预设结果（前缀或子串）。
 type scriptRunner struct {
 	cmds  []string
+	stdin [][]byte
 	rules []rule
 }
 
@@ -24,6 +26,19 @@ type rule struct {
 
 func (s *scriptRunner) Run(_ context.Context, cmd string) (sshexec.Result, error) {
 	s.cmds = append(s.cmds, cmd)
+	for _, r := range s.rules {
+		if strings.Contains(cmd, r.contains) {
+			return r.res, nil
+		}
+	}
+	return sshexec.Result{}, nil
+}
+
+// RunStdin记录命令与stdin内容（推送源码包用）。
+func (s *scriptRunner) RunStdin(_ context.Context, cmd string, in io.Reader) (sshexec.Result, error) {
+	s.cmds = append(s.cmds, cmd)
+	b, _ := io.ReadAll(in)
+	s.stdin = append(s.stdin, b)
 	for _, r := range s.rules {
 		if strings.Contains(cmd, r.contains) {
 			return r.res, nil
@@ -60,8 +75,9 @@ func baseDeps(r *scriptRunner, d *fakeDNS) Deps {
 		FQDN:               "api-01.example.com",
 		PublicIP:           "203.0.113.7",
 		Slugs:              []string{"project-a"},
-		ArtifactDir:        "/srv/ccw",
-		Artifacts:          map[string]string{"compose.yaml": "services: {}\n"},
+		RepoRoot:           "/srv/ccw",
+		Artifacts:          map[string]string{"deploy/compose.yaml": "services: {}\n"},
+		SourceTar:          func() ([]byte, error) { return []byte("FAKE-TARBALL"), nil },
 		ComposeProjectName: "ccw",
 	}
 }
@@ -180,7 +196,7 @@ func TestDNSAllocateBlocksUntilPropagated(t *testing.T) {
 	}
 }
 
-// push-artifacts：sha256全匹配则跳过；否则用heredoc写入。
+// push-artifacts：sha256全匹配则跳过；否则用heredoc写入到<RepoRoot>/deploy/compose.yaml。
 func TestPushArtifactsPrecheckAndWrite(t *testing.T) {
 	content := "services: {}\n"
 	want := sha256Hex(content)
@@ -314,5 +330,107 @@ func TestParseInitProjectJSON(t *testing.T) {
 	}
 	if _, _, created := parseInitProjectJSON(`{"created": false}`); created {
 		t.Error("created=false应解析为false")
+	}
+}
+
+// push-source是compose-up能成立的前提：节点必须有完整源码树才能构建镜像。
+// 这条测试守住那个曾经缺失的前提——只推几个编排文件时compose-up必然失败。
+func TestPushSourceUploadsTarballViaStdin(t *testing.T) {
+	r := &scriptRunner{}
+	d := baseDeps(r, &fakeDNS{})
+	step := stepByName(BootstrapSteps(d), "push-source")
+	if err := step.Run(context.Background(), noLog); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.stdin) != 1 || string(r.stdin[0]) != "FAKE-TARBALL" {
+		t.Fatalf("源码包应经stdin推送（命令行在节点上人人可见），got %v", r.stdin)
+	}
+	cmds := r.joined()
+	if !strings.Contains(cmds, "tar xzf - -C '/srv/ccw'") {
+		t.Errorf("应解包到RepoRoot:\n%s", cmds)
+	}
+	// 内容绝不能出现在命令行里
+	if strings.Contains(cmds, "FAKE-TARBALL") {
+		t.Error("源码包内容不得拼进命令行（ps aux对所有用户可见）")
+	}
+}
+
+// precheck靠sha标记文件：未变则跳过整个上传。
+func TestPushSourcePrecheckSkipsWhenUnchanged(t *testing.T) {
+	tarball := []byte("FAKE-TARBALL")
+	r := &scriptRunner{rules: []rule{
+		{contains: ".ccw-src-sha256", res: sshexec.Result{Stdout: sha256HexBytes(tarball) + "\n"}},
+	}}
+	step := stepByName(BootstrapSteps(baseDeps(r, &fakeDNS{})), "push-source")
+	ok, err := step.Precheck(context.Background(), noLog)
+	if err != nil || !ok {
+		t.Errorf("sha一致应跳过: ok=%v err=%v", ok, err)
+	}
+
+	r2 := &scriptRunner{rules: []rule{
+		{contains: ".ccw-src-sha256", res: sshexec.Result{Stdout: "stale\n"}},
+	}}
+	step2 := stepByName(BootstrapSteps(baseDeps(r2, &fakeDNS{})), "push-source")
+	if ok, _ := step2.Precheck(context.Background(), noLog); ok {
+		t.Error("sha不一致不应跳过")
+	}
+}
+
+// 没有源码包时明确失败：这是compose-up的前提，不能沉默跳过。
+func TestPushSourceFailsWithoutTarball(t *testing.T) {
+	d := baseDeps(&scriptRunner{}, &fakeDNS{})
+	d.SourceTar = nil
+	err := stepByName(BootstrapSteps(d), "push-source").Run(context.Background(), noLog)
+	if err == nil || !strings.Contains(err.Error(), "源码包") {
+		t.Fatalf("缺源码包应明确失败，got %v", err)
+	}
+}
+
+// compose-up必须在<RepoRoot>/deploy下执行——渲染出的compose.yaml用
+// `context: ..`，工作目录错了build context就指向错的地方。
+func TestComposeUpRunsInDeployDir(t *testing.T) {
+	r := &scriptRunner{}
+	if err := stepByName(BootstrapSteps(baseDeps(r, &fakeDNS{})), "compose-up").Run(context.Background(), noLog); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.joined(), "cd '/srv/ccw/deploy' &&") {
+		t.Errorf("compose-up应在deploy目录执行:\n%s", r.joined())
+	}
+}
+
+// push-source必须排在compose-up之前，且在dns-allocate之后
+// （DNS阻断时不该已经把源码推上去——那没意义，但更重要的是顺序别乱）。
+func TestPushSourceBeforeComposeUp(t *testing.T) {
+	steps := BootstrapSteps(baseDeps(&scriptRunner{}, &fakeDNS{}))
+	idx := map[string]int{}
+	for i, s := range steps {
+		idx[s.Name] = i
+	}
+	if idx["push-source"] > idx["compose-up"] {
+		t.Error("push-source必须在compose-up之前——否则节点上没有源码可构建")
+	}
+	if idx["push-source"] > idx["push-artifacts"] {
+		t.Error("push-source必须在push-artifacts之前——compose.yaml要覆盖解包出来的那份")
+	}
+}
+
+// harden现在是流水线步骤：凭据交接失败会被记进provision_steps，
+// 而不是只留一行日志（此前它跑在流水线之外）。
+func TestHardenIsAPipelineStep(t *testing.T) {
+	r := &scriptRunner{}
+	d := baseDeps(r, &fakeDNS{})
+	called := false
+	d.Harden = func(context.Context, pipeline.Logf) error { called = true; return nil }
+	if err := stepByName(BootstrapSteps(d), "harden").Run(context.Background(), noLog); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("harden步骤应执行凭据交接")
+	}
+
+	d.Harden = func(context.Context, pipeline.Logf) error { return errors.New("公钥注入失败") }
+	err := stepByName(BootstrapSteps(d), "harden").Run(context.Background(), noLog)
+	if err == nil || !strings.Contains(err.Error(), "公钥注入失败") {
+		t.Fatalf("凭据交接失败应让harden步骤失败（从而被记账），got %v", err)
 	}
 }

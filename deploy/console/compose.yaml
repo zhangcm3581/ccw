@@ -41,10 +41,14 @@ services:
       # 白名单在应用层独立复核，不只依赖下面Caddy的remote_ip匹配（设计§8.3）。
       CCW_SECRET_KEY: "${CCW_SECRET_KEY:-}"
       CCW_ADMIN_ALLOWLIST: "${CCW_ADMIN_ALLOWLIST:-}"
+      CCW_LOG_DIR: /var/lib/ccw-console/logs
     volumes:
       # 客户端产物：把 make release 的输出同步到宿主机这个目录即可。
       # 只读——Console只发文件，不写；登记入库走 register-release 子命令。
       - ${CONSOLE_DIST_DIR:-/srv/ccw-console/dist}:/srv/dist:ro
+      # 流水线运行日志：**必须挂到宿主机**，否则 up -d 重建容器就全丢，
+      # 而部署失败后恰恰要靠它复盘。目录需预先 mkdir -p 并可被容器内nonroot(65532)写。
+      - ${CONSOLE_LOG_DIR:-/var/lib/ccw-console/logs}:/var/lib/ccw-console/logs
     depends_on:
       postgres:
         condition: service_healthy

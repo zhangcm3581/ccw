@@ -108,13 +108,13 @@ func (s *Server) adminNodes(w http.ResponseWriter, r *http.Request, sess console
 		rows = append(rows, s.nodeRow(r.Context(), n))
 	}
 	s.render(w, "admin_nodes.html", map[string]any{
-		"Nodes": rows, "Zones": zones, "CSRF": s.Auth.issueCSRF(w),
+		"Nodes": rows, "Zones": zones, "CSRF": s.Auth.issueCSRF(w, r),
 	})
 }
 
 func (s *Server) adminNodeNew(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
 	zones, _ := s.Fleet.Store.ListZones(r.Context())
-	s.render(w, "admin_node_new.html", map[string]any{"Zones": zones, "CSRF": s.Auth.issueCSRF(w)})
+	s.render(w, "admin_node_new.html", map[string]any{"Zones": zones, "CSRF": s.Auth.issueCSRF(w, r)})
 }
 
 func (s *Server) adminNodeCreate(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
@@ -123,7 +123,7 @@ func (s *Server) adminNodeCreate(w http.ResponseWriter, r *http.Request, sess co
 		zones, _ := s.Fleet.Store.ListZones(ctx)
 		w.WriteHeader(http.StatusBadRequest)
 		s.render(w, "admin_node_new.html", map[string]any{
-			"Zones": zones, "CSRF": s.Auth.issueCSRF(w), "Error": msg,
+			"Zones": zones, "CSRF": s.Auth.issueCSRF(w, r), "Error": msg,
 		})
 	}
 
@@ -131,7 +131,10 @@ func (s *Server) adminNodeCreate(w http.ResponseWriter, r *http.Request, sess co
 	host := strings.TrimSpace(r.PostFormValue("host"))
 	user := strings.TrimSpace(r.PostFormValue("ssh_user"))
 	password := r.PostFormValue("password")
-	// 密码用完即弃：不写进任何结构体字段、不落库、不进日志（§8.4）。
+	// 密码用完即弃（§8.4）：**永不落库、永不进日志**。
+	// 它会被复制进BootstrapInput交给纳管goroutine（凭据交接需要它），
+	// 那个结构体是瞬时的、随goroutine结束一起回收；下面的ZeroString只清本函数
+	// 这一份副本——Go的字符串不可变，无法真正擦除内存，这是尽力而为不是保证。
 	defer provision.ZeroString(&password)
 
 	port := 22
@@ -242,7 +245,7 @@ func (s *Server) adminNodeDetail(w http.ResponseWriter, r *http.Request, sess co
 		"FQDN": row.FQDN, "LastSeen": row.LastSeen, "Runs": rrs,
 		"HasCredential": cerr == nil,
 		"CanResume":     node.Status != "provisioning",
-		"CSRF":          s.Auth.issueCSRF(w),
+		"CSRF":          s.Auth.issueCSRF(w, r),
 	}
 	if derr == nil && d.RecordState == "pending" {
 		data["DomainPending"] = true
@@ -294,11 +297,9 @@ func (s *Server) adminRunDetail(w http.ResponseWriter, r *http.Request, sess con
 		http.NotFound(w, r) // 防止用别的节点ID拼URL看到不属于它的运行
 		return
 	}
-	history, ch, cancel := s.Fleet.Logs.Subscribe(run.ID)
-	cancel() // 只取历史，不订阅
-	_ = ch
 	s.render(w, "admin_run.html", map[string]any{
-		"Run": run, "NodeID": node.ID, "NodeName": node.Name, "History": history,
+		"Run": run, "NodeID": node.ID, "NodeName": node.Name,
+		"History": s.Fleet.Logs.History(run.ID),
 	})
 }
 
@@ -339,10 +340,7 @@ func (s *Server) adminRunStream(w http.ResponseWriter, r *http.Request, sess con
 		select {
 		case <-r.Context().Done():
 			return
-		case line, open := <-ch:
-			if !open {
-				return
-			}
+		case line := <-ch:
 			if line == doneMarker {
 				writeSSE(w, "done", "")
 				flusher.Flush()

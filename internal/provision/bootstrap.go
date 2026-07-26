@@ -35,12 +35,24 @@ type Deps struct {
 	PublicIP string
 	// Slugs是初始项目列表（最多3个，产品规则由ccwadmin再次强制）。
 	Slugs []string
-	// ArtifactDir是节点上存放编排文件的目录。
-	ArtifactDir string
-	// Artifacts是要上传的文件：相对文件名 → 内容。
+
+	// RepoRoot是节点上解开源码包的根目录（＝仓库根的等价物）。
+	// 编排文件在<RepoRoot>/deploy下，与仓库布局一致——**这是硬要求**：
+	// 渲染出的compose.yaml用`context: ..` + `dockerfile: deploy/Dockerfile.X`，
+	// 且各Dockerfile都`COPY . .`后从Go源码构建，节点上必须有完整源码树。
+	RepoRoot string
+	// SourceTar是仓库源码的tar.gz。由Console镜像内置（见deploy/Dockerfile.console），
+	// 经SSH的stdin推送——不走命令行，那在节点上对所有用户可见（ps aux）。
+	SourceTar func() ([]byte, error)
+	// Artifacts是解包后要覆盖写入的文件：相对RepoRoot的路径 → 内容。
+	// 目前只有deploy/compose.yaml（按本节点的项目列表渲染）。
 	Artifacts map[string]string
 	// ComposeProjectName供docker compose -p使用，保持与已有部署一致。
 	ComposeProjectName string
+	// Harden执行凭据交接（生成/注入/验证托管密钥）。为nil表示已完成或无需执行。
+	// 放进Deps是为了让它成为**流水线的一个步骤**、进provision_steps记账，
+	// 而不是在流水线之外悄悄跑（失败时步骤表里看不到任何记录）。
+	Harden func(ctx context.Context, log pipeline.Logf) error
 	// OnCDK在init-projects回收到CDK明文时回调。**明文只经过这里一次**，
 	// 由调用方转发到浏览器后即丢弃，绝不入Console库（§8.4）。
 	OnCDK func(slug, cdk, publicID string)
@@ -64,6 +76,7 @@ func BootstrapSteps(d Deps) []pipeline.Step {
 		stepHarden(d),
 		stepInstallDocker(d),
 		stepDNSAllocate(d),
+		stepPushSource(d),
 		stepPushArtifacts(d),
 		stepRenderEnv(d),
 		stepComposeUp(d),
@@ -73,6 +86,9 @@ func BootstrapSteps(d Deps) []pipeline.Step {
 		stepDiskGuard(d),
 	}
 }
+
+// deployDir是节点上编排文件所在目录（＝仓库的deploy/）。
+func (d Deps) deployDir() string { return d.RepoRoot + "/deploy" }
 
 // run是步骤内执行命令的简写：非0退出码转成带退出码的错误。
 func run(ctx context.Context, d Deps, cmd string) (string, error) {
@@ -145,17 +161,20 @@ func stepProbe(d Deps) pipeline.Step {
 	}
 }
 
-// 2) harden：注入托管公钥并验证（凭据交接的实际动作在Harden里，见credentials.go）。
-// 本步骤由调用方通过Deps注入的闭包完成——它需要拨号能力与信封加密，
-// 属于编排层职责，因此BootstrapSteps只留一个占位说明。
+// 2) harden：凭据交接（生成/注入/验证托管密钥）+ 防火墙放行。
+//
+// 凭据交接的实现在credentials.go的Harden里（它需要拨号能力与信封加密，属于编排层），
+// 经Deps.Harden注入。**放在流水线内而不是流水线外**：失败时步骤表里能看到
+// 是harden挂的，而不是只留一行日志；成功后也进provision_steps，续跑时可跳过。
 func stepHarden(d Deps) pipeline.Step {
 	return pipeline.Step{
 		Name: "harden",
-		Precheck: func(ctx context.Context, log pipeline.Logf) (bool, error) {
-			// 防火墙放行：ufw存在才处理，不存在视为无需处理（云厂商安全组另配）。
-			return false, nil
-		},
 		Run: func(ctx context.Context, log pipeline.Logf) error {
+			if d.Harden != nil {
+				if err := d.Harden(ctx, log); err != nil {
+					return err
+				}
+			}
 			// 防火墙：只在ufw已启用时放行必要端口，不主动启用防火墙——
 			// 在远程机器上启用防火墙有把自己关在门外的风险。
 			if ok(ctx, d, "command -v ufw >/dev/null 2>&1") {
@@ -177,7 +196,12 @@ func stepHarden(d Deps) pipeline.Step {
 	}
 }
 
-// 3) install-docker：装Docker CE与compose插件，并把data-root指向独立分区（N4）。
+// 3) install-docker：装Docker CE与compose插件。
+//
+// **不配置data-root指向独立分区**（设计§12.1的N4第1项）：那需要目标机器上确实
+// 有第二块盘/分区，本流水线不做这个假设，也不替管理员决定磁盘布局。
+// 现状由disk-guard步骤如实报告，STATUS.md记为N4未实施——
+// 不在这里写一句"已配置"了事。
 func stepInstallDocker(d Deps) pipeline.Step {
 	return pipeline.Step{
 		Name: "install-docker",
@@ -224,16 +248,82 @@ func stepDNSAllocate(d Deps) pipeline.Step {
 	}
 }
 
-// 5) push-artifacts：上传compose.yaml/Caddyfile/Dockerfile等。
-// precheck比对sha256，全部匹配则跳过（§5.3）。
+// 5) push-source：把仓库源码解到节点的RepoRoot。
+//
+// **这一步是compose-up能成立的前提**：渲染出的compose.yaml用
+// `context: ..` + `dockerfile: deploy/Dockerfile.X`，而三个Dockerfile都
+// `COPY . .`后从Go源码构建二进制——节点上必须有完整的源码树，
+// 只推几个编排文件是起不来的。
+//
+// 传输走SSH的stdin（RunStdin），不把内容拼进命令行——命令行在节点上
+// 对所有用户可见（ps aux），且有长度上限。
+// precheck比对源码包的sha256标记文件，未变则跳过。
+func stepPushSource(d Deps) pipeline.Step {
+	const shaMarker = "/.ccw-src-sha256"
+	return pipeline.Step{
+		Name: "push-source",
+		Precheck: func(ctx context.Context, log pipeline.Logf) (bool, error) {
+			if d.SourceTar == nil {
+				return false, nil
+			}
+			tar, err := d.SourceTar()
+			if err != nil {
+				return false, err
+			}
+			res, err := d.Exec.Run(ctx, "cat "+shellQuote(d.RepoRoot+shaMarker)+" 2>/dev/null")
+			if err != nil {
+				return false, err
+			}
+			return strings.TrimSpace(res.Stdout) == sha256HexBytes(tar), nil
+		},
+		Run: func(ctx context.Context, log pipeline.Logf) error {
+			if d.SourceTar == nil {
+				return fmt.Errorf("未提供源码包：节点无法构建镜像（检查Console镜像是否内置了node-src.tar.gz）")
+			}
+			tar, err := d.SourceTar()
+			if err != nil {
+				return err
+			}
+			// 目录归属给当前用户：后续步骤（写.env、docker compose）都以该用户执行。
+			if _, err := run(ctx, d, d.Sudo+"mkdir -p "+shellQuote(d.RepoRoot)+
+				" && "+d.Sudo+"chown -R $(id -u):$(id -g) "+shellQuote(d.RepoRoot)); err != nil {
+				return err
+			}
+			// --overwrite保证重跑时用新版本覆盖；不删已有文件（.env在deploy/下，必须保留）。
+			cmd := fmt.Sprintf("tar xzf - -C %s --overwrite", shellQuote(d.RepoRoot))
+			res, err := d.Exec.RunStdin(ctx, cmd, bytesReader(tar))
+			if err != nil {
+				return err
+			}
+			if res.ExitCode != 0 {
+				return &pipeline.ExitError{Code: res.ExitCode,
+					Err: fmt.Errorf("解包源码失败: %s", firstLine(res.Stderr))}
+			}
+			if _, err := run(ctx, d, fmt.Sprintf("printf %%s %s > %s",
+				shellQuote(sha256HexBytes(tar)), shellQuote(d.RepoRoot+shaMarker))); err != nil {
+				return err
+			}
+			log("源码已推送并解包到 %s（%d KiB）", d.RepoRoot, len(tar)/1024)
+			return nil
+		},
+	}
+}
+
+// 6) push-artifacts：把按本节点项目列表渲染的compose.yaml覆盖进deploy/。
+//
+// 其余编排文件（Caddyfile、三个Dockerfile）来自源码包，不在这里重复推送——
+// 两处各存一份迟早漂移。
 func stepPushArtifacts(d Deps) pipeline.Step {
 	return pipeline.Step{
 		Name: "push-artifacts",
 		Precheck: func(ctx context.Context, log pipeline.Logf) (bool, error) {
+			if len(d.Artifacts) == 0 {
+				return false, nil
+			}
 			for name, content := range d.Artifacts {
 				want := sha256Hex(content)
 				out, err := d.Exec.Run(ctx, fmt.Sprintf("sha256sum %s 2>/dev/null | cut -d' ' -f1",
-					shellQuote(d.ArtifactDir+"/"+name)))
+					shellQuote(d.RepoRoot+"/"+name)))
 				if err != nil {
 					return false, err
 				}
@@ -241,35 +331,32 @@ func stepPushArtifacts(d Deps) pipeline.Step {
 					return false, nil
 				}
 			}
-			return len(d.Artifacts) > 0, nil
+			return true, nil
 		},
 		Run: func(ctx context.Context, log pipeline.Logf) error {
-			if _, err := run(ctx, d, d.Sudo+"mkdir -p "+shellQuote(d.ArtifactDir)+
-				" && "+d.Sudo+"chown -R $(id -u):$(id -g) "+shellQuote(d.ArtifactDir)); err != nil {
-				return err
-			}
 			for _, name := range sortedKeys(d.Artifacts) {
 				content := d.Artifacts[name]
-				path := d.ArtifactDir + "/" + name
+				path := d.RepoRoot + "/" + name
 				// 用heredoc写文件：内容里可能有引号与变量，'EOF'（带引号）禁止展开。
+				// 分隔符取一个不可能出现在YAML里的串。
 				cmd := fmt.Sprintf("mkdir -p %s && cat > %s <<'CCWEOF'\n%s\nCCWEOF",
 					shellQuote(dirOf(path)), shellQuote(path), content)
 				if _, err := run(ctx, d, cmd); err != nil {
-					return fmt.Errorf("上传%s失败: %w", name, err)
+					return fmt.Errorf("写入%s失败: %w", name, err)
 				}
-				log("已上传 %s", name)
+				log("已写入 %s", name)
 			}
 			return nil
 		},
 	}
 }
 
-// 6) render-env：**在节点本地生成**密钥并写.env（0600）。
+// 7) render-env：**在节点本地生成**密钥并写.env（0600）。
 //
 // 关键约束（§5.3）：POSTGRES_PASSWORD与CCW_TOKEN_KEY用节点上的openssl生成，
 // 明文从不经过Console。这样Console库泄露不等于节点令牌泄露。
 func stepRenderEnv(d Deps) pipeline.Step {
-	envPath := d.ArtifactDir + "/.env"
+	envPath := d.deployDir() + "/.env"
 	return pipeline.Step{
 		Name: "render-env",
 		Precheck: func(ctx context.Context, log pipeline.Logf) (bool, error) {
@@ -302,14 +389,14 @@ chmod 600 "$ENV"`, shellQuote(envPath), shellQuote(d.FQDN))
 	}
 }
 
-// 7) compose-up：起栈。
+// 8) compose-up：起栈。
 func stepComposeUp(d Deps) pipeline.Step {
 	return pipeline.Step{
 		Name: "compose-up",
 		Run: func(ctx context.Context, log pipeline.Logf) error {
 			log("构建镜像并启动（首次需要几分钟）")
 			_, err := run(ctx, d, fmt.Sprintf("cd %s && %sdocker compose -p %s up -d --build",
-				shellQuote(d.ArtifactDir), d.Sudo, shellQuote(d.ComposeProjectName)))
+				shellQuote(d.deployDir()), d.Sudo, shellQuote(d.ComposeProjectName)))
 			if err != nil {
 				return err
 			}
@@ -322,7 +409,7 @@ func stepComposeUp(d Deps) pipeline.Step {
 	}
 }
 
-// 8) cert-wait：轮询443握手直到证书就绪。
+// 9) cert-wait：轮询443握手直到证书就绪。
 func stepCertWait(d Deps) pipeline.Step {
 	return pipeline.Step{
 		Name: "cert-wait",
@@ -343,13 +430,13 @@ exit 1`, shellQuote(d.FQDN), shellQuote(d.FQDN))
 	}
 }
 
-// 9) healthcheck：容器healthy + API可达。
+// 10) healthcheck：容器healthy + API可达。
 func stepHealthcheck(d Deps) pipeline.Step {
 	return pipeline.Step{
 		Name: "healthcheck",
 		Run: func(ctx context.Context, log pipeline.Logf) error {
 			out, err := run(ctx, d, fmt.Sprintf("cd %s && %sdocker compose -p %s ps --format '{{.Service}} {{.State}}'",
-				shellQuote(d.ArtifactDir), d.Sudo, shellQuote(d.ComposeProjectName)))
+				shellQuote(d.deployDir()), d.Sudo, shellQuote(d.ComposeProjectName)))
 			if err != nil {
 				return err
 			}
@@ -371,7 +458,7 @@ func stepHealthcheck(d Deps) pipeline.Step {
 	}
 }
 
-// 10) init-projects：建项目并回收CDK明文。
+// 11) init-projects：建项目并回收CDK明文。
 //
 // 幂等：ccwadmin init-project对已存在的slug返回现有信息且**不签发新CDK**，
 // 因此重跑不会产生多余的CDK。
@@ -382,7 +469,7 @@ func stepInitProjects(d Deps) pipeline.Step {
 			for _, slug := range d.Slugs {
 				out, err := run(ctx, d, fmt.Sprintf(
 					"cd %s && %sdocker compose -p %s run --rm --entrypoint /ccwadmin control-api init-project --slug %s --json",
-					shellQuote(d.ArtifactDir), d.Sudo, shellQuote(d.ComposeProjectName), shellQuote(slug)))
+					shellQuote(d.deployDir()), d.Sudo, shellQuote(d.ComposeProjectName), shellQuote(slug)))
 				if err != nil {
 					return fmt.Errorf("建项目%s失败: %w", slug, err)
 				}
@@ -402,7 +489,7 @@ func stepInitProjects(d Deps) pipeline.Step {
 	}
 }
 
-// 11) disk-guard：校验Docker data-root与Postgres数据位置（N4）。
+// 12) disk-guard：校验Docker data-root与Postgres数据位置（N4）。
 //
 // 注意N4的闸门含义与其它步骤不同：完成后**同机项目之间的磁盘互相影响依然存在**，
 // 它只把后果从"整机死亡且救不回来"降到"一起降级、机器可救"（§12.3）。
@@ -418,8 +505,10 @@ func stepDiskGuard(d Deps) pipeline.Step {
 			lines := strings.Split(strings.TrimSpace(out), "\n")
 			if len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "/var/lib/docker") {
 				// 不是失败——只是把已知取舍如实说清楚（不得表述为"已隔离"）。
-				log("提示：data-root仍在根分区。客户在容器内写盘可撑爆该分区并影响同机全部项目；" +
-					"这是当前的已接受取舍（设计§12.1的N4），要收敛请把data-root指向独立盘。")
+				// 本流水线不自动改data-root：那需要机器上真有第二块盘，
+				// 且磁盘布局该由管理员决定（设计§12.1的N4第1项，未实施）。
+				log("提示：data-root仍在根分区（N4的独立分区未配置）。项目在容器内写盘可撑爆该分区" +
+					"并影响同机全部项目；这是当前的已接受取舍，要收敛需手动把data-root指向独立盘。")
 			}
 			return nil
 		},

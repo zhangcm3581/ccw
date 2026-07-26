@@ -29,6 +29,12 @@ cd deploy/console
 cp .env.example .env
 ```
 
+```bash
+# 数据目录：数据库、产物、流水线日志（都在Docker data-root之外）
+sudo mkdir -p /var/lib/ccw-console/pgdata /var/lib/ccw-console/logs /srv/ccw-console/dist
+sudo chown 65532:65532 /var/lib/ccw-console/logs   # 容器内以nonroot运行
+```
+
 编辑 `.env`：填两个域名、管理白名单IP（**你自己的出口IP**）、强数据库密码，以及 `CCW_SECRET_KEY`（`openssl rand -hex 32`，**单独备份**）。
 
 ## 3. 启动
@@ -123,9 +129,15 @@ docker compose run --rm -it --entrypoint /ccw-console ccw-console create-admin -
 
 ```
 probe（发行版白名单、磁盘）→ harden（托管密钥、防火墙）→ install-docker
-→ dns-allocate → push-artifacts → render-env（密钥在节点本地生成）
-→ compose-up → cert-wait → healthcheck → init-projects → disk-guard
+→ dns-allocate → push-source（推源码包）→ push-artifacts（渲染的compose.yaml）
+→ render-env（密钥在节点本地生成）→ compose-up → cert-wait
+→ healthcheck → init-projects → disk-guard
 ```
+
+> `push-source` 把仓库源码（约 260 KB，不含 .git 与文档）经 SSH 推到节点的 `/srv/ccw`。
+> 节点**必须有完整源码**才能构建 control-api/worker-agent/项目镜像——compose 的 build
+> context 就指向那里。源码包由 Console 镜像在构建时生成；本地跑 Console 时用
+> `scripts/build-node-src.sh` 生成并用 `CCW_NODE_SRC` 指过去，**缺了它机队管理不会启用**。
 
 **中途一定会停在 dns-allocate**：手动DNS模式下，日志会打出要添加的A记录（形如 `类型 A ｜ 主机记录 api-01.example.com ｜ 记录值 203.0.113.7 ｜ TTL 60`）。到你的DNS服务商加完这条记录，回到节点详情页点「继续/重新部署」——已完成的步骤会被跳过，从 dns-allocate 继续。
 
@@ -165,7 +177,7 @@ docker compose up -d
 docker compose exec -T postgres pg_dump -U ccw ccw_console | gzip > console-$(date +%F).sql.gz
 ```
 
-产物目录 `/srv/ccw-console/dist` 可从开发机重新构建，不必备份。流水线日志在 `/var/lib/ccw-console/logs`（可选备份）。
+产物目录 `/srv/ccw-console/dist` 可从开发机重新构建，不必备份。流水线日志在宿主机的 `/var/lib/ccw-console/logs`（已挂卷，容器重建不丢；可选备份）。
 
 **`CCW_SECRET_KEY` 必须单独备份**：它加密着全部节点的托管SSH私钥与两步验证密钥。丢了就要对每台节点重新纳管、重建管理员账号。
 

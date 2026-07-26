@@ -29,6 +29,10 @@ type ConsoleConfig struct {
 	// LogDir存放流水线运行日志（每run一个文件，0600）。空值＝只在内存里保留，
 	// Console重启后历史日志丢失。
 	LogDir string
+	// NodeSrcPath是节点源码包（tar.gz）的路径。纳管时推送到节点，
+	// **节点靠它构建自己的镜像**——缺了它compose-up必然失败，
+	// 因此文件不存在时机队管理不启用（宁可不开，也不要跑到第8步才炸）。
+	NodeSrcPath string
 }
 
 // LoadConsole沿用「缺失即硬失败、无默认值」（CLAUDE.md）；
@@ -45,6 +49,7 @@ func LoadConsole(getenv func(string) string) (ConsoleConfig, error) {
 		AdminAllowlist:      getenv("CCW_ADMIN_ALLOWLIST"),
 		AdminInsecureCookie: getenv("CCW_ADMIN_INSECURE_COOKIE") == "1",
 		LogDir:              or(getenv("CCW_LOG_DIR"), "/var/lib/ccw-console/logs"),
+		NodeSrcPath:         or(getenv("CCW_NODE_SRC"), "/node-src.tar.gz"),
 	}
 	if c.DatabaseURL == "" {
 		return ConsoleConfig{}, fmt.Errorf("config: CCW_CONSOLE_DATABASE_URL is required; no default is provided")

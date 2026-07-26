@@ -6,11 +6,13 @@
 package provision
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +25,8 @@ import (
 // Runner是provision需要的SSH能力面（单测注入假实现，避免每个测试都起SSH server）。
 type Runner interface {
 	Run(ctx context.Context, cmd string) (sshexec.Result, error)
+	// RunStdin把内容经stdin喂给远端命令（推送源码包用；命令行在节点上人人可见）。
+	RunStdin(ctx context.Context, cmd string, input io.Reader) (sshexec.Result, error)
 }
 
 // Dialer抽象拨号，便于单测验证"用新密钥重新拨号"这一步真的发生了。
@@ -170,6 +174,15 @@ func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
+
+// sha256HexBytes是二进制内容的摘要（源码包用）。
+func sha256HexBytes(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// bytesReader避免在bootstrap.go里额外导入bytes。
+func bytesReader(b []byte) io.Reader { return bytes.NewReader(b) }
 
 // sortedKeys让上传顺序稳定，日志与重跑可比对。
 func sortedKeys(m map[string]string) []string {
