@@ -15,6 +15,13 @@
 {$CCW_ADMIN_DOMAIN} {
 	# 管理后台：IP白名单之外一律404（不是403）——不暴露后台是否存在。
 	# 应用层还会独立校验白名单，不只依赖这里（§8.3的双重校验）。
+	#
+	# remote_ip 用的是**TCP对端地址**，不看X-Forwarded-For，因此这一层不可伪造。
+	# 应用层那一层取XFF的最后一段（Caddy追加的真实IP），同样不可伪造——
+	# 详见 internal/console/server.go 的 clientIP。
+	#
+	# **不要在这里加 trusted_proxies**，除非你确实在前面放了CDN或LB：
+	# 那会让remote_ip改看XFF，两层校验会同时变成可伪造的。
 	@allowed remote_ip {$CCW_ADMIN_ALLOWLIST}
 	handle @allowed {
 		reverse_proxy ccw-console:8090

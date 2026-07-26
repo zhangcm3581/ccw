@@ -282,12 +282,23 @@ func (s *Server) allowResolve(key string) bool {
 
 // clientIP：Console跑在Caddy后面，RemoteAddr是反代地址；
 // 取X-Forwarded-For第一跳（Caddy会设置），没有时退回RemoteAddr。
+// clientIP取真实客户端IP，用于IP白名单、限速与审计。
+//
+// **取X-Forwarded-For的最后一段，不是第一段。**Caddy是**追加**而不是覆盖：
+// 客户端自己发的XFF会被保留，真实IP追加在后面。取第一段等于直接采信
+// 客户端伪造的值，后果是白名单被绕过、每IP限速被轮换伪造IP规避、
+// 审计日志记录假地址。最后一段是我们自己的反代写进去的，不可伪造。
+//
+// 这个取法的前提是**恰好一层受信反代**（本项目的部署形态就是如此：
+// Console只经自己那台Caddy暴露）。若将来在前面再加一层CDN或LB，
+// 必须改为按受信代理层数从右往左跳过对应个数的条目——否则会把
+// 中间那层的IP当成客户端。
 func clientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if first, _, ok := strings.Cut(xff, ","); ok {
-			return strings.TrimSpace(first)
+		parts := strings.Split(xff, ",")
+		if last := strings.TrimSpace(parts[len(parts)-1]); last != "" {
+			return last
 		}
-		return strings.TrimSpace(xff)
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

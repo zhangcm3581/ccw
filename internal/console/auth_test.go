@@ -419,3 +419,92 @@ func TestCSRFTokenReusedAcrossPages(t *testing.T) {
 		t.Error("形态不合法的CSRF cookie应被换成新发的")
 	}
 }
+
+// X-Forwarded-For 必须取最后一段：Caddy 是追加而不是覆盖，
+// 第一段是客户端自己发的、可以任意伪造。
+func TestClientIPResistsXFFSpoofing(t *testing.T) {
+	cases := []struct{ name, xff, remote, want string }{
+		{"无XFF时用对端地址", "", "203.0.113.9:5555", "203.0.113.9"},
+		{"单跳", "203.0.113.9", "10.0.0.2:5555", "203.0.113.9"},
+		{"客户端伪造前缀，取最后一段", "1.2.3.4, 203.0.113.9", "10.0.0.2:5555", "203.0.113.9"},
+		{"伪造多段", "9.9.9.9, 8.8.8.8, 203.0.113.9", "10.0.0.2:5555", "203.0.113.9"},
+		{"带空格", " 1.2.3.4 ,  203.0.113.9 ", "10.0.0.2:5555", "203.0.113.9"},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = c.remote
+		if c.xff != "" {
+			req.Header.Set("X-Forwarded-For", c.xff)
+		}
+		if got := clientIP(req); got != c.want {
+			t.Errorf("%s: clientIP = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// 端到端：伪造 XFF 不得绕过应用层 IP 白名单。
+func TestAllowlistNotBypassableByXFF(t *testing.T) {
+	s, _, _ := newAuthServer(t)
+	nets, err := ParseAllowlist("203.0.113.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Auth.Allowlist = nets
+
+	// 白名单外的客户端伪造一个白名单内的 XFF 前缀——必须仍然 404。
+	req := httptest.NewRequest("GET", "/admin/login", nil)
+	req.RemoteAddr = "198.51.100.7:5555"
+	req.Header.Set("X-Forwarded-For", "203.0.113.7, 198.51.100.7")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != 404 {
+		t.Fatalf("伪造XFF不得绕过白名单，got %d", w.Code)
+	}
+
+	// 真实来自白名单内则放行
+	req = httptest.NewRequest("GET", "/admin/login", nil)
+	req.RemoteAddr = "10.0.0.2:5555"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4, 203.0.113.7")
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Errorf("白名单内应放行，got %d", w.Code)
+	}
+}
+
+// 登录限速不得被轮换伪造的 XFF 规避（后台上公网后这条直接相关）。
+func TestLoginRateLimitNotBypassableByXFF(t *testing.T) {
+	s, _, _ := newAuthServer(t)
+	tryLogin := func(fakeXFF string) int {
+		form, cookies := loginForm(t, s, "admin", "wrong", "000000")
+		req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Forwarded-For", fakeXFF+", 198.51.100.50")
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, req)
+		return w.Code
+	}
+	// 每次换一个伪造前缀，真实IP不变——限速必须照样生效
+	for i := 0; i < 5; i++ {
+		tryLogin("10.1.1." + string(rune('1'+i)))
+	}
+	var body string
+	{
+		form, cookies := loginForm(t, s, "admin", "wrong", "000000")
+		req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Forwarded-For", "10.9.9.9, 198.51.100.50")
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, req)
+		body = w.Body.String()
+	}
+	if !strings.Contains(body, "频繁") {
+		t.Error("轮换伪造的XFF不得规避每IP限速")
+	}
+}
