@@ -1,0 +1,38 @@
+---
+title: 图6 卷布局 - 授权一次，计量分家
+---
+flowchart LR
+  subgraph V["命名卷"]
+    SH[("claude-shared<br/>全机唯一")]
+    PA[("project-a-claude-projects")]
+    PB[("project-b-claude-projects")]
+    WA[("project-a-workspace")]
+    WB[("project-b-workspace")]
+  end
+
+  subgraph CA["容器 ccw-project-a"]
+    A1["/home/claude<br/>.claude.json<br/>.claude/.credentials.json"]
+    A2["/home/claude/.claude/projects<br/>会话 JSONL"]
+    A3["/workspace"]
+  end
+
+  subgraph CB["容器 ccw-project-b"]
+    B1["/home/claude<br/>同一份凭据"]
+    B2["/home/claude/.claude/projects"]
+    B3["/workspace"]
+  end
+
+  SH --> A1
+  SH --> B1
+  PA --> A2
+  PB --> B2
+  WA --> A3
+  WB --> B3
+
+  PA -.->|"只读挂载"| WK["worker-agent<br/>/srv/ccw/usage/project-a"]
+  PB -.->|"只读挂载"| WK2["worker-agent<br/>/srv/ccw/usage/project-b"]
+
+  classDef live fill:#d7ebec,stroke:#0d6f78,stroke-width:2px
+  classDef ops fill:#f0e6d2,stroke:#8a5d0d,stroke-width:2px
+  class SH live
+  class PA,PB ops

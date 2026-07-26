@@ -1,0 +1,32 @@
+---
+title: 图7 节点纳管 - bootstrap 12 步流水线（未在真实 VPS 走完）
+---
+flowchart TB
+  S0["连接：密码首登<br/>记录 host key 指纹 TOFU"] --> S1
+
+  S1["1 probe<br/>发行版白名单 · 磁盘核算"] --> S2
+  S2["2 harden<br/>生成 ed25519 → 注入 → 用新私钥重新拨号验证<br/>验证通过才加密落库，密码就此丢弃"] --> S3
+  S3["3 install-docker"] --> S4
+  S4["4 dns-allocate<br/>分配 api-NN 子域名"] --> GATE
+
+  GATE{"两个公共解析器<br/>都指向本机？"}
+  GATE -->|"否 · manual 模式的常态"| STOP["停在这一步<br/>日志打出要添加的 A 记录"]
+  STOP -.->|"管理员加完记录后点继续"| GATE
+  GATE -->|"是"| S5
+
+  S5["5 push-source<br/>推完整源码包，节点靠它构建镜像"] --> S6
+  S6["6 push-artifacts<br/>按项目列表渲染的 compose.yaml"] --> S7
+  S7["7 render-env<br/>密钥在节点本地生成，明文不经 Console"] --> S8
+  S8["8 compose-up<br/>构建并启动，回收 build cache"] --> S9
+  S9["9 cert-wait"] --> S10
+  S10["10 healthcheck"] --> S11
+  S11["11 init-projects<br/>建项目并签发 CDK"] --> S12
+  S12["12 disk-guard<br/>如实报告 data-root 位置"] --> DONE["节点就绪"]
+
+  FAIL["任一步失败"] -.->|"后续步骤保持 pending，不记为失败"| RESUME["同一个 run 重跑<br/>已完成的标记 skipped"]
+  RESUME -.-> S1
+
+  classDef live fill:#d7ebec,stroke:#0d6f78,stroke-width:2px
+  classDef ops fill:#f0e6d2,stroke:#8a5d0d,stroke-width:2px
+  class S2,S5,DONE live
+  class GATE,STOP ops

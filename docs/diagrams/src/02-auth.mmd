@@ -1,0 +1,25 @@
+---
+title: 图2 登录与连接 - 从 CDK 到两把短期令牌
+---
+sequenceDiagram
+  autonumber
+  participant U as cclaude
+  participant C as control-api
+  participant W as worker-agent
+  participant D as 项目容器
+
+  U->>C: POST /v1/auth/exchange { cdk }
+  Note over C: 按 public_id 查库 O(1)<br/>Argon2id 验 secret<br/>校验 disabled_at / expires_at<br/>失败一律 invalid_cdk
+  C-->>U: session token（15 分钟，HMAC，不落库）
+
+  U->>C: GET /v1/connection（Bearer session）
+  Note over C: 查项目 → 算额度 → 组装限额<br/>与 worker 共用 quota.Assemble
+  C-->>U: terminal / sync 令牌（各 2 分钟）<br/>+ 额度快照 + sync_mode
+
+  U->>W: wss /ws/terminal（Bearer terminal 令牌）
+  Note over W: 实时复查额度——不信任令牌里的模式<br/>2 分钟内允许重连<br/>查询失败按已超额处理
+  W->>D: tmux has-session ? attach : new-session -d
+  D-->>U: PTY 字节流（双向）
+
+  U->>W: wss /ws/sync（Bearer sync 令牌，每 2 秒一轮）
+  W-->>U: 服务端 manifest

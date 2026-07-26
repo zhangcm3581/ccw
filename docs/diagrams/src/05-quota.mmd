@@ -1,0 +1,47 @@
+---
+title: 图5 用量采集与额度闸门（仅单测证据，未真机验证）
+---
+flowchart TB
+  subgraph SRC["数据源 · 每项目独立卷"]
+    J1["project-a 的会话 JSONL"]
+    J2["project-b 的会话 JSONL"]
+  end
+
+  subgraph COLLECT["worker-agent · 采集循环 30 秒"]
+    SCAN["遍历数据库里的全部项目<br/>不是只遍历有连接的"]
+    PARSE["解析 assistant 行的 usage<br/>半行不入账，游标停在最后完整行"]
+    WEIGHT["加权：input · output<br/>cache_read · cache_write"]
+    SCAN --> PARSE --> WEIGHT
+  end
+
+  subgraph STORE["PostgreSQL"]
+    EV[("usage_events<br/>UNIQUE 项目+requestId<br/>冲突时按 GREATEST 更新")]
+    OFF[("usage_offsets<br/>dev:inode 游标")]
+  end
+
+  subgraph GATE["额度判定"]
+    W1["项目 5 小时窗口"]
+    W2["项目 7 天窗口"]
+    W3["账号池 5h / 7d<br/>减预留与安全余量"]
+  end
+
+  J1 --> SCAN
+  J2 --> SCAN
+  WEIGHT --> EV
+  WEIGHT --> OFF
+  EV --> W1
+  EV --> W2
+  EV --> W3
+  W1 --> DEC{"超额？"}
+  W2 --> DEC
+  W3 --> DEC
+
+  DEC -->|"否"| OK["终端照常 · 同步 rw"]
+  DEC -->|"是"| ACT1["30 秒内关闭该项目全部终端连接"]
+  DEC -->|"是"| ACT2["同步降级 cleanup<br/>只许下载 · 删除 · 缩小"]
+  DEC -->|"查询失败 fail closed"| ACT2
+
+  classDef live fill:#d7ebec,stroke:#0d6f78,stroke-width:2px
+  classDef ops fill:#f0e6d2,stroke:#8a5d0d,stroke-width:2px
+  class EV live
+  class ACT1,ACT2 ops

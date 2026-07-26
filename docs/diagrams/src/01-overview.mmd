@@ -1,0 +1,44 @@
+---
+title: 图1 系统全景 - Console、节点与本地客户端
+---
+flowchart TB
+  subgraph LOCAL["本地开发机"]
+    CLI["cclaude CLI<br/>Win / macOS / Linux"]
+    DIR["项目目录<br/>.cclaude/index.json"]
+    CLI --- DIR
+  end
+
+  subgraph CONSOLE["Console 主机 · 控制平面（独立一台）"]
+    CADDY2["Caddy 443"]
+    CONS["ccw-console :8090<br/>官网 · 下载 · /connect<br/>管理后台 · SSH 执行引擎"]
+    PG2[("Console 库<br/>机队元数据")]
+    CADDY2 --> CONS --> PG2
+  end
+
+  subgraph NODE["节点 api-01 · 自治服务栈"]
+    CADDY["Caddy 443<br/>唯一公网入口"]
+    CTL["control-api :8080<br/>CDK · 令牌 · 额度 · /usage"]
+    WRK["worker-agent :8081<br/>终端 · 同步 · 用量 · 闸门<br/>唯一持 docker.sock 的进程"]
+    PG[("PostgreSQL<br/>项目 · CDK · 用量")]
+    P1["项目容器 ccw-project-a<br/>tmux + Claude Code"]
+    P2["项目容器 ccw-project-b"]
+    SSHD["sshd :22<br/>运维通道，不开新端口"]
+    CADDY --> CTL
+    CADDY --> WRK
+    CTL --> PG
+    WRK --> PG
+    WRK -.->|"docker exec -it"| P1
+    WRK -.->|"docker exec -it"| P2
+  end
+
+  CLI ==>|"https /api/*"| CADDY
+  CLI ==>|"wss /ws/terminal"| CADDY
+  CLI ==>|"wss /ws/sync"| CADDY
+  CONS -.->|"SSH · 托管密钥<br/>纳管 · 巡检 · ccwadmin"| SSHD
+  SSHD -.-> CTL
+  CLI -.->|"仅首次：下载客户端 · 查接入地址"| CADDY2
+
+  classDef live fill:#d7ebec,stroke:#0d6f78,stroke-width:2px
+  classDef ops fill:#f0e6d2,stroke:#8a5d0d,stroke-width:2px
+  class CLI,CADDY live
+  class CONS ops

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>ccw 系统图谱</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{--paper:#f6f7f9;--ink:#131820;--soft:#4d5666;--faint:#7b8494;
+        --rule:#d8dce3;--panel:#fff;--accent:#0d6f78;
+        --ok:#2c7355;--warn:#8a5d0d;--gap:#656b7d;
+        --okbg:#e4efe9;--warnbg:#f6eddb;--gapbg:#e9eaee;--sheet:#eef1f5;}
+  @media (prefers-color-scheme:dark){
+    :root{--paper:#0e1219;--ink:#e6e9ef;--soft:#a3abbb;--faint:#757e8e;
+          --rule:#242c38;--panel:#141922;--accent:#3fb5bf;
+          --ok:#63b48c;--warn:#d3a24a;--gap:#929ab0;
+          --okbg:#16301f;--warnbg:#322614;--gapbg:#1e2430;--sheet:#ccd4df;}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font-family:system-ui,-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+       font-size:16px;line-height:1.75}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px 80px}
+  header{padding:64px 0 28px;border-bottom:2px solid var(--ink);display:grid;gap:14px}
+  .eyebrow{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;
+           letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin:0}
+  h1{font-size:clamp(30px,5vw,44px);line-height:1.1;letter-spacing:-.02em;margin:0;text-wrap:balance}
+  .stand{color:var(--soft);max-width:62ch;margin:0}
+  h2{font-size:22px;margin:0 0 4px;letter-spacing:-.015em}
+  p{max-width:70ch;margin:0 0 12px}
+  section{padding-top:48px}
+  figure{margin:18px 0 0;border:1px solid var(--rule);border-radius:3px;background:var(--panel);overflow:hidden}
+  figcaption{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;
+             padding:12px 16px;border-bottom:1px solid var(--rule)}
+  .fnum{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;
+        letter-spacing:.13em;text-transform:uppercase;color:var(--accent)}
+  .ftitle{font-size:14.5px;font-weight:620}
+  .fnote{font-size:13px;color:var(--faint);flex-basis:100%}
+  .sheet{background:var(--sheet);padding:18px 14px;overflow-x:auto;text-align:center}
+  .sheet img{max-width:100%;height:auto;display:block;margin:0 auto}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-family:ui-monospace,Menlo,Consolas,monospace;
+        font-size:11px;letter-spacing:.06em;padding:2.5px 8px;border-radius:2px;white-space:nowrap}
+  .chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+  .ok{color:var(--ok);background:var(--okbg)}
+  .warn{color:var(--warn);background:var(--warnbg)}
+  .gapc{color:var(--gap);background:var(--gapbg)}
+  .legend{display:flex;flex-wrap:wrap;gap:10px 18px;padding:14px 16px;border:1px solid var(--rule);
+          border-radius:3px;background:var(--panel);margin:24px 0 0;align-items:center}
+  .legend .lbl{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;
+               letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+  .legend span.d{font-size:13px;color:var(--soft)}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.87em;
+       background:var(--gapbg);padding:1.5px 5px;border-radius:3px}
+  .links{font-size:13px;color:var(--faint);margin-top:8px}
+  .links a{color:var(--accent)}
+  footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--rule);
+         font-size:13px;color:var(--faint);max-width:70ch}
+</style>
+<div class="wrap">
+<header>
+  <p class="eyebrow">ccw · remote claude workspace</p>
+  <h1>系统图谱</h1>
+  <p class="stand">七张图覆盖 ccw 的结构、数据流与运维链路。图中标注的验证强度与 <code>docs/STATUS.md</code> 同步维护——未验证的功能不写成「已完成」。</p>
+</header>
+
+<div class="legend">
+  <span class="lbl">验证强度</span>
+  <span><span class="chip ok">真机验证</span> <span class="d">在真实部署上跑过</span></span>
+  <span><span class="chip warn">仅单测</span> <span class="d">代码闭环，未上真机</span></span>
+  <span><span class="chip gapc">未实施</span> <span class="d">设计里有，代码里没有</span></span>
+</div>
+
+<section>
+  <h2>1 · 系统全景</h2>
+  <p>三层：本地 <code>cclaude</code>、每台节点的自治服务栈、独立一台的 Console 控制平面。关键性质是 <strong>Console 不在用户数据路径上</strong>——客户端直连节点，Console 停机不影响已配置好的终端与同步。</p>
+  <figure>
+    <figcaption><span class="fnum">图 1</span><span class="ftitle">Console、节点与本地客户端</span>
+      <span class="fnote">粗线＝用户数据路径；虚线＝运维路径，只在纳管与发布时出现</span></figcaption>
+    <div class="sheet"><img src="01-overview.svg" alt="系统全景图"></div>
+  </figure>
+</section>
+
+<section>
+  <h2>2 · 登录与连接</h2>
+  <p>CDK 形如 <code>ccw_&lt;公开ID&gt;.&lt;密钥&gt;</code>：公开 ID 用于数据库 O(1) 查询，密钥参与 Argon2id 校验。认证失败一律返回 <code>invalid_cdk</code>，不区分「不存在／已禁用／已过期」。</p>
+  <figure>
+    <figcaption><span class="fnum">图 2</span><span class="ftitle">从 CDK 到两把短期令牌</span>
+      <span class="fnote">令牌只走 Authorization 头或首个认证帧；全仓禁止出现 <code>?token=</code></span></figcaption>
+    <div class="sheet"><img src="02-auth.svg" alt="登录与连接时序图"></div>
+  </figure>
+</section>
+
+<section>
+  <h2>3 · 终端附着</h2>
+  <p>「断线不中断」的秘密：会话属于容器里的 tmux，不属于任何一条 WebSocket。断开只关 PTY 与 WebSocket，<strong>绝不 kill-session</strong>。两处 TTY 缺一不可——宿主机侧由 creack/pty 提供，容器侧靠 <code>docker exec -it</code> 的 <code>-t</code>。</p>
+  <figure>
+    <figcaption><span class="fnum">图 3</span><span class="ftitle">tmux 会话为什么不会丢</span>
+      <span class="fnote">后果：tmux 断开后仍在跑，所以用量采集必须遍历全部项目，而不是只遍历有连接的</span></figcaption>
+    <div class="sheet"><img src="03-terminal.svg" alt="终端附着流程图"></div>
+  </figure>
+</section>
+
+<section>
+  <h2>4 · 文件同步</h2>
+  <p>客户端每 2 秒拉一次服务端 manifest，与本地基线做三方判断。只有同时知道「上次确认的服务端版本」和「当前本地内容」，才能区分旧副本与新修改。服务端 CAS 是最终裁决：<code>base_revision</code> 不匹配即 conflict，绝不静默覆盖。</p>
+  <figure>
+    <figcaption><span class="fnum">图 4</span><span class="ftitle">三方判断与冲突保护</span>
+      <span class="fnote">凭据类文件与符号链接两端一律跳过；Linux 生产用 openat2 解析路径，无 TOCTOU 窗口</span></figcaption>
+    <div class="sheet"><img src="04-sync.svg" alt="文件同步三方判断流程图"></div>
+  </figure>
+</section>
+
+<section>
+  <h2>5 · 用量采集与额度闸门</h2>
+  <p>一台节点只授权一次 Claude 账号，节点上全部项目共用这一个上游池。因此内部额度闸门不是锦上添花，而是<strong>唯一能阻止某个项目吃光全机额度的机制</strong>。</p>
+  <figure>
+    <figcaption><span class="fnum">图 5</span><span class="ftitle">从会话 JSONL 到关终端</span>
+      <span class="fnote"><span class="chip warn">仅单测</span> 链路代码闭环但未真机验证；加权系数处于「先记账、后校准」第一阶段，<strong>当前实际不会拦人</strong></span></figcaption>
+    <div class="sheet"><img src="05-quota.svg" alt="用量采集与额度闸门流程图"></div>
+  </figure>
+</section>
+
+<section>
+  <h2>6 · 卷布局</h2>
+  <p>产品硬约束：Claude 账号在一台 VPS 上<strong>只授权一次</strong>。但按项目计量又要求会话 JSONL 分开。两者靠一次嵌套挂载同时满足——<code>projects/</code> 是 <code>.credentials.json</code> 的兄弟目录，遮蔽它不影响凭据。</p>
+  <figure>
+    <figcaption><span class="fnum">图 6</span><span class="ftitle">授权一次，计量分家</span>
+      <span class="fnote"><span class="chip warn">仅单测</span> 磁盘配额是逻辑配额：只统计走同步接口的文件，对外不得表述为「保证不超过」</span></figcaption>
+    <div class="sheet"><img src="06-volumes.svg" alt="卷布局图"></div>
+  </figure>
+</section>
+
+<section>
+  <h2>7 · 节点纳管</h2>
+  <p>在浏览器里填 IP、用户名、密码，Console 经 SSH 把一台空机器变成可用节点。每一步都满足三条性质：幂等、可 precheck 跳过、可从失败步续跑。</p>
+  <figure>
+    <figcaption><span class="fnum">图 7</span><span class="ftitle">bootstrap 12 步流水线</span>
+      <span class="fnote"><span class="chip warn">仅单测</span> 有单测与本机冒烟，<strong>但从未对着一台真实 VPS 走完</strong></span></figcaption>
+    <div class="sheet"><img src="07-bootstrap.svg" alt="节点纳管流水线图"></div>
+  </figure>
+  <p class="links">三处不能颠倒的顺序：dns-allocate 必须在 compose-up 之前（否则烧掉 Let's Encrypt 的失败限额）；凭据交接必须先验证后落库（否则注入失败会留下连不上的密钥，而密码已丢弃）；push-source 必须在 compose-up 之前（节点要从 Go 源码构建镜像）。</p>
+</section>
+
+<footer>
+  图片源码在 <code>src/*.mmd</code>，改完跑 <code>./render.sh</code> 重新生成 SVG 与 PNG。
+  完整的实施状态与缺口清单见 <code>docs/STATUS.md</code>；与设计 spec 的偏离见 <code>docs/design-deviations.md</code>。
+</footer>
+</div>

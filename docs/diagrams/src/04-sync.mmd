@@ -1,0 +1,25 @@
+---
+title: 图4 文件同步 - 三方判断与冲突保护
+---
+flowchart TB
+  START["本地扫描 + 基线索引<br/>base_revision · base_sha256 · current_sha256"] --> Q1{"本地状态"}
+
+  Q1 -->|"clean 未改"| A1{"服务端前进了？"}
+  A1 -->|"否"| N1["无事发生"]
+  A1 -->|"是 · 已删"| N2["删除本地文件"]
+  A1 -->|"是 · 有新版"| N3["下载覆盖<br/>本地旧副本永远不是赢家"]
+
+  Q1 -->|"modified 已改"| A2{"服务端前进了？"}
+  A2 -->|"否"| N4["CAS 上传"]
+  A2 -->|"是 · 内容碰巧一致"| N5["只更新基线，不传输"]
+  A2 -->|"是 · 内容不同"| N6["冲突：保留本地<br/>云端版另存 .conflict-remote-UTC"]
+
+  Q1 -->|"deleted 已删"| A3{"服务端前进了？"}
+  A3 -->|"否"| N7["CAS 删除，写 tombstone"]
+  A3 -->|"是"| N8["冲突：保留服务端版本"]
+
+  CLEAN["cleanup 模式<br/>超额或磁盘满"] -.->|"只允许"| ALLOW["下载 · 删除 · 缩小"]
+  CLEAN -.->|"拒绝"| DENY["上传 · 增大"]
+
+  classDef ops fill:#f0e6d2,stroke:#8a5d0d,stroke-width:2px
+  class N6,N8,CLEAN ops

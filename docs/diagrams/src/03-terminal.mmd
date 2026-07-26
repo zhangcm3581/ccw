@@ -1,0 +1,23 @@
+---
+title: 图3 终端附着 - tmux 会话为什么不会丢
+---
+flowchart LR
+  A["客户端连上<br/>/ws/terminal"] --> B{"tmux has-session ?"}
+  B -->|"有"| D["attach-session"]
+  B -->|"没有"| C["new-session -d<br/>工作目录 /workspace"]
+  C --> D
+  D --> E["docker exec -it<br/>容器侧 TTY"]
+  E --> F["creack/pty<br/>宿主机侧 TTY"]
+  F --> G["WebSocket 双向转发<br/>resize / ping / pong"]
+
+  G -.->|"网络断开 · 合上笔记本 · 退出 CLI"| H["只关闭 PTY 与 WebSocket<br/>绝不 kill-session"]
+  H -.-> I["tmux 会话继续运行<br/>Claude 照常干活、照常消耗额度"]
+  I -.->|"重连"| A
+
+  J["额度执行循环<br/>每 30 秒，只遍历有连接的项目"] -.->|"超额时"| K["关闭该项目全部终端连接"]
+  K -.-> I
+
+  classDef live fill:#d7ebec,stroke:#0d6f78,stroke-width:2px
+  classDef ops fill:#f0e6d2,stroke:#8a5d0d,stroke-width:2px
+  class I live
+  class K ops

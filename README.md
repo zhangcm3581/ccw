@@ -57,6 +57,10 @@ cd ~/my-project-a                              # 同步以运行目录为根，�
 
 CLI后台同步当前目录、前台附着云端终端，状态栏形如`[project-a] 5h:10/1000000 7d:60/10000000 disk:0/21474836480 mode:rw`。超额或磁盘满时**不退出**，转为cleanup模式（仍可下载、删除、缩小文件），窗口恢复后自动回到正常模式。凭据类文件与`.git/`、`node_modules/`等默认排除（名单见`internal/sync/paths.go`）；**符号链接不参与同步**（两端一律跳过，防止经链接把目录外内容带进清单）；本地基线索引写在目录下的`.cclaude/index.json`。
 
+## 系统图谱
+
+`docs/diagrams/` 有七张图覆盖结构、数据流与运维链路——浏览器打开 `docs/diagrams/index.html` 一次看全，或直接看单张 SVG/PNG。源码是 Mermaid（`src/*.mmd`），改完跑 `./render.sh` 重新生成。
+
 ## 开发
 
 ```bash
