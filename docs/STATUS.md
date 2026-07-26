@@ -92,6 +92,7 @@ Task 1–13的代码都写过一遍，`go test ./...`与`-race`全绿。2026-07-
 - ~~`ccwadmin`只有`init-project`~~：**C12已实施**（2026-07-26）——新增`issue-cdk`/`rotate-cdk`（默认24h宽限、`--revoke-now`应急，设计§11.1.1）/`disable-cdk`/`list-cdks`/`list-projects`/`status`，全部支持`--json`；`init-project`幂等化（已存在返回现有信息）并支持flag形式。轮换/禁用按§11.1.1返回统一错误。003迁移给`cdks`补`created_at`。**证据强度：**store层PG集成测试（本机真实PG + CI Postgres job）+ 子命令层单测 + 本机真实PG全链路冒烟；未在生产节点跑过。仍缺：删除项目、清理tombstone
 - ~~单节点上限未强制~~：**已在两个强制点生效**（2026-07-26）——`render-compose`拒第4个slug与`--disk-gib`>15；`ccwadmin init-project`拒第4个项目与`disk_gib`>15（A34/A35的节点侧部分），默认值已从20改为15 GiB。slug校验两处共用`internal/deploy.ValidateSlug`。Console前后端双校验待Console实施
 - 门户只有`/usage`单页，认证复用CDK session token，没有独立管理员登录（spec §11决定是localhost+SSH隧道，Caddy已按此对公网404，与设计一致）
+- ~~客户端写死默认域名`ccw.example.com`~~：**C14已实施**（2026-07-26，设计§6.7/§11.2）——寻址优先级`--api` > `CCW_API` > `~/.ccw/config.json`(0600) > 交互提示（先域名后CDK）；裸域名自动补`/api`前缀（路径合同），显式路径保留；旧`~/.ccw/cdk`自动迁移；新增`logout`；CDK仍不做命令行参数（A24有源码级守卫测试）。**A22/A23由单测覆盖；真实三平台冒烟仍未做（P2既有欠账）**
 - CLI同步循环每2秒重新Dial一次WebSocket，无本地fsnotify去抖
 
 ## 已知取舍（不是缺口，不要当待办）

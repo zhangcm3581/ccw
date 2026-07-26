@@ -184,9 +184,11 @@ GOOS=windows GOARCH=amd64 go build -o cclaude.exe   ./cmd/cclaude
 
 ```bash
 cd ~/my-project-a
-export CCW_API=https://你的域名.example.com/api
-./cclaude          # 提示输入CDK（不回显），登录后显示状态栏并附着云端Claude终端
+./cclaude --api https://你的域名.example.com   # 首次指定API地址（自动补/api前缀并写入~/.ccw/config.json）
+# 提示输入CDK（不回显）；之后直接运行 ./cclaude 即可
 ```
+
+寻址优先级：`--api`参数 > `CCW_API`环境变量 > `~/.ccw/config.json`（0600）> 交互提示。旧版`~/.ccw/cdk`缓存文件会自动迁移进config.json。`cclaude logout`清除本地配置；CDK只走交互输入或`CCW_CDK`环境变量，**不做命令行参数**。
 
 状态栏形如 `[project-a] 5h:10/1000000 7d:60/10000000 disk:0/21474836480 mode:rw`。断网会自动重连；session过期会用内存中的CDK自动重新换取。
 
@@ -225,9 +227,8 @@ curl -s http://<IP>/api/v1/auth/exchange \
   -H 'Content-Type: application/json' -d '{"cdk":"<你的CDK>"}'
 # 成功返回 {"session_token":"...","project_id":"...","project_slug":"project-a"}
 
-# 客户端连终端
-export CCW_API=http://<IP>/api
-./cclaude
+# 客户端连终端（HTTP裸IP同样自动补/api）
+./cclaude --api http://<IP>
 ```
 
 上线时改回域名版：`cp` 回原 `Caddyfile`、把 `compose.yaml` 的 `ws://` 改回 `wss://`、`CCW_DOMAIN` 填真实域名并让 DNS 指向本机。
