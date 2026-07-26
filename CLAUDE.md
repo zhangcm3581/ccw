@@ -20,7 +20,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. `docs/superpowers/specs/2026-07-19-remote-claude-workspace-audit-corrections.md`
 3. `docs/superpowers/specs/2026-07-19-remote-claude-workspace-design.md`（Design Spec v3，已批准）
 4. `docs/superpowers/specs/2026-07-25-ccw-console-fleet-design.md`（v2 Console层设计，未实施；含产品硬性上限§7.6）
-5. `docs/superpowers/plans/2026-07-26-compose-render-plan.md`（C13 compose渲染，未实施）
+5. `docs/superpowers/plans/2026-07-26-usage-wiring-plan.md`（N1+N2用量接线与闸门闭环，未实施，**下一个开工项**）
+6. `docs/superpowers/plans/2026-07-26-compose-render-plan.md`（C13 compose渲染，未实施）
 
 `docs/superpowers/plans/2026-07-19-remote-claude-workspace-plan.md`（Task 0–13）已于2026-07-26**归档**——保留为历史记录，**不再作为实施依据**，其中Task 13等内容已被明确推翻。文件顶部有归档横幅。
 
