@@ -39,6 +39,10 @@ type AdminStore interface {
 	SessionByTokenHash(ctx context.Context, tokenHash string, idle time.Duration) (consolestore.AdminSession, error)
 	RevokeSession(ctx context.Context, tokenHash string) error
 	WriteAudit(ctx context.Context, e consolestore.AuditEntry) error
+	// 审计的读侧（§8.5）：只写不读的审计等于没有审计——
+	// 在此之前只能登机用psql看。
+	ListAudit(ctx context.Context, action, result string, limit, offset int) ([]consolestore.AuditRecord, error)
+	AuditActions(ctx context.Context) ([]string, error)
 }
 
 // Auth持有管理后台的认证依赖。为nil时Server不注册任何/admin路由——

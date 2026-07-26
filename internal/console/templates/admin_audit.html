@@ -1,0 +1,59 @@
+{{define "title"}}审计日志 · ccw 控制台{{end}}
+{{define "pagetitle"}}审计日志{{end}}
+{{define "pagesub"}}<span class="sub">写入失败的动作一律失败——这里没有的事就是没发生</span>{{end}}
+{{define "content"}}
+
+<div class="card">
+  <div class="card-hd">
+    <h2>记录</h2>
+    <span class="spacer"></span>
+    <form method="GET" action="/admin/audit" class="filters">
+      <select name="action" onchange="this.form.submit()">
+        <option value="">全部动作</option>
+        {{range .Actions}}<option value="{{.}}" {{if eq . $.Action}}selected{{end}}>{{.}}</option>{{end}}
+      </select>
+      <select name="result" onchange="this.form.submit()">
+        <option value="">全部结果</option>
+        <option value="ok" {{if eq .Result "ok"}}selected{{end}}>ok</option>
+        <option value="denied" {{if eq .Result "denied"}}selected{{end}}>denied</option>
+        <option value="error" {{if eq .Result "error"}}selected{{end}}>error</option>
+      </select>
+      <noscript><button class="btn ghost" type="submit">筛选</button></noscript>
+    </form>
+  </div>
+
+  {{if .Rows}}
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>时间</th><th>操作者</th><th>动作</th><th>对象</th><th>结果</th><th>来源 IP</th></tr>
+      </thead>
+      <tbody>
+        {{range .Rows}}
+        <tr>
+          <td class="mono muted nowrap">{{.At}}</td>
+          <td class="mono nowrap">{{.Actor}}</td>
+          <td class="mono nowrap">{{.Action}}</td>
+          <td class="mono" style="word-break:break-all">{{.Target}}{{if .Detail}}
+            <div class="mono muted" style="font-size:11.5px">{{.Detail}}</div>{{end}}</td>
+          <td><span class="st st-{{.Tone}}">{{.Result}}</span></td>
+          <td class="mono muted nowrap">{{.ClientIP}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  <div class="pager">
+    {{if .HasPrev}}<a class="btn ghost" href="/admin/audit?page={{.PrevPage}}{{.Query}}">上一页</a>{{end}}
+    <span class="mono muted">第 {{.Page}} 页</span>
+    {{if .HasNext}}<a class="btn ghost" href="/admin/audit?page={{.NextPage}}{{.Query}}">下一页</a>{{end}}
+  </div>
+  {{else}}
+  <div class="empty">
+    <h3>没有匹配的记录</h3>
+    <p>登录、纳管、续跑、CDK 签发与轮换都会记在这里。</p>
+  </div>
+  {{end}}
+</div>
+
+{{end}}

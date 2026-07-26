@@ -19,6 +19,8 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/logout", s.Auth.requireAdmin(s.adminLogout))
 	mux.HandleFunc("GET /admin", s.Auth.requireAdmin(s.adminHome))
 	mux.HandleFunc("GET /admin/{$}", s.Auth.requireAdmin(s.adminHome))
+	// 审计页只依赖Auth的存储，不需要Fleet——没有机队也该能查登录记录。
+	s.registerAudit(mux)
 }
 
 // adminLoginPage：白名单外一律404（与Caddy一致，不暴露后台存在，§8.3）。
@@ -147,6 +149,19 @@ func (s *Server) adminHome(w http.ResponseWriter, r *http.Request, sess consoles
 		}
 		zones, _ := s.Fleet.Store.ListZones(ctx)
 		data["Zones"] = zones
+		// 全新安装时总览没有任何数据可展示。与其摆一张空卡片，
+		// 不如把「接入第一台机器要做哪三件事」摆出来，并标出走到哪一步了。
+		issues, _ := s.Fleet.Store.ListCDKIssues(ctx)
+		data["Onboarding"] = []map[string]any{
+			{"Title": "创建一个 zone", "Done": len(zones) > 0,
+				"Detail": "节点的接入域名从这里分配。", "Link": "/admin/domains", "LinkText": "去域名页"},
+			{"Title": "纳管第一台节点", "Done": len(rows) > 0,
+				"Detail": "填 IP、用户名与密码，Console 走完 12 步把栈起起来。",
+				"Link":   "/admin/nodes/new", "LinkText": "新增节点"},
+			{"Title": "把 CDK 交给使用者", "Done": len(issues) > 0,
+				"Detail": "纳管时自动签发，也可以随时另发一张。",
+				"Link":   "/admin/cdks", "LinkText": "去 CDK 页"},
+		}
 	}
 	sort.Slice(runs, func(i, j int) bool { return runs[i].Started > runs[j].Started })
 	if len(runs) > 6 {

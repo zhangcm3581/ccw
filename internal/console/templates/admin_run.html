@@ -5,6 +5,25 @@
 {{define "pageactions"}}<a class="btn ghost" href="/admin/nodes/{{.NodeID}}">返回节点</a>{{end}}
 {{define "content"}}
 
+{{if .Issued}}
+<div class="reveal">
+  <div class="reveal-hd">
+    <b>本次纳管签发的 CDK — 只显示这一次</b>
+    <span>刷新或离开本页后无法再取回。CDK 明文不进 Console 数据库、不进日志。忘了保存就到「项目与 CDK」页轮换一张新的。</span>
+  </div>
+  {{range .Issued}}
+  <div class="reveal-row">
+    <div class="reveal-meta">
+      <span class="mono">{{.Slug}}</span>
+      <span class="mono muted">public_id {{.PublicID}}</span>
+    </div>
+    <code class="reveal-cdk">{{.CDK}}</code>
+  </div>
+  {{end}}
+  <p class="reveal-foot">把它交给使用这个项目的人；对方在 <code>cclaude login</code> 时粘贴。</p>
+</div>
+{{end}}
+
 <div class="runsplit">
   <div class="card side">
     <div class="card-hd"><h2>步骤</h2><span class="spacer"></span>

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -17,18 +18,21 @@ import (
 )
 
 type fakeFleetStore struct {
-	nodes   map[string]consolestore.Node
-	zones   []dns.Zone
-	domains map[string]consolestore.NodeDomain
-	creds   map[string]bool
-	runs    map[string]consolestore.RunSummary
-	created []string
+	nodes    map[string]consolestore.Node
+	zones    []dns.Zone
+	domains  map[string]consolestore.NodeDomain
+	creds    map[string]bool
+	runs     map[string]consolestore.RunSummary
+	projects map[string]consolestore.NodeProject
+	issues   []consolestore.CDKIssue
+	created  []string
 }
 
 func newFleetStore() *fakeFleetStore {
 	return &fakeFleetStore{
 		nodes: map[string]consolestore.Node{}, domains: map[string]consolestore.NodeDomain{},
 		creds: map[string]bool{}, runs: map[string]consolestore.RunSummary{},
+		projects: map[string]consolestore.NodeProject{},
 	}
 }
 
@@ -86,6 +90,66 @@ func (f *fakeFleetStore) GetRun(_ context.Context, runID string) (consolestore.R
 		return consolestore.RunSummary{}, consolestore.ErrNotFound
 	}
 	return r, nil
+}
+
+func (f *fakeFleetStore) ListDomains(context.Context) ([]consolestore.DomainRow, error) {
+	var out []consolestore.DomainRow
+	for nodeID, d := range f.domains {
+		out = append(out, consolestore.DomainRow{
+			FQDN: d.FQDN, Seq: d.Seq, TargetIP: d.TargetIP, RecordState: d.RecordState,
+			Zone: "example.com", NodeName: f.nodes[nodeID].Name, NodeID: nodeID,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FQDN < out[j].FQDN })
+	return out, nil
+}
+
+func (f *fakeFleetStore) ListNodeProjects(context.Context) ([]consolestore.NodeProject, error) {
+	var out []consolestore.NodeProject
+	for _, p := range f.projects {
+		p.NodeName = f.nodes[p.NodeID].Name
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+	return out, nil
+}
+
+func (f *fakeFleetStore) GetNodeProject(_ context.Context, id string) (consolestore.NodeProject, error) {
+	p, ok := f.projects[id]
+	if !ok {
+		return consolestore.NodeProject{}, consolestore.ErrNotFound
+	}
+	p.NodeName = f.nodes[p.NodeID].Name
+	return p, nil
+}
+
+func (f *fakeFleetStore) ListCDKIssues(context.Context) ([]consolestore.CDKIssue, error) {
+	out := make([]consolestore.CDKIssue, len(f.issues))
+	copy(out, f.issues)
+	return out, nil
+}
+
+func (f *fakeFleetStore) RecordCDKIssue(_ context.Context, projectID, publicID, issuedBy string) error {
+	for _, ci := range f.issues { // public_id唯一，重复上报不产生新行
+		if ci.PublicID == publicID {
+			return nil
+		}
+	}
+	f.issues = append(f.issues, consolestore.CDKIssue{
+		ID: "ci-" + publicID, ProjectID: projectID, PublicID: publicID,
+		Slug: f.projects[projectID].Slug, IssuedAt: time.Now(),
+	})
+	return nil
+}
+
+func (f *fakeFleetStore) RevokeCDKIssue(_ context.Context, publicID string) error {
+	now := time.Now()
+	for i := range f.issues {
+		if f.issues[i].PublicID == publicID && f.issues[i].RevokedAt == nil {
+			f.issues[i].RevokedAt = &now
+		}
+	}
+	return nil
 }
 
 // newFleetServer返回一个已登录的Server与会话cookie。

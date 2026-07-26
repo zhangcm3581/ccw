@@ -110,19 +110,21 @@ func serve() {
 			logf("机队管理未启用：%v", srcErr)
 		} else {
 			hub := console.NewLogHub(cfg.LogDir)
-			srv.Fleet = &console.Fleet{
-				Store: st, Logs: hub,
-				Orchestrator: &provision.Orchestrator{
-					Store: st, Box: box, DNS: &dns.Manual{},
-					Dial:               provision.DefaultDialer(20 * time.Second),
-					Log:                hub.Append,
-					Finish:             hub.Finish,
-					Artifacts:          nodeArtifacts,
-					SourceTar:          func() ([]byte, error) { return srcTar, nil },
-					RepoRoot:           "/srv/ccw",
-					ComposeProjectName: "ccw",
-				},
+			fleet := &console.Fleet{Store: st, Logs: hub}
+			fleet.Orchestrator = &provision.Orchestrator{
+				Store: st, Box: box, DNS: &dns.Manual{},
+				Dial:      provision.DefaultDialer(20 * time.Second),
+				Log:       hub.Append,
+				Finish:    hub.Finish,
+				Artifacts: nodeArtifacts,
+				SourceTar: func() ([]byte, error) { return srcTar, nil },
+				// 纳管中签发的CDK明文交给UI一次性展示：只进内存、取走即清，
+				// **不落库、不进日志**（设计§8.4）。
+				OnCDKIssued:        fleet.StashCDK,
+				RepoRoot:           "/srv/ccw",
+				ComposeProjectName: "ccw",
 			}
+			srv.Fleet = fleet
 			logf("机队管理已启用（源码包%d KiB，日志目录%s）", len(srcTar)/1024, cfg.LogDir)
 		}
 		logf("管理后台已启用（白名单%d条）", len(nets))

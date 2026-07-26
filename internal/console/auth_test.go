@@ -59,6 +59,42 @@ func (f *fakeAdminStore) WriteAudit(_ context.Context, e consolestore.AuditEntry
 	return nil
 }
 
+// 审计读侧：把写进来的条目按时间倒序还回去（写入顺序即时间顺序）。
+func (f *fakeAdminStore) ListAudit(_ context.Context, action, result string,
+	limit, offset int) ([]consolestore.AuditRecord, error) {
+	var all []consolestore.AuditRecord
+	for i := len(f.audits) - 1; i >= 0; i-- {
+		e := f.audits[i]
+		if (action != "" && e.Action != action) || (result != "" && e.Result != result) {
+			continue
+		}
+		all = append(all, consolestore.AuditRecord{
+			ID: int64(i), Actor: e.Actor, Action: e.Action, Target: e.Target,
+			Result: e.Result, Detail: e.Detail, ClientIP: e.ClientIP, At: time.Now(),
+		})
+	}
+	if offset >= len(all) {
+		return nil, nil
+	}
+	all = all[offset:]
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
+}
+
+func (f *fakeAdminStore) AuditActions(context.Context) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range f.audits {
+		if !seen[e.Action] {
+			seen[e.Action] = true
+			out = append(out, e.Action)
+		}
+	}
+	return out, nil
+}
+
 const testPassword = "correct-horse-battery-staple"
 
 func newAuthServer(t *testing.T) (*Server, *fakeAdminStore, string) {

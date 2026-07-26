@@ -30,6 +30,15 @@ type FleetStore interface {
 	CreateZone(ctx context.Context, domain, provider, prefix string) (string, error)
 	ListRuns(ctx context.Context, nodeID string, limit int) ([]consolestore.RunSummary, error)
 	GetRun(ctx context.Context, runID string) (consolestore.RunSummary, error)
+
+	// 域名页
+	ListDomains(ctx context.Context) ([]consolestore.DomainRow, error)
+	// CDK页：项目与签发事件的镜像。**只有public_id，没有明文**（§8.4）。
+	ListNodeProjects(ctx context.Context) ([]consolestore.NodeProject, error)
+	GetNodeProject(ctx context.Context, id string) (consolestore.NodeProject, error)
+	ListCDKIssues(ctx context.Context) ([]consolestore.CDKIssue, error)
+	RecordCDKIssue(ctx context.Context, projectID, publicID, issuedBy string) error
+	RevokeCDKIssue(ctx context.Context, publicID string) error
 }
 
 // Fleet持有机队页的依赖。
@@ -41,9 +50,19 @@ type Fleet struct {
 	// （不含密码——续跑时已有托管密钥，不需要密码）。
 	lastInput map[string]provision.BootstrapInput
 	mu        stdsync.Mutex
+	// vault是CDK明文的一次性中转站：只在内存、取走即清（§8.4）。
+	vault cdkVault
+}
+
+// StashCDK把纳管过程中签发的CDK明文交给UI一次性展示。
+// 接给Orchestrator.OnCDKIssued；键用runID，运行详情页据此取。
+func (f *Fleet) StashCDK(runID, slug, publicID, cdk string) {
+	f.vault.put(runID, provision.IssuedCDK{Slug: slug, PublicID: publicID, CDK: cdk})
 }
 
 func (s *Server) registerFleet(mux *http.ServeMux) {
+	s.registerDomains(mux)
+	s.registerCDKs(mux)
 	mux.HandleFunc("GET /admin/nodes", s.Auth.requireAdmin(s.adminNodes))
 	mux.HandleFunc("GET /admin/nodes/new", s.Auth.requireAdmin(s.adminNodeNew))
 	mux.HandleFunc("POST /admin/nodes/new", s.Auth.requireAdmin(s.adminNodeCreate))
@@ -290,6 +309,9 @@ func (s *Server) adminRunDetail(w http.ResponseWriter, r *http.Request, sess con
 			"History": s.Fleet.Logs.History(run.ID),
 			"Steps":   steps, "Progress": progress,
 			"StatusText": statusText, "Tone": tone,
+			// 本次纳管签发的CDK明文：**取走即清**，刷新页面就没了（§8.4）。
+			// 这是明文唯一的交付路径——之前它只能从节点侧输出人工取回。
+			"Issued": s.Fleet.vault.take(run.ID),
 			// 「实时」以数据库里的运行状态为准，内存里的 done 标记只是补充：
 			// Console 重启后 LogHub 里没有这次运行的任何记录，
 			// 只看 IsDone 会把一次早已结束的运行显示成还在跑。

@@ -27,6 +27,9 @@ type Orchestrator struct {
 	Dial   Dialer
 	Log    func(runID, line string)
 	Finish func(runID string)
+	// OnCDKIssued把刚签发的CDK**明文**交给UI一次性展示（§8.4的交付路径）。
+	// 实现方必须只放在内存里、被取走即清；**绝不落库、绝不进日志**。
+	OnCDKIssued func(runID, slug, publicID, cdk string)
 
 	// Artifacts返回要写入节点的编排文件（路径相对RepoRoot；目前只有deploy/compose.yaml）。
 	Artifacts func(slugs []string) (map[string]string, error)
@@ -57,6 +60,11 @@ type Store interface {
 
 	CreateRun(ctx context.Context, nodeID, kind, triggeredBy string) (string, error)
 	pipeline.Recorder
+
+	// 项目与CDK签发的镜像（§10）。**只接收public_id，永不接收明文**。
+	UpsertNodeProject(ctx context.Context, nodeID, slug, remoteID string,
+		diskBytes, fiveHour, sevenDay int64) (string, error)
+	RecordCDKIssue(ctx context.Context, projectID, publicID, issuedBy string) error
 }
 
 // nodeCredContext是托管私钥信封加密的AAD用途标签。
@@ -186,11 +194,29 @@ func (o *Orchestrator) runBootstrap(ctx context.Context, runID string, in Bootst
 		OnHostFacts: func(osRelease, arch string) {
 			o.Store.SetNodeFacts(ctx, in.NodeID, osRelease, arch)
 		},
-		OnCDK: func(slug, cdk, publicID string) {
-			// **CDK明文不进日志、不入Console库**（§8.4）。这里只记public_id
-			// 供对账；明文的交付路径是节点上的一次性输出，管理员从运行详情页
-			// 的CDK区取（C17实施前，需从节点日志人工取回）。
-			log("项目%s已签发CDK（public_id=%s；明文见节点侧输出，不经Console存储）", slug, publicID)
+		OnProject: func(pr ProjectResult) {
+			// 项目镜像入库：**权威在节点**，Console存它是为了/connect能解析
+			// public-id，以及后台不登机就能看清机队上有哪些项目（§10）。
+			projectID, err := o.Store.UpsertNodeProject(ctx, in.NodeID, pr.Slug, pr.RemoteID,
+				pr.DiskGiB<<30, pr.FiveHour, pr.SevenDay)
+			if err != nil {
+				// 镜像写失败不该让一次成功的部署变成失败：项目在节点上已经建好了。
+				// 但必须说出来——否则/connect会静默地查不到这个项目。
+				log("警告：项目%s的镜像信息未能写入Console库（%v）。节点上项目已建好，"+
+					"但/connect暂时解析不到它；可在CDK管理页点「从节点同步」补上。", pr.Slug, err)
+				return
+			}
+			if pr.PublicID == "" {
+				return // 项目已存在、未签发新CDK
+			}
+			if err := o.Store.RecordCDKIssue(ctx, projectID, pr.PublicID, in.TriggeredBy); err != nil {
+				log("警告：CDK签发记录未能写入Console库（%v）；/connect暂时解析不到 %s。",
+					err, pr.PublicID)
+			}
+			// **明文只往这一条路走**：交给UI显示一次，不落库、不进日志。
+			if o.OnCDKIssued != nil {
+				o.OnCDKIssued(runID, pr.Slug, pr.PublicID, pr.CDK)
+			}
 		},
 	}
 	runner := &pipeline.Runner{

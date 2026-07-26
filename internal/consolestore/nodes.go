@@ -236,6 +236,48 @@ func (s *Store) DomainByNode(ctx context.Context, nodeID string) (NodeDomain, er
 	return d, nil
 }
 
+// DomainRow是域名页的一行：域名 + 它属于谁 + DNS生效状态。
+type DomainRow struct {
+	FQDN        string
+	Seq         int
+	TargetIP    string
+	RecordState string
+	VerifiedAt  *time.Time
+	Zone        string
+	NodeName    string
+	NodeID      string
+}
+
+// ListDomains列出全部未退役的域名分配。
+//
+// 域名页要回答的是「哪个子域名给了哪台机器、DNS生效没有」，
+// 逐节点调DomainByNode答不了——没绑到节点的分配（分配了但纳管中断）就看不见了，
+// 而那恰恰是最需要被看见的一种。
+func (s *Store) ListDomains(ctx context.Context) ([]DomainRow, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT nd.fqdn, nd.seq, nd.target_ip, nd.record_state, nd.dns_verified_at,
+		       z.domain, COALESCE(n.name, ''), COALESCE(n.id::text, '')
+		FROM node_domains nd
+		JOIN dns_zones z ON z.id = nd.zone_id
+		LEFT JOIN nodes n ON n.id = nd.node_id
+		WHERE nd.released_at IS NULL
+		ORDER BY z.domain, nd.seq`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DomainRow
+	for rows.Next() {
+		var d DomainRow
+		if err := rows.Scan(&d.FQDN, &d.Seq, &d.TargetIP, &d.RecordState, &d.VerifiedAt,
+			&d.Zone, &d.NodeName, &d.NodeID); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // DomainTaken判断某个fqdn是否已被占用（含已退役的记录——序号永不回收，
 // 退役后的域名也不该再分配给新节点，§6.2）。
 func (s *Store) DomainTaken(ctx context.Context, fqdn string) (bool, error) {

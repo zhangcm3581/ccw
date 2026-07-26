@@ -21,8 +21,8 @@
     {{end}}
 
     <div class="card">
-      <div class="card-hd"><h2>最近部署</h2><span class="spacer"></span>
-        <span class="mono muted" style="font-size:11.5px">每台节点取最近两次</span></div>
+      <div class="card-hd"><h2>{{if .Runs}}最近部署{{else}}从这里开始{{end}}</h2><span class="spacer"></span>
+        {{if .Runs}}<span class="mono muted" style="font-size:11.5px">每台节点取最近两次</span>{{end}}</div>
       {{if .Runs}}
       <div class="tablewrap">
         <table>
@@ -47,10 +47,19 @@
         </table>
       </div>
       {{else}}
-      <div class="empty">
-        <h3>还没有部署记录</h3>
-        <p>纳管第一台节点后，这里会显示每次部署的步骤进度与日志。</p>
-        <a class="btn" href="/admin/nodes/new">新增节点</a>
+      <div class="card-bd" style="padding-top:6px;padding-bottom:6px">
+        <ol class="onboard">
+          {{range .Onboarding}}
+          <li class="{{if .Done}}done{{end}}">
+            <span class="tick" aria-hidden="true"></span>
+            <div>
+              <b>{{.Title}}</b>
+              <span>{{.Detail}}</span>
+            </div>
+            {{if not .Done}}<a class="btn ghost" href="{{.Link}}">{{.LinkText}}</a>{{end}}
+          </li>
+          {{end}}
+        </ol>
       </div>
       {{end}}
     </div>

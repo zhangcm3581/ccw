@@ -161,3 +161,65 @@ func (s *Store) WriteAudit(ctx context.Context, e AuditEntry) error {
 		VALUES ($1,$2,$3,$4,$5,$6)`, actor, e.Action, e.Target, e.Result, detail, e.ClientIP)
 	return err
 }
+
+// AuditRecord是审计表的一行（读侧）。Actor已换成用户名，页面不必再查一次。
+type AuditRecord struct {
+	ID       int64
+	Actor    string // 空＝未登录动作（例如登录失败）
+	Action   string
+	Target   string
+	Result   string
+	Detail   map[string]any
+	ClientIP string
+	At       time.Time
+}
+
+// ListAudit按时间倒序读审计日志，支持按动作与结果过滤。
+//
+// **审计只有写没有读等于没有审计**：它是§8.5要求的控制项，
+// 但在此之前只能登机用psql看。这里是它的读侧。
+//
+// 过滤参数为空＝不过滤。limit上限由调用方保证（页面固定100/页）。
+func (s *Store) ListAudit(ctx context.Context, action, result string, limit, offset int) ([]AuditRecord, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT a.id, COALESCE(u.username, ''), a.action, a.target, a.result,
+		       a.detail, a.client_ip, a.at
+		FROM audit_log a
+		LEFT JOIN admin_users u ON u.id = a.actor
+		WHERE ($1 = '' OR a.action = $1)
+		  AND ($2 = '' OR a.result = $2)
+		ORDER BY a.at DESC, a.id DESC
+		LIMIT $3 OFFSET $4`, action, result, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AuditRecord
+	for rows.Next() {
+		var r AuditRecord
+		if err := rows.Scan(&r.ID, &r.Actor, &r.Action, &r.Target, &r.Result,
+			&r.Detail, &r.ClientIP, &r.At); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// AuditActions返回出现过的动作名，供页面的过滤下拉用（种类很少，直接DISTINCT）。
+func (s *Store) AuditActions(ctx context.Context) ([]string, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT DISTINCT action FROM audit_log ORDER BY action`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}

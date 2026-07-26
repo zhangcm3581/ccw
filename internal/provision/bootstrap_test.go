@@ -248,15 +248,18 @@ func TestRenderEnvGeneratesLocallyAndPreserves(t *testing.T) {
 	}
 }
 
-// init-projects：CDK明文只经OnCDK回调一次，**绝不进日志**。
+// init-projects：CDK明文只经OnProject回调一次，**绝不进日志**。
 func TestInitProjectsCDKNeverLogged(t *testing.T) {
 	const plain = "ccw_a1b2c3d4e5f60718.SECRETSECRETSECRET"
 	r := &scriptRunner{rules: []rule{{contains: "init-project", res: sshexec.Result{
-		Stdout: `{"slug": "project-a", "created": true, "public_id": "a1b2c3d4e5f60718", "cdk": "` + plain + `"}`,
+		Stdout: `Creating network deploy_default` + "\n" + // compose的噪声，解析必须扛得住
+			`{"slug": "project-a", "project_id": "p-1", "container": "project-a-claude",
+			  "created": true, "disk_gib": 15, "five_hour": 1000, "seven_day": 5000,
+			  "public_id": "a1b2c3d4e5f60718", "cdk": "` + plain + `"}`,
 	}}}}
 	d := baseDeps(r, &fakeDNS{})
-	var gotSlug, gotCDK, gotPub string
-	d.OnCDK = func(slug, cdk, pub string) { gotSlug, gotCDK, gotPub = slug, cdk, pub }
+	var got ProjectResult
+	d.OnProject = func(pr ProjectResult) { got = pr }
 
 	var logs []string
 	err := stepByName(BootstrapSteps(d), "init-projects").Run(context.Background(),
@@ -264,27 +267,35 @@ func TestInitProjectsCDKNeverLogged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotSlug != "project-a" || gotCDK != plain || gotPub != "a1b2c3d4e5f60718" {
-		t.Errorf("回调参数错误: %s %s %s", gotSlug, gotCDK, gotPub)
+	if got.Slug != "project-a" || got.CDK != plain || got.PublicID != "a1b2c3d4e5f60718" {
+		t.Errorf("回调参数错误: %+v", got)
+	}
+	// 镜像信息也要带回来，否则Console库里项目行是空壳、/connect解析不到
+	if got.RemoteID != "p-1" || got.DiskGiB != 15 || got.FiveHour != 1000 || got.SevenDay != 5000 {
+		t.Errorf("镜像字段没解析出来: %+v", got)
 	}
 	if strings.Contains(strings.Join(logs, "\n"), "SECRET") {
 		t.Fatal("CDK明文绝不能进日志（它会写盘并经SSE推给浏览器）")
 	}
 }
 
-// 已存在的项目不重新签发CDK（幂等，避免重跑产生多余CDK）。
+// 已存在的项目不重新签发CDK（幂等，避免重跑产生多余CDK），
+// 但**仍要回调**——配额与remote id的镜像需要刷新。
 func TestInitProjectsIdempotentNoNewCDK(t *testing.T) {
 	r := &scriptRunner{rules: []rule{{contains: "init-project", res: sshexec.Result{
-		Stdout: `{"slug": "project-a", "created": false, "project_id": "x"}`,
+		Stdout: `{"slug": "project-a", "created": false, "project_id": "x", "disk_gib": 15}`,
 	}}}}
 	d := baseDeps(r, &fakeDNS{})
-	called := false
-	d.OnCDK = func(string, string, string) { called = true }
+	var got ProjectResult
+	d.OnProject = func(pr ProjectResult) { got = pr }
 	if err := stepByName(BootstrapSteps(d), "init-projects").Run(context.Background(), noLog); err != nil {
 		t.Fatal(err)
 	}
-	if called {
-		t.Error("已存在的项目不应触发CDK回调")
+	if got.Slug != "project-a" || got.RemoteID != "x" {
+		t.Errorf("已存在的项目也应回调镜像信息: %+v", got)
+	}
+	if got.PublicID != "" || got.CDK != "" {
+		t.Error("已存在的项目不应带回新CDK")
 	}
 }
 
@@ -323,13 +334,23 @@ func TestDiskGuardReportsWithoutFailing(t *testing.T) {
 }
 
 func TestParseInitProjectJSON(t *testing.T) {
-	cdk, pub, created := parseInitProjectJSON(
+	pr := parseInitProjectJSON(
 		`{"slug": "a", "created": true, "public_id": "abc123", "cdk": "ccw_abc123.secret"}`)
-	if cdk != "ccw_abc123.secret" || pub != "abc123" || !created {
-		t.Errorf("got %q %q %v", cdk, pub, created)
+	if pr.CDK != "ccw_abc123.secret" || pr.PublicID != "abc123" || !pr.Created {
+		t.Errorf("got %+v", pr)
 	}
-	if _, _, created := parseInitProjectJSON(`{"created": false}`); created {
+	if parseInitProjectJSON(`{"created": false}`).Created {
 		t.Error("created=false应解析为false")
+	}
+	// compose的噪声包在JSON前后都要能扛住
+	noisy := parseInitProjectJSON("Creating network x_default\n" +
+		`{"slug": "b", "disk_gib": 15}` + "\nDone\n")
+	if noisy.Slug != "b" || noisy.DiskGiB != 15 {
+		t.Errorf("噪声中的JSON应能取出: %+v", noisy)
+	}
+	// 完全不是JSON时返回零值，而不是panic或半个结构体
+	if got := parseInitProjectJSON("command not found"); got.Slug != "" || got.Created {
+		t.Errorf("非JSON输入应返回零值: %+v", got)
 	}
 }
 

@@ -95,12 +95,18 @@ a:hover{text-decoration:underline}
   display:flex;flex-direction:column;position:sticky;top:0;height:100vh;z-index:20;
 }
 .rail-brand{
-  display:flex;align-items:baseline;gap:8px;
-  padding:20px 20px 18px;border-bottom:1px solid var(--line-soft);
+  display:flex;align-items:center;gap:10px;
+  padding:18px 20px 16px;border-bottom:1px solid var(--line-soft);
 }
-.rail-brand b{font-size:17px;letter-spacing:-.02em}
+.rail-brand .mark{
+  width:26px;height:26px;border-radius:6px;flex:none;
+  background:var(--accent);color:var(--accent-ink);
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:-.03em;
+}
+.rail-brand b{font-size:15px;letter-spacing:-.01em;line-height:1.2}
 .rail-brand span{
-  font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+  display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;
   text-transform:uppercase;color:var(--ink-3);
 }
 .rail-nav{padding:14px 12px;display:flex;flex-direction:column;gap:2px;flex:1;overflow-y:auto}
@@ -111,9 +117,16 @@ a:hover{text-decoration:underline}
 .nav-item{
   display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:5px;
   color:var(--ink-2);font-size:14px;text-decoration:none;
+  position:relative;
 }
 .nav-item:hover{background:var(--panel);color:var(--ink);text-decoration:none}
 .nav-item[aria-current="page"]{background:var(--accent-wash);color:var(--accent);font-weight:600}
+/* 当前项左侧一道竖条：底色在深浅两套主题下对比度不同，
+   形状不受主题影响，「我在哪一页」始终一眼可见。 */
+.nav-item[aria-current="page"]::before{
+  content:"";position:absolute;left:0;top:7px;bottom:7px;width:2.5px;
+  border-radius:0 2px 2px 0;background:var(--accent);
+}
 .nav-item .dot{width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.55;flex:none}
 .nav-item .tally{
   margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--ink-3);
@@ -168,6 +181,10 @@ a:hover{text-decoration:underline}
 .btn:hover{filter:brightness(1.07);text-decoration:none}
 .btn.ghost{background:transparent;color:var(--accent);border-color:var(--line)}
 .btn.ghost:hover{border-color:var(--accent);filter:none}
+/* danger不做成实心红：它和旁边的常规操作长得越像，越容易误点。
+   平时是安静的描边，悬停时才变红——手已经在上面了，此时才需要警告。 */
+.btn.danger{background:transparent;color:var(--ink-2);border-color:var(--line)}
+.btn.danger:hover{background:var(--bad-wash);color:var(--bad);border-color:var(--bad);filter:none}
 .btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
 
 .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
@@ -177,6 +194,13 @@ a:hover{text-decoration:underline}
 .card-hd h2{font-size:14px;margin:0;font-weight:650;letter-spacing:-.005em}
 .card-hd .spacer{margin-left:auto}
 .card-bd{padding:18px}
+/* 卡片底栏放动作。与表格之间要有一条分隔线，否则按钮看起来像最后一行数据。 */
+.card-ft{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:12px 18px;border-top:1px solid var(--line-soft);background:var(--ground);
+  border-radius:0 0 8px 8px;
+}
+.card-ft .spacer{margin-left:auto}
 .grid{display:grid;gap:16px}
 .g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
 
@@ -234,11 +258,34 @@ td.nowrap{white-space:nowrap}
 }
 .note.warn{border-left-color:var(--warn);background:var(--warn-wash)}
 .note.bad{border-left-color:var(--bad);background:var(--bad-wash)}
+.note.ok{border-left-color:var(--ok);background:var(--ok-wash)}
 .note b{font-weight:650}
 .note code,code{
   font-family:var(--mono);font-size:.88em;background:var(--idle-wash);
   padding:1.5px 5px;border-radius:3px;
 }
+
+/* 接入引导：全新安装时总览唯一有内容的东西。
+   用勾选而不是序号——三件事有先后，但真正要传达的是「哪几件已经做完了」。 */
+.onboard{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.onboard li{
+  display:flex;align-items:center;gap:13px;padding:12px 0;
+  border-bottom:1px solid var(--line-soft);
+}
+.onboard li:last-child{border-bottom:none}
+.onboard li > div{flex:1;min-width:0}
+.onboard b{display:block;font-size:14px;font-weight:600;margin-bottom:1px}
+.onboard span:not(.tick){font-size:13px;color:var(--ink-3)}
+.onboard .tick{
+  width:18px;height:18px;border-radius:50%;flex:none;
+  border:1.5px solid var(--line);position:relative;
+}
+.onboard li.done .tick{background:var(--ok);border-color:var(--ok)}
+.onboard li.done .tick::after{
+  content:"";position:absolute;left:5px;top:2px;width:5px;height:9px;
+  border:solid #fff;border-width:0 1.8px 1.8px 0;transform:rotate(42deg);
+}
+.onboard li.done b{color:var(--ink-3);font-weight:500}
 
 .empty{text-align:center;padding:44px 20px;color:var(--ink-3)}
 .empty h3{color:var(--ink);font-size:15px;margin:0 0 6px;font-weight:600}
@@ -295,6 +342,50 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 .steplist .s.failed .nm{color:var(--bad);font-weight:600}
 .steplist .s.running .nm{color:var(--accent);font-weight:600}
 
+/* ── 一次性密钥面板 ───────────────────────────────
+   这是全站唯一「看完就没了」的东西，所以它必须长得跟别的都不一样：
+   借终端那套深色，明确它是要被复制走的机器值，而不是页面上的一段信息。
+   刷新即消失，视觉上也要让人当场就想复制。 */
+.reveal{
+  background:var(--term-bg);border:1px solid var(--accent);border-radius:8px;
+  overflow:hidden;margin-bottom:22px;box-shadow:0 0 0 3px var(--accent-wash);
+}
+.reveal-hd{padding:14px 18px 12px;border-bottom:1px solid rgba(255,255,255,.08)}
+.reveal-hd b{display:block;color:#e8edf3;font-size:14px;margin-bottom:3px}
+.reveal-hd span{font-size:12.5px;color:#8b96a5}
+.reveal-row{padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.06)}
+.reveal-meta{display:flex;gap:12px;align-items:baseline;margin-bottom:7px;font-size:12px}
+.reveal-meta .mono{color:#c8d2de}
+.reveal-meta .muted{color:#7b8697}
+.reveal-cdk{
+  display:block;background:rgba(255,255,255,.06);color:#e8edf3;
+  padding:11px 13px;border-radius:5px;font-family:var(--mono);font-size:13px;
+  word-break:break-all;user-select:all;
+}
+.reveal-foot{margin:0;padding:12px 18px;font-size:12.5px;color:#8b96a5}
+.reveal-foot code{background:rgba(255,255,255,.07);color:#9fb0c2}
+
+/* 配额小标签：3个项目的上限是产品硬规则，页面上要看得见。 */
+.chips{display:flex;flex-wrap:wrap;gap:10px}
+.chip{
+  display:inline-flex;align-items:center;gap:9px;padding:5px 12px;border-radius:20px;
+  border:1px solid var(--line);background:var(--panel);font-size:12.5px;
+}
+.chip .num{color:var(--ink-3)}
+.chip-full{border-color:var(--warn);color:var(--warn);background:var(--warn-wash)}
+.chip-full .num{color:var(--warn)}
+
+/* 待添加的DNS记录：贴在对应域名行下面，可直接选中复制。 */
+.dnsrec{
+  display:flex;flex-direction:column;gap:6px;padding:11px 13px;
+  border-left:3px solid var(--warn);background:var(--warn-wash);border-radius:0 6px 6px 0;
+}
+.dnsrec code{background:var(--panel);padding:7px 10px;border-radius:4px;user-select:all;font-size:12.5px}
+
+.filters{display:flex;gap:8px;align-items:center}
+.filters select{width:auto;min-width:130px;padding:5px 9px;font-size:12.5px}
+.pager{display:flex;align-items:center;gap:14px;padding:14px 18px;border-top:1px solid var(--line-soft)}
+
 /* ── 运行详情：步骤表 + 终端 ─────────────────────── */
 /* 日志是这一页的主体，所以让它吃满视口高度；步骤表跟着滚动固定住，
    翻长日志时「现在跑到第几步」始终在视线里。 */
@@ -329,7 +420,10 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 <body>
 <div class="shell">
   <aside class="rail">
-    <div class="rail-brand"><b>ccw</b><span>控制台</span></div>
+    <div class="rail-brand">
+      <span class="mark">cc</span>
+      <span><b>ccw</b><span>控制台</span></span>
+    </div>
     <nav class="rail-nav">
       <div class="nav-label">运维</div>
       <a class="nav-item" href="/admin" {{if eq .Nav "dashboard"}}aria-current="page"{{end}}>
@@ -339,10 +433,17 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
         <span class="dot"></span>机队
         {{if .NodeCount}}<span class="tally">{{.NodeCount}}</span>{{end}}
       </a>
-      <div class="nav-label">待实施</div>
-      <span class="nav-item muted" aria-disabled="true" title="目前用 SSH + ccwadmin"><span class="dot"></span>CDK 管理</span>
-      <span class="nav-item muted" aria-disabled="true" title="目前用 SSH + ccwadmin"><span class="dot"></span>域名与证书</span>
-      <span class="nav-item muted" aria-disabled="true" title="目前直接查 Console 库"><span class="dot"></span>审计日志</span>
+      <div class="nav-label">接入</div>
+      <a class="nav-item" href="/admin/cdks" {{if eq .Nav "cdks"}}aria-current="page"{{end}}>
+        <span class="dot"></span>项目与 CDK
+      </a>
+      <a class="nav-item" href="/admin/domains" {{if eq .Nav "domains"}}aria-current="page"{{end}}>
+        <span class="dot"></span>域名
+      </a>
+      <div class="nav-label">记录</div>
+      <a class="nav-item" href="/admin/audit" {{if eq .Nav "audit"}}aria-current="page"{{end}}>
+        <span class="dot"></span>审计日志
+      </a>
     </nav>
     <div class="rail-foot">
       <div class="theme" role="group" aria-label="主题">

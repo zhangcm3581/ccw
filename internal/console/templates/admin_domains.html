@@ -1,0 +1,99 @@
+{{define "title"}}域名 · ccw 控制台{{end}}
+{{define "pagetitle"}}域名{{end}}
+{{define "pagesub"}}{{if .Pending}}<span class="st st-warn">{{.Pending}} 条记录待添加</span>{{end}}{{end}}
+{{define "content"}}
+
+{{if .Error}}<div class="note bad" style="margin-bottom:20px">{{.Error}}</div>{{end}}
+{{if .Notice}}<div class="note ok" style="margin-bottom:20px">{{.Notice}}</div>{{end}}
+
+<div class="workspace">
+  <div class="stack">
+    <div class="card">
+      <div class="card-hd"><h2>子域名分配</h2><span class="spacer"></span>
+        <span class="mono muted" style="font-size:11.5px">序号单调递增，退役后不复用</span></div>
+      {{if .Domains}}
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>域名</th><th>节点</th><th>指向</th><th>状态</th><th>校验时间</th></tr></thead>
+          <tbody>
+            {{range .Domains}}
+            <tr>
+              <td class="mono">{{.FQDN}}</td>
+              <td class="mono muted nowrap">{{if .NodeID}}<a href="/admin/nodes/{{.NodeID}}">{{.NodeName}}</a>{{else}}{{.NodeName}}{{end}}</td>
+              <td class="mono muted nowrap">{{.TargetIP}}</td>
+              <td><span class="st st-{{.Tone}}">{{.StateText}}</span></td>
+              <td class="mono muted nowrap">{{.Verified}}</td>
+            </tr>
+            {{if .Instruction}}
+            <tr>
+              <td colspan="5" style="padding-top:0">
+                <div class="dnsrec">
+                  <span class="eyebrow" style="margin:0">在你的 DNS 服务商添加</span>
+                  <code>{{.Instruction}}</code>
+                  <span class="muted" style="font-size:12px">加完回到节点页点「继续 / 重新部署」，从 dns-allocate 续跑。</span>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="empty">
+        <h3>还没有分配过子域名</h3>
+        <p>纳管节点时 Console 会从 zone 里取下一个序号，自动分配。</p>
+      </div>
+      {{end}}
+    </div>
+
+    <div class="note">
+      <b>证书由节点自己签。</b>每台节点上的 Caddy 用 Let's Encrypt 自动申请与续期，
+      Console 不代管证书，也还没有到期告警与签发预算水位（C10 未实施）——
+      现在要看证书状态得登机 <code>docker logs</code> 看 Caddy。
+    </div>
+  </div>
+
+  <div class="stack">
+    <div class="card">
+      <div class="card-hd"><h2>zone</h2></div>
+      {{if .Zones}}
+      <div class="card-bd" style="display:flex;flex-direction:column;gap:12px">
+        {{range .Zones}}
+        <div>
+          <div class="mono">{{.Domain}}</div>
+          <div class="mono muted" style="font-size:11.5px">{{.SubdomainPrefix}}-NN.{{.Domain}} · {{.Provider}}</div>
+        </div>
+        {{end}}
+      </div>
+      {{else}}
+      <div class="card-bd"><p class="muted" style="margin:0;font-size:13.5px">还没有 zone。</p></div>
+      {{end}}
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h2>新建 zone</h2></div>
+      <div class="card-bd">
+        <form method="POST" action="/admin/domains/zones">
+          <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+          <label class="fld">
+            <span class="lb">域名</span>
+            <input type="text" name="domain" placeholder="example.com" required>
+          </label>
+          <label class="fld">
+            <span class="lb">子域名前缀</span>
+            <input type="text" name="prefix" value="api">
+            <span class="hint">节点会拿到 <code>前缀-01</code>、<code>前缀-02</code>……</span>
+          </label>
+          <button class="btn" type="submit">创建</button>
+          <p class="muted" style="font-size:12.5px;margin:12px 0 0">
+            DNS 是手动模式：Console 告诉你要加哪条 A 记录，加记录这一步由你完成。
+            Route 53 自动化（C9）未实施，因此这里没有 provider 可选。
+          </p>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+{{end}}

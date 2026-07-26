@@ -2,6 +2,7 @@ package provision
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -53,9 +54,10 @@ type Deps struct {
 	// 放进Deps是为了让它成为**流水线的一个步骤**、进provision_steps记账，
 	// 而不是在流水线之外悄悄跑（失败时步骤表里看不到任何记录）。
 	Harden func(ctx context.Context, log pipeline.Logf) error
-	// OnCDK在init-projects回收到CDK明文时回调。**明文只经过这里一次**，
-	// 由调用方转发到浏览器后即丢弃，绝不入Console库（§8.4）。
-	OnCDK func(slug, cdk, publicID string)
+	// OnProject在init-projects处理完一个slug后回调，带回节点侧的项目信息
+	// 与（新建时的）CDK明文。**明文只经过这里一次**，由调用方转发到浏览器后
+	// 即丢弃，绝不入Console库（§8.4）；其余字段是可以落库的镜像信息。
+	OnProject func(ProjectResult)
 	// OnHostFacts在probe采集完成后回调（写nodes表）。
 	OnHostFacts func(osRelease, arch string)
 	// DiskGiB是probe校验可用磁盘的门槛（默认按§7.6的80 GB规格）。
@@ -473,9 +475,13 @@ func stepInitProjects(d Deps) pipeline.Step {
 				if err != nil {
 					return fmt.Errorf("建项目%s失败: %w", slug, err)
 				}
-				cdk, publicID, created := parseInitProjectJSON(out)
-				if created && d.OnCDK != nil {
-					d.OnCDK(slug, cdk, publicID)
+				pr := parseInitProjectJSON(out)
+				pr.Slug = slug // 以请求的slug为准，不信回显
+				created := pr.Created
+				if d.OnProject != nil {
+					// 已存在的项目也要回调：它的配额与remote id仍需入Console镜像，
+					// 否则重跑一次纳管，镜像就永远停在第一次的值上。
+					d.OnProject(pr)
 				}
 				if created {
 					// **日志里绝不出现CDK明文**——它只经OnCDK回调交给浏览器一次。
@@ -515,27 +521,40 @@ func stepDiskGuard(d Deps) pipeline.Step {
 	}
 }
 
-// parseInitProjectJSON从ccwadmin --json输出里取CDK与public_id。
-// 用最小解析而不是引入json结构体：只需要三个字段，且**明文不落任何中间变量之外的地方**。
-func parseInitProjectJSON(out string) (cdk, publicID string, created bool) {
-	cdk = jsonStringField(out, "cdk")
-	publicID = jsonStringField(out, "public_id")
-	created = strings.Contains(out, `"created": true`)
-	return cdk, publicID, created
+// ProjectResult是init-projects处理完一个slug后的结果，对应
+// `ccwadmin init-project --json`的输出。
+//
+// **CDK是明文**：它只在回调的调用栈里存在，转发给浏览器展示一次之后即丢弃。
+// 其余字段都是可以进Console镜像库的信息（§10的node_projects）。
+type ProjectResult struct {
+	Slug      string `json:"slug"`
+	RemoteID  string `json:"project_id"`
+	Container string `json:"container"`
+	Created   bool   `json:"created"`
+	DiskGiB   int64  `json:"disk_gib"`
+	FiveHour  int64  `json:"five_hour"`
+	SevenDay  int64  `json:"seven_day"`
+	PublicID  string `json:"public_id"`
+	CDK       string `json:"cdk"`
 }
 
-func jsonStringField(s, key string) string {
-	marker := `"` + key + `": "`
-	i := strings.Index(s, marker)
-	if i < 0 {
-		return ""
+// parseInitProjectJSON从ccwadmin --json输出里取项目信息。
+//
+// 只截取第一个{到最后一个}再解析：`docker compose run`会在stdout混进
+// 「Creating network…」这类噪声，直接Unmarshal整段必然失败。
+// 解析失败返回零值而不是报错——调用方靠退出码判断成败，
+// 这里失败只意味着镜像信息缺失，不该让一次成功的建项目变成失败。
+func parseInitProjectJSON(out string) ProjectResult {
+	i := strings.IndexByte(out, '{')
+	j := strings.LastIndexByte(out, '}')
+	if i < 0 || j <= i {
+		return ProjectResult{}
 	}
-	rest := s[i+len(marker):]
-	j := strings.IndexByte(rest, '"')
-	if j < 0 {
-		return ""
+	var pr ProjectResult
+	if err := json.Unmarshal([]byte(out[i:j+1]), &pr); err != nil {
+		return ProjectResult{}
 	}
-	return rest[:j]
+	return pr
 }
 
 func dirOf(p string) string {
