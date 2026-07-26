@@ -36,8 +36,12 @@ func TestAdminPagesShareShell(t *testing.T) {
 			continue
 		}
 		body := w.Body.String()
-		// 骨架件：左轨、顶栏、当前用户、退出
-		for _, want := range []string{`class="rail"`, `class="topbar"`, "admin", "退出登录"} {
+		// 骨架件：左轨、顶栏、当前用户、退出。
+		// 用户名连着标签一起断言——光找"admin"是白断言，
+		// 每页都有href="/admin"，用户名丢了也照样通过。
+		for _, want := range []string{
+			`class="rail"`, `class="topbar"`, `class="nm">admin<`, "退出登录",
+		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s: 外壳缺%q", c.path, want)
 			}

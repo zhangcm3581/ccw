@@ -415,7 +415,8 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
     });
   });
 
-  // 窄屏抽屉：遮罩点击、Esc 与选中导航项都关闭它。
+  // 窄屏抽屉：遮罩点击与 Esc 关闭它。
+  // 点导航项不需要单独处理——那是整页跳转，抽屉状态本来就不跨页面保留。
   var shell = document.getElementById('shell');
   var menu = document.getElementById('menu');
   function close() { shell.classList.remove('nav-open'); menu.setAttribute('aria-expanded', 'false'); }
