@@ -55,7 +55,7 @@ cd ~/my-project-a                              # 同步以运行目录为根，�
 
 二进制不写死任何域名：API地址与CDK存在`~/.ccw/config.json`（0600）。优先级`--api` > `CCW_API`环境变量 > 本地配置 > 交互提示；旧版`~/.ccw/cdk`单行文件会自动迁移。`cclaude logout`清除本地配置。CDK不接受命令行参数（会进shell history与`ps`输出），只走交互输入或`CCW_CDK`环境变量。
 
-CLI后台同步当前目录、前台附着云端终端，状态栏形如`[project-a] 5h:10/1000000 7d:60/10000000 disk:0/21474836480 mode:rw`。超额或磁盘满时**不退出**，转为cleanup模式（仍可下载、删除、缩小文件），窗口恢复后自动回到正常模式。凭据类文件与`.git/`、`node_modules/`等默认排除（名单见`internal/sync/paths.go`）；本地基线索引写在目录下的`.cclaude/index.json`。
+CLI后台同步当前目录、前台附着云端终端，状态栏形如`[project-a] 5h:10/1000000 7d:60/10000000 disk:0/21474836480 mode:rw`。超额或磁盘满时**不退出**，转为cleanup模式（仍可下载、删除、缩小文件），窗口恢复后自动回到正常模式。凭据类文件与`.git/`、`node_modules/`等默认排除（名单见`internal/sync/paths.go`）；**符号链接不参与同步**（两端一律跳过，防止经链接把目录外内容带进清单）；本地基线索引写在目录下的`.cclaude/index.json`。
 
 ## 开发
 

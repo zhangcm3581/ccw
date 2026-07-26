@@ -54,6 +54,11 @@ func ScanDir(root string) ([]FileEntry, error) {
 			}
 			return nil
 		}
+		// 只扫普通文件（与DirStore.Manifest一致）：符号链接不同步——
+		// 云端跟随符号链接等于把root之外的内容纳入清单，是逃逸面的一部分。
+		if !d.Type().IsRegular() {
+			return nil
+		}
 		if DefaultExcluded(rel) || strings.HasPrefix(filepath.Base(p), ".cclaude.tmp.") {
 			return nil
 		}

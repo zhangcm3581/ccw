@@ -80,16 +80,20 @@
 
 ---
 
-## D4. 同步路径安全用EvalSymlinks，未用openat2
+## D4. ~~同步路径安全用EvalSymlinks，未用openat2~~（2026-07-26已解决）
 
 | | |
 |---|---|
 | **spec原文** | §8：Linux生产**必须**用`openat2(RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS)`或逐级目录fd等价实现；`MkdirAll`+`EvalSymlinks`只允许作为非Linux平台的测试替代，**不得作为生产安全边界** |
-| **实际代码** | `internal/sync/server.go:32-50`用`EvalSymlinks`，代码注释已如实标明这是TOCTOU窗口、只适合本机/非Linux测试 |
+| **现状** | **已按spec实现**：`internal/sync/fsops_linux.go`（Linux构建标签）用`unix.Openat2(RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS)`整段内核原子解析 + 父目录fd上`renameat`/`unlinkat`操作最终分量，无TOCTOU窗口；内核不支持时硬失败不降级（白名单发行版内核均≥5.6）。非Linux保留`EvalSymlinks`实现（`fsops_other.go`），仅作spec允许的测试替代 |
 
-**评估：这是明确的欠账，不是设计变更。**当前生产部署运行在这个已知不安全的实现上。触发条件是攻击者能在检查与写入之间替换项目目录内的符号链接——在单管理员个人版场景下风险有限，但spec把它列为"必须"，不应长期停留。
+**顺带收紧的三处**（实现时发现的相邻漏洞，超出D4原文范围但同属该边界）：
 
-**修复方向：**Linux构建标签下用`unix.Openat2`实现`resolve`，非Linux保留现有实现并只用于测试。
+1. 叶子文件符号链接的读取此前会被跟随（非Linux实现连非竞态用例都放行），现两平台一律拒绝——否则下载会把root之外的内容带给客户端
+2. `DirStore.Manifest`与`ScanDir`只入账普通文件：符号链接一律不进清单（否则云端清单会携带root之外文件的大小/哈希，进而经下载泄内容）。**行为变化：符号链接不再参与同步**
+3. 两平台的非竞态判定由`fsops_test.go`同一套断言约束，防止两个实现漂移
+
+**证据：**逃逸测试（目录/叶子符号链接的读写删、清单跳过）在macOS与Linux容器（kernel 6.10，真实openat2路径）均通过；CI的ubuntu job持续覆盖Linux路径。**未在生产节点验证**，但该实现无部署形态依赖。
 
 ---
 

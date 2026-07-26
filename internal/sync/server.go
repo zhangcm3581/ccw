@@ -27,51 +27,20 @@ type DirStore struct{ root string }
 
 func NewDirStore(root string) *DirStore { return &DirStore{root: root} }
 
-// resolve把相对路径映射到root下。
-//
-// 安全边界（审查§2.5）：本函数的EvalSymlinks实现存在检查与写入之间的
-// TOCTOU窗口，只适合本机/非Linux测试。Linux生产构建前必须替换为openat2
-// （RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS）逐级打开父目录fd的版本。
-// 当前版本能正确拒绝非竞态的符号链接逃逸。
-// 这是已知欠账，不是设计变更：见docs/design-deviations.md的D4与docs/STATUS.md的P1-2。
-func (d *DirStore) resolve(rel string) (string, error) {
-	rel, err := SafeRelPath(rel)
-	if err != nil {
-		return "", err
-	}
-	abs := filepath.Join(d.root, filepath.FromSlash(rel))
-	parent := filepath.Dir(abs)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return "", err
-	}
-	realParent, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		return "", err
-	}
-	realRoot, err := filepath.EvalSymlinks(d.root)
-	if err != nil {
-		return "", err
-	}
-	if realParent != realRoot && !strings.HasPrefix(realParent+string(os.PathSeparator), realRoot+string(os.PathSeparator)) {
-		return "", ErrUnsafePath
-	}
-	return filepath.Join(realParent, filepath.Base(abs)), nil
-}
+// 路径安全边界（审查§2.5、spec §8）：全部文件操作经fsops_{linux,other}.go的
+// 平台实现进行。Linux生产用openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)+父目录fd，
+// 内核原子解析、无TOCTOU窗口；非Linux用EvalSymlinks实现，仅作测试替代
+// （spec §8明文允许的唯一用途）。两者的非竞态判定一致，由fsops_test.go统一断言。
 
 // WriteTemp：随机命名+O_EXCL独占创建；LimitReader读"上限+1"字节判定超限；
 // 任何失败路径都删除临时文件（审查§2.5）。
 func (d *DirStore) WriteTemp(rel string, r io.Reader, maxBytes int64) (string, string, int64, error) {
-	abs, err := d.resolve(rel)
-	if err != nil {
-		return "", "", 0, err
-	}
 	rnd := make([]byte, 8)
 	if _, err := rand.Read(rnd); err != nil {
 		return "", "", 0, err
 	}
 	tmpID := fmt.Sprintf(".cclaude.tmp.%s", hex.EncodeToString(rnd))
-	tmpPath := filepath.Join(filepath.Dir(abs), tmpID)
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, cleanup, err := d.openTempWriter(rel, tmpID)
 	if err != nil {
 		return "", "", 0, err
 	}
@@ -79,33 +48,27 @@ func (d *DirStore) WriteTemp(rel string, r io.Reader, maxBytes int64) (string, s
 	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(r, maxBytes+1))
 	f.Close()
 	if err != nil || n > maxBytes {
-		os.Remove(tmpPath)
+		cleanup(true)
 		if err == nil {
 			err = ErrTooLarge
 		}
 		return "", "", 0, err
 	}
+	cleanup(false)
 	return tmpID, hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
 // Root返回workspace根目录（供云端reconcile扫描）。
 func (d *DirStore) Root() string { return d.root }
 
-// Open打开已落盘的文件供读取（get 操作用），路径经安全校验。
+// Open打开已落盘的文件供读取（get 操作用），路径经安全校验；
+// 叶子符号链接一律拒绝（否则下载会把root之外的内容带给客户端）。
 func (d *DirStore) Open(rel string) (io.ReadCloser, error) {
-	abs, err := d.resolve(rel)
-	if err != nil {
-		return nil, err
-	}
-	return os.Open(abs)
+	return d.openRead(rel)
 }
 
 func (d *DirStore) Promote(rel, tmpID string, rev int64) error {
-	abs, err := d.resolve(rel)
-	if err != nil {
-		return err
-	}
-	return os.Rename(filepath.Join(filepath.Dir(abs), tmpID), abs)
+	return d.promoteTemp(rel, tmpID)
 }
 
 func (d *DirStore) Discard(tmpID string) {
@@ -119,11 +82,7 @@ func (d *DirStore) Discard(tmpID string) {
 }
 
 func (d *DirStore) Delete(rel string, rev int64) error {
-	abs, err := d.resolve(rel)
-	if err != nil {
-		return err
-	}
-	if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+	if err := d.removeFile(rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	return nil
@@ -134,6 +93,11 @@ func (d *DirStore) Manifest() ([]FileEntry, error) {
 	err := filepath.WalkDir(d.root, func(p string, e fs.DirEntry, err error) error {
 		if err != nil || e.IsDir() {
 			return err
+		}
+		// 只入账普通文件：符号链接会把root之外的内容（大小、哈希，进而经下载泄内容）
+		// 带进清单；socket/设备文件同样无意义。与ScanDir的规则一致。
+		if !e.Type().IsRegular() {
+			return nil
 		}
 		rel := filepath.ToSlash(strings.TrimPrefix(p, d.root+string(os.PathSeparator)))
 		base := filepath.Base(p)

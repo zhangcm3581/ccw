@@ -65,9 +65,11 @@ Task 1–13的代码都写过一遍，`go test ./...`与`-race`全绿。2026-07-
 
 **未验证：**验收21（超额仍能下载/删除/缩小）与27（cleanup端到端可达）需要真实部署，尚未跑过。
 
-### P1-2 路径安全未达到生产边界
+### ~~P1-2 路径安全未达到生产边界~~（2026-07-26已实现）
 
-`internal/sync/server.go`的`DirStore.resolve`用`filepath.EvalSymlinks`，注释自己写明"存在检查与写入之间的TOCTOU窗口，只适合本机/非Linux测试"。spec §8要求Linux生产**必须**用`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`或逐级目录fd的等价实现——未实现。
+spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`internal/sync/fsops_linux.go`，Linux构建标签）：整段路径内核原子解析、最终分量经父目录fd操作，无TOCTOU窗口；内核不支持时硬失败不降级。非Linux平台保留`EvalSymlinks`实现（`fsops_other.go`）仅作测试替代——spec允许的唯一用途。顺带收紧：叶子符号链接读取两平台一律拒绝、`Manifest`/`ScanDir`只入账普通文件（**符号链接不再参与同步**）。
+
+**证据强度：**逃逸单测在macOS与Linux容器（kernel 6.10，真实openat2）均通过，CI ubuntu持续覆盖；未在生产节点跑过。详见`design-deviations.md`的D4（已标记解决）。
 
 ### P1-3 e2e全部skip
 
@@ -120,6 +122,6 @@ Task 1–13的代码都写过一遍，`go test ./...`与`-race`全绿。2026-07-
 1. ~~定`claude-shared`的去留（P0-2）~~——已于2026-07-26解决（`4093e3d`）
 2. ~~接线用量采集（P0-1）~~与~~`modeFor`查额度（P1-1）~~——已于2026-07-26完成，**但只有单测证据**
 3. **在真实部署上验证N1+N2**（当前最高优先级）：确认JSONL被扫到、`usage_events`非空、超额真的关终端与降级cleanup。**在此之前不得把额度闸门称为"可用"**
-4. `openat2`路径解析（P1-2）：Linux生产必需
+4. ~~`openat2`路径解析（P1-2）~~——已于2026-07-26实现（macOS+Linux容器验证，CI覆盖）
 5. 镜像digest固定，然后在真实VPS上把e2e十条skip逐条填实（P1-3）
 6. 加权系数校准（计划§8的开放问题1）——数据够了之后做，否则闸门永远不会真正拦人
