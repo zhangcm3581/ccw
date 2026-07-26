@@ -1,11 +1,13 @@
-// Command ccwadmin是管理员CLI：建项目并签发一次性CDK。
+// Command ccwadmin是管理员CLI（节点侧，Console经SSH调用，设计§11.1）。
 //
-// 用法：
+// 子命令：
 //
 //	ccwadmin init-project <slug> [disk_gib] [five_hour_units] [seven_day_units]
+//	ccwadmin render-compose --projects a,b[,c] [--out path] [--check]
 //
-// 建立（或复用）default账号，创建项目，容器名固定为 ccw-<slug>，
+// init-project：建立（或复用）default账号，创建项目，容器名固定为 ccw-<slug>，
 // 签发一张CDK并打印其明文（仅此一次显示）。数据库连接取自CCW_DATABASE_URL。
+// render-compose：渲染compose.yaml，不需要数据库（渲染计划§3.3），--check除外。
 package main
 
 import (
@@ -18,9 +20,33 @@ import (
 	"ccw/internal/store"
 )
 
+func usage() {
+	fmt.Fprintln(os.Stderr, `usage:
+  ccwadmin init-project <slug> [disk_gib] [five_hour_units] [seven_day_units]
+  ccwadmin render-compose --projects a,b[,c] [--out path] [--claude-image ref] [--disk-gib n] [--check]`)
+}
+
 func main() {
-	if len(os.Args) < 3 || os.Args[1] != "init-project" {
-		fmt.Fprintln(os.Stderr, "usage: ccwadmin init-project <slug> [disk_gib] [five_hour_units] [seven_day_units]")
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+	switch os.Args[1] {
+	case "render-compose":
+		// 渲染不读数据库，必须在config.Load之前分支（渲染计划§3.3）；
+		// --check需要的数据库连接由回调惰性建立。
+		os.Exit(runRenderCompose(os.Args[2:], os.Stdout, os.Stderr, dbSlugsFromEnv))
+	case "init-project":
+		initProject()
+	default:
+		usage()
+		os.Exit(2)
+	}
+}
+
+func initProject() {
+	if len(os.Args) < 3 {
+		usage()
 		os.Exit(2)
 	}
 	slug := os.Args[2]

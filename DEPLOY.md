@@ -82,6 +82,8 @@ cat .env    # 核对
 
 ## 5. 构建镜像并启动
 
+> `deploy/compose.yaml` 由 `ccwadmin render-compose` 生成（文件头有再生成命令），**不要手工编辑**——手工改动会在下次渲染时丢失。加第3个项目的流程见 `UPDATE.md` 第⑥节；单节点项目数上限为3（产品规则）。
+
 所有compose命令在 `deploy/` 目录执行：
 
 ```bash

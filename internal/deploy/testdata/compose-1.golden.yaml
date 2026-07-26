@@ -1,7 +1,7 @@
 # 远程Claude工作空间——部署编排。
 #
 # 本文件由 ccwadmin render-compose 生成，手工编辑会在下次渲染时被覆盖。
-# 重新生成：ccwadmin render-compose --projects project-a,project-b --out compose.yaml
+# 重新生成：ccwadmin render-compose --projects project-a --out compose.yaml
 #
 # 对外只暴露Caddy的443/80；control-api与worker-agent不映射宿主机端口，
 # 仅在内部ccw网络内被Caddy访问（等效于"只监听内网"）。
@@ -60,12 +60,10 @@ services:
       # 挂docker.sock以exec项目容器；本服务因此等同宿主机高权限，不对公网暴露。
       - /var/run/docker.sock:/var/run/docker.sock
       - project-a-workspace:/srv/ccw/project-a
-      - project-b-workspace:/srv/ccw/project-b
       # 会话JSONL（用量采集的数据源）：只读挂进来，采集器只读文件、游标写PG。
       # 缺这些行的后果是采集器安静地扫一个空目录——不报错、usage_events永远为空，
       # 极难排查（模板契约I8，见用量接线计划§2.2与§9）。
       - project-a-claude-projects:/srv/ccw/usage/project-a:ro
-      - project-b-claude-projects:/srv/ccw/usage/project-b:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -108,18 +106,6 @@ services:
     networks: [ccw]
     restart: unless-stopped
 
-  project-b:
-    image: ccw-claude:latest
-    depends_on: [project-a]
-    container_name: ccw-project-b
-    volumes:
-      - project-b-workspace:/workspace
-      - claude-shared:/home/claude          # 同一个共享卷：与全部项目共用登录凭据（I3）
-      - project-b-claude-projects:/home/claude/.claude/projects
-      - project-b-sync:/var/lib/cclaude-sync
-    networks: [ccw]
-    restart: unless-stopped
-
 volumes:
   ccw-pg: {}
   caddy-data: {}
@@ -128,9 +114,6 @@ volumes:
   project-a-workspace: {}
   project-a-claude-projects: {}   # 项目project-a的会话 JSONL（用量归属的数据源）
   project-a-sync: {}
-  project-b-workspace: {}
-  project-b-claude-projects: {}   # 项目project-b的会话 JSONL（用量归属的数据源）
-  project-b-sync: {}
 
 networks:
   ccw: {}

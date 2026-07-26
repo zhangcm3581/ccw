@@ -47,6 +47,25 @@ jobs:
       - name: test -race
         run: go test -race ./...
 
+  # 渲染出的compose必须能被真实的docker compose解析（验收B2）：
+  # 黄金文件锁定了字节，这里锁定"字节是合法编排"。ubuntu runner自带docker与compose插件。
+  compose-validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose config
+        env:
+          POSTGRES_PASSWORD: dummy
+          CCW_TOKEN_KEY: deadbeef
+          CCW_DOMAIN: example.com
+        run: |
+          for f in deploy/compose.yaml internal/deploy/testdata/compose-*.golden.yaml; do
+            cp "$f" deploy/.ci-compose.yaml
+            docker compose -f deploy/.ci-compose.yaml -p ci config > /dev/null
+            echo "OK: $f"
+          done
+          rm -f deploy/.ci-compose.yaml
+
   # store的用量写入端（幂等键、GREATEST语义、游标往返）只能对真实PostgreSQL验证：
   # 那些行为在SQL里，假实现测不到。没有这个job，internal/store的测试会永远停在skip，
   # 等于"没验证"被当成"通过"——正是CLAUDE.md禁止的那种误报。

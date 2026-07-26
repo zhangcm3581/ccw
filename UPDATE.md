@@ -111,7 +111,38 @@ docker compose exec postgres psql -U ccw -d ccw -c \
 
 ---
 
-## ⑤ 回滚
+## ⑤ 加第3个项目（render-compose）
+
+`compose.yaml` 由 `ccwadmin render-compose` 生成，**不要手工编辑**——过去手工加项目要改4处YAML，漏掉worker-agent的挂载会让同步/用量采集**静默失效**（不报错、文件写丢/用量恒为空）。现在是一条命令：
+
+```bash
+cd /opt/ccw/deploy
+# 1. 渲染新编排（列出全部项目，含已有的；上限3个，第4个会被拒绝）
+docker compose run --rm --entrypoint /ccwadmin control-api \
+  render-compose --projects project-a,project-b,project-c > compose.yaml.new
+head -3 compose.yaml.new && mv compose.yaml.new compose.yaml   # 确认非空再替换
+
+# 2. 应用（会重建worker-agent：在线客户的终端会短暂断开，tmux现场不丢，重连即恢复；
+#    避开使用高峰执行）
+docker compose up -d
+
+# 3. 建项目并签发CDK
+docker compose run --rm --entrypoint /ccwadmin control-api init-project project-c
+```
+
+巡检漂移（数据库与compose是否一致）：
+
+```bash
+docker compose run --rm --entrypoint /ccwadmin control-api \
+  render-compose --check --projects project-a,project-b,project-c
+# 退出码非0＝有漂移，输出会说明是哪个slug、漂在哪一侧
+```
+
+> 注意：`git pull` 若带来新版 `compose.yaml`（仓库里是双项目的渲染结果），会覆盖你本地渲染的三项目版本——pull之后重跑一次上面的render-compose即可（幂等，同输入同输出）。
+
+---
+
+## ⑥ 回滚
 
 ```bash
 cd /opt/ccw
@@ -120,4 +151,4 @@ git checkout <commit>             # 或用打的 tag
 cd deploy && docker compose build && docker compose up -d
 ```
 
-数据卷不受回滚影响；只有当回滚跨越了不兼容的数据库迁移时才需额外处理（本项目目前只有一个初始迁移，无此风险）。
+数据卷不受回滚影响；只有当回滚跨越了不兼容的数据库迁移时才需额外处理。目前有两个迁移（`001_initial`、`002_account_pool_limits`），002只是给`accounts`加两列，回滚代码到002之前也不需要动数据库（旧代码不读那两列）。
