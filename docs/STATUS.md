@@ -89,9 +89,8 @@ Task 1–13的代码都写过一遍，`go test ./...`与`-race`全绿。2026-07-
 ### P3 工具与管理面
 
 - ~~compose硬编码双项目~~：**C13已实施**（2026-07-26）——`ccwadmin render-compose`渲染任意1–3个项目的compose，`deploy/compose.yaml`已改为渲染产物（文件头有再生成命令，勿手工编辑）；契约I1–I8有单测，输出经`docker compose config`与原手写文件比对语义相同。**B9（真实节点加第3个项目、现有客户tmux现场完好）未真机验证。**
-- `ccwadmin`只有`init-project`与`render-compose`：没有CDK轮换/禁用、删除项目、查用量、清理tombstone等命令。
-  **补充（2026-07-26核实）：CDK轮换的读路径已完备，只缺写入端。**`cdks`表有`disabled_at`/`expires_at`，`internal/store/postgres.go:92`的`ResolveCDK`已校验二者并用数据库`now()`，客户端认证失败时也已会清缓存（`cmd/cclaude/main.go:44`）。缺的只是**写`disabled_at`的代码**——全仓对该列仅有那一处读引用。实现量为`store`加一个方法 + CLI子命令，设计见console-fleet-design §11.1.1
-- **单节点上限在`init-project`侧未强制**：产品规则定为最多3个项目容器、单项目磁盘配额上限与默认值均为15 GiB（节点规格80 GB盘）。`render-compose`已强制（第4个slug拒绝渲染、`--disk-gib`>15拒绝），但`ccwadmin init-project`既不限项目数也不限`disk_gib`，且默认值仍是旧的20 GiB——绕过渲染器直接建项目仍不受限。设计见console-fleet-design §7.6
+- ~~`ccwadmin`只有`init-project`~~：**C12已实施**（2026-07-26）——新增`issue-cdk`/`rotate-cdk`（默认24h宽限、`--revoke-now`应急，设计§11.1.1）/`disable-cdk`/`list-cdks`/`list-projects`/`status`，全部支持`--json`；`init-project`幂等化（已存在返回现有信息）并支持flag形式。轮换/禁用按§11.1.1返回统一错误。003迁移给`cdks`补`created_at`。**证据强度：**store层PG集成测试（本机真实PG + CI Postgres job）+ 子命令层单测 + 本机真实PG全链路冒烟；未在生产节点跑过。仍缺：删除项目、清理tombstone
+- ~~单节点上限未强制~~：**已在两个强制点生效**（2026-07-26）——`render-compose`拒第4个slug与`--disk-gib`>15；`ccwadmin init-project`拒第4个项目与`disk_gib`>15（A34/A35的节点侧部分），默认值已从20改为15 GiB。slug校验两处共用`internal/deploy.ValidateSlug`。Console前后端双校验待Console实施
 - 门户只有`/usage`单页，认证复用CDK session token，没有独立管理员登录（spec §11决定是localhost+SSH隧道，Caddy已按此对公网404，与设计一致）
 - CLI同步循环每2秒重新Dial一次WebSocket，无本地fsnotify去抖
 

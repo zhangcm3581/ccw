@@ -1,28 +1,42 @@
 // Command ccwadmin是管理员CLI（节点侧，Console经SSH调用，设计§11.1）。
 //
-// 子命令：
+// 子命令（全部支持--json，供Console机器可读）：
 //
-//	ccwadmin init-project <slug> [disk_gib] [five_hour_units] [seven_day_units]
-//	ccwadmin render-compose --projects a,b[,c] [--out path] [--check]
+//	init-project   建项目并签发首张CDK（幂等；强制3项目/15GiB上限，设计§7.6）
+//	list-projects  列项目及配额
+//	issue-cdk      为已有项目签发新CDK（输出含public_id）
+//	rotate-cdk     轮换CDK：--grace 24h（默认）或--revoke-now（设计§11.1.1）
+//	disable-cdk    按public-id禁用单张CDK
+//	list-cdks      列项目全部CDK的状态（不含明文，明文不可再取）
+//	status         节点状态：schema版本、磁盘水位、每项目用量新鲜度
+//	render-compose 渲染compose.yaml（不需要数据库，渲染计划§3.3）
 //
-// init-project：建立（或复用）default账号，创建项目，容器名固定为 ccw-<slug>，
-// 签发一张CDK并打印其明文（仅此一次显示）。数据库连接取自CCW_DATABASE_URL。
-// render-compose：渲染compose.yaml，不需要数据库（渲染计划§3.3），--check除外。
+// 数据库连接取自CCW_DATABASE_URL（config.Load，缺失即硬失败）。
 package main
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 
 	"ccw/internal/config"
 	"ccw/internal/store"
 )
 
+// buildVersion经-ldflags "-X main.buildVersion=..."注入；status --json输出它，
+// Console巡检据此更新nodes.stack_version（设计§11.5）。
+var buildVersion = "dev"
+
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  ccwadmin init-project <slug> [disk_gib] [five_hour_units] [seven_day_units]
+  ccwadmin init-project --slug <slug> [--disk-gib 1..15] [--five-hour n] [--seven-day n] [--json]
+  ccwadmin init-project <slug> [disk_gib] [five_hour_units] [seven_day_units]   （旧式位置参数，仍兼容）
+  ccwadmin list-projects [--json]
+  ccwadmin issue-cdk --slug <slug> [--json]
+  ccwadmin rotate-cdk --slug <slug> [--grace 24h | --revoke-now] [--json]
+  ccwadmin disable-cdk --public-id <id>
+  ccwadmin list-cdks --slug <slug> [--json]
+  ccwadmin status [--json]
   ccwadmin render-compose --projects a,b[,c] [--out path] [--claude-image ref] [--disk-gib n] [--check]`)
 }
 
@@ -31,28 +45,29 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
-	switch os.Args[1] {
-	case "render-compose":
+	cmd, args := os.Args[1], os.Args[2:]
+
+	if cmd == "render-compose" {
 		// 渲染不读数据库，必须在config.Load之前分支（渲染计划§3.3）；
 		// --check需要的数据库连接由回调惰性建立。
-		os.Exit(runRenderCompose(os.Args[2:], os.Stdout, os.Stderr, dbSlugsFromEnv))
-	case "init-project":
-		initProject()
-	default:
-		usage()
-		os.Exit(2)
+		os.Exit(runRenderCompose(args, os.Stdout, os.Stderr, dbSlugsFromEnv))
 	}
-}
 
-func initProject() {
-	if len(os.Args) < 3 {
+	run, ok := map[string]func([]string, *store.Store) int{
+		// 只有init-project跑迁移：它是bootstrap路径；其余命令是只读巡检或
+		// 精确写入，遇到未初始化的库应当报错而不是悄悄建表。
+		"init-project":  func(a []string, st *store.Store) int { return runInitProject(a, os.Stdout, os.Stderr, st) },
+		"list-projects": func(a []string, st *store.Store) int { return runListProjects(a, os.Stdout, os.Stderr, st) },
+		"issue-cdk":     func(a []string, st *store.Store) int { return runIssueCDK(a, os.Stdout, os.Stderr, st) },
+		"rotate-cdk":    func(a []string, st *store.Store) int { return runRotateCDK(a, os.Stdout, os.Stderr, st) },
+		"disable-cdk":   func(a []string, st *store.Store) int { return runDisableCDK(a, os.Stdout, os.Stderr, st) },
+		"list-cdks":     func(a []string, st *store.Store) int { return runListCDKs(a, os.Stdout, os.Stderr, st) },
+		"status":        func(a []string, st *store.Store) int { return runStatus(a, os.Stdout, os.Stderr, st, buildVersion) },
+	}[cmd]
+	if !ok {
 		usage()
 		os.Exit(2)
 	}
-	slug := os.Args[2]
-	diskGiB := argInt(3, 20)
-	fiveHour := argInt(4, 1_000_000)
-	sevenDay := argInt(5, 10_000_000)
 
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
@@ -65,39 +80,12 @@ func initProject() {
 		fmt.Fprintln(os.Stderr, "ccwadmin:", err)
 		os.Exit(1)
 	}
-	if err := st.Migrate(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, "ccwadmin: migrate:", err)
-		os.Exit(1)
-	}
-
-	accountID, err := st.EnsureAccount(ctx, "default", "default-pool")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "ccwadmin: account:", err)
-		os.Exit(1)
-	}
-	projectID, err := st.CreateProject(ctx, accountID, slug, "ccw-"+slug,
-		diskGiB<<30, fiveHour, sevenDay)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "ccwadmin: project:", err)
-		os.Exit(1)
-	}
-	cdk, err := st.CreateCDK(ctx, projectID)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "ccwadmin: cdk:", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("project created: slug=%s id=%s container=ccw-%s\n", slug, projectID, slug)
-	fmt.Printf("disk=%dGiB five_hour=%d seven_day=%d\n", diskGiB, fiveHour, sevenDay)
-	fmt.Println("CDK (显示一次，请立即保存):")
-	fmt.Println(cdk)
-}
-
-func argInt(i int, def int64) int64 {
-	if len(os.Args) > i {
-		if n, err := strconv.ParseInt(os.Args[i], 10, 64); err == nil {
-			return n
+	defer st.Pool.Close()
+	if cmd == "init-project" {
+		if err := st.Migrate(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "ccwadmin: migrate:", err)
+			os.Exit(1)
 		}
 	}
-	return def
+	os.Exit(run(os.Args[2:], st))
 }

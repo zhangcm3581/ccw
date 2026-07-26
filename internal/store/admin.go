@@ -57,25 +57,27 @@ func (s *Store) ListProjects(ctx context.Context) ([]project.Project, error) {
 	return out, rows.Err()
 }
 
-// CreateCDK为项目签发一张新CDK，返回一次性显示的明文；库中只存Argon2id哈希。
-func (s *Store) CreateCDK(ctx context.Context, projectID string) (string, error) {
-	plain, publicID, err := auth.NewCDK()
+// CreateCDK为项目签发一张新CDK，返回一次性显示的明文与public_id；库中只存Argon2id哈希。
+// public_id给调用方是设计§11.1的要求：Console靠它建立cdk_issues记录（/connect查询依赖），
+// 轮换靠它圈定"除新CDK之外的旧CDK"。created_at由列DEFAULT now()写入（003迁移）。
+func (s *Store) CreateCDK(ctx context.Context, projectID string) (plain, publicID string, err error) {
+	plain, publicID, err = auth.NewCDK()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	_, secret, err := auth.SplitCDK(plain)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	hash, err := auth.HashSecret(secret)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	_, err = s.Pool.Exec(ctx,
 		`INSERT INTO cdks (id, project_id, public_id, secret_hash) VALUES ($1,$2,$3,$4)`,
 		uuid.NewString(), projectID, publicID, hash)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return plain, nil
+	return plain, publicID, nil
 }

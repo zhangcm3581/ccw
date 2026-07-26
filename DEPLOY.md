@@ -108,14 +108,30 @@ docker compose logs control-api worker-agent caddy --tail=50
 用 `ccwadmin`（打包在control-api镜像内）创建两个项目，各得一张一次性CDK：
 
 ```bash
-# init-project <slug> [disk_gib] [five_hour_units] [seven_day_units]
-docker compose run --rm --entrypoint /ccwadmin control-api init-project project-a 20 1000000 10000000
-docker compose run --rm --entrypoint /ccwadmin control-api init-project project-b 20 1000000 10000000
+# 磁盘配额默认15 GiB（上限15，产品规则）；5h/7d限额默认1000000/10000000（先记账阶段的宽值）
+docker compose run --rm --entrypoint /ccwadmin control-api init-project --slug project-a
+docker compose run --rm --entrypoint /ccwadmin control-api init-project --slug project-b
+# 旧式位置参数仍兼容：init-project <slug> [disk_gib] [five_hour_units] [seven_day_units]
 ```
 
-每条命令末尾会打印形如 `ccw_<public>.<secret>` 的CDK——**只显示一次，立即保存**。project-a的CDK只能连project-a容器，project-b同理。
+每条命令末尾会打印形如 `ccw_<public>.<secret>` 的CDK——**只显示一次，立即保存**。project-a的CDK只能连project-a容器，project-b同理。**单节点最多3个项目、单项目磁盘配额上限15 GiB**（产品规则，第4个项目与`--disk-gib 16`都会被拒绝）。
 
-> 容器名约定：`ccwadmin init-project project-a` 建立的项目container_name为 `ccw-project-a`，与compose中的项目容器一一对应。
+> 容器名约定：`ccwadmin init-project --slug project-a` 建立的项目container_name为 `ccw-project-a`，与compose中的项目容器一一对应。
+> `init-project`幂等：slug已存在时返回现有信息、不报错、不签发新CDK。
+
+其他管理命令（全部支持`--json`）：
+
+```bash
+docker compose run --rm --entrypoint /ccwadmin control-api list-projects
+docker compose run --rm --entrypoint /ccwadmin control-api issue-cdk --slug project-a     # 补发新CDK
+docker compose run --rm --entrypoint /ccwadmin control-api rotate-cdk --slug project-a    # 轮换：旧CDK默认24h宽限后失效
+docker compose run --rm --entrypoint /ccwadmin control-api rotate-cdk --slug project-a --revoke-now   # 泄露应急：旧CDK当场失效
+docker compose run --rm --entrypoint /ccwadmin control-api list-cdks --slug project-a     # 各CDK状态（无明文，明文不可再取）
+docker compose run --rm --entrypoint /ccwadmin control-api disable-cdk --public-id <id>
+docker compose run --rm --entrypoint /ccwadmin control-api status                         # schema版本/磁盘水位/每项目用量新鲜度
+```
+
+轮换后客户端的表现：旧CDK失效时`cclaude`收到`invalid_cdk`并清除本地缓存，输入新CDK重连即可，**云端tmux现场不受影响**。
 
 ## 7. 管理员登录Claude（共享授权，只需一次）
 
