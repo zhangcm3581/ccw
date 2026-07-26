@@ -16,7 +16,9 @@ github.com/google/uuid      v1.6.0
 github.com/gorilla/websocket v1.5.3
 github.com/jackc/pgx/v5     v5.7.1
 golang.org/x/crypto         v0.31.0
+golang.org/x/net            v0.33.0       # dns/dnsmessage：CAA查询（标准库无CAA支持）
 golang.org/x/term           v0.27.0
+gopkg.in/yaml.v3            v3.0.1        # 仅测试：解析渲染出的compose做契约断言
 # 间接依赖
 github.com/jackc/pgpassfile     v1.0.0
 github.com/jackc/pgservicefile  v0.0.0-20240606120523-5a60cdf6a761
@@ -48,3 +50,6 @@ tmux                        ubuntu 24.04 的 tmux 包版本            # 项目�
 #    再跑 tmux 断连恢复验证（Design Spec §16）。
 # 3. apt 安装的 tmux / git / docker.io / nodejs 具体包版本随基础镜像浮动，
 #    未做 apt pinning。
+# 4. Console 的 bootstrap 流水线用 https://get.docker.com 便捷脚本装 Docker，
+#    装的是上游 stable 最新版，未固定。固定版本需按发行版拼 apt 版本串，
+#    且各发行版可用版本不同；当前接受该未固定项。
