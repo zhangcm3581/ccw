@@ -97,7 +97,9 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
 - **C18查询页**：`/connect`浏览器本地切分CDK、只POST public-id；服务端收到含`.`立即400且不记录请求体（有日志捕获测试+突变检查）、格式错/未知/已撤销统一`not_found`、每IP每分钟10次限速。解析链cdk_issues→node_projects→nodes→node_domains有PG集成测试
 - 落地页措辞有测试守卫：出现"官方订阅/保证不超过"等越界措辞即失败
 
-**未实施**：C2–C7（信封加密、TOTP认证、SSH引擎、脱敏、流水线）、C8–C11（DNS/证书预算/bootstrap）、C15–C17/C19（后台UI、审计巡检）、C21–C22（Console部署物与真实VPS验收）。`/admin/*`路由**刻意未注册**——没有认证之前不上任何管理页面。`cdk_issues`等表尚无写入方（等C17/巡检），`/connect`当前查库必为空，需Console侧数据接入后才有实际产出。
+- **C21部署物（部分）**：`deploy/Dockerfile.console`（distroless）、`deploy/console/{compose.yaml,Caddyfile,.env.example}`（按§8.3双域名分流+管理域名IP白名单404）、`DEPLOY-CONSOLE.md`。Console的Postgres数据bind到data-root之外（对齐N4第2项）。`docker compose config`本机与CI均通过；**未在真实Console主机部署过**，备份恢复演练（A33）未做
+
+**未实施**：C2–C7（信封加密、TOTP认证、SSH引擎、脱敏、流水线）、C8–C11（DNS/证书预算/bootstrap）、C15–C17/C19（后台UI、审计巡检）、C22（真实VPS纳管验收）与C21剩余（备份恢复演练）。`/admin/*`路由**刻意未注册**——没有认证之前不上任何管理页面。`cdk_issues`等表尚无写入方（等C17/巡检），`/connect`当前查库必为空，需Console侧数据接入后才有实际产出。
 
 ### P3 工具与管理面
 

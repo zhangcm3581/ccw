@@ -1,0 +1,74 @@
+# Console控制平面的部署编排（console-fleet-design §2、§8.3）。
+#
+# **独立主机、独立数据库**：与节点栈（deploy/compose.yaml）完全分开部署，
+# 两者不共享数据库、不互相依赖。Console宕机不影响任何已部署节点的终端与同步（A19）。
+#
+# 对外只暴露Caddy的80/443；ccw-console只在内部网络被访问（回环语义）。
+# 管理后台（/admin/*）尚未实施，Caddyfile已按§8.3预留独立域名+IP白名单的分流。
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ccw
+      POSTGRES_PASSWORD: "${CONSOLE_POSTGRES_PASSWORD:?set in .env}"
+      POSTGRES_DB: ccw_console
+    volumes:
+      # bind到data-root之外的宿主机目录（设计§12.1的N4第2项在Console侧的同款做法）：
+      # 数据库不跟着Docker数据盘一起被撑爆。目录需预先 mkdir -p 并归属容器内postgres(999)。
+      - ${CONSOLE_PGDATA:-/var/lib/ccw-console/pgdata}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ccw"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [console]
+    restart: unless-stopped
+
+  ccw-console:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile.console
+      args:
+        CONSOLE_VERSION: ${CONSOLE_VERSION:-dev}
+    environment:
+      CCW_CONSOLE_DATABASE_URL: postgres://ccw:${CONSOLE_POSTGRES_PASSWORD}@postgres:5432/ccw_console
+      # 容器内监听全网卡：不发布宿主机端口，只有同网络的Caddy能访问
+      # （与节点侧control-api同款，见docs/design-deviations.md的D2）
+      CCW_CONSOLE_LISTEN_ADDR: 0.0.0.0:8090
+      CCW_DIST_DIR: /srv/dist
+    volumes:
+      # 客户端产物：把 make release 的输出同步到宿主机这个目录即可。
+      # 只读——Console只发文件，不写；登记入库走 register-release 子命令。
+      - ${CONSOLE_DIST_DIR:-/srv/ccw-console/dist}:/srv/dist:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [console]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CCW_SITE_DOMAIN: ${CCW_SITE_DOMAIN}
+      CCW_ADMIN_DOMAIN: ${CCW_ADMIN_DOMAIN}
+      CCW_ADMIN_ALLOWLIST: ${CCW_ADMIN_ALLOWLIST}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # caddy-data持有已签发证书：**重新部署禁止 down -v**，丢卷＝重签，
+      # 会撞Let's Encrypt「完全相同标识符5张/周」的限额（设计§6.5）。
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [ccw-console]
+    networks: [console]
+    restart: unless-stopped
+
+volumes:
+  caddy-data: {}
+  caddy-config: {}
+
+networks:
+  console: {}

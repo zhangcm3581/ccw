@@ -1,0 +1,17 @@
+# ccw-console：静态Go二进制，distroless运行（与control-api同款）。
+# 站点模板由go:embed打进二进制，运行层无需任何静态文件；
+# 客户端产物（CCW_DIST_DIR）由卷挂进来，不进镜像。
+FROM golang:1.22-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG CONSOLE_VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath \
+      -ldflags "-s -w -X main.buildVersion=${CONSOLE_VERSION}" \
+      -o /out/ccw-console ./cmd/ccw-console
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/ccw-console /ccw-console
+EXPOSE 8090
+ENTRYPOINT ["/ccw-console"]

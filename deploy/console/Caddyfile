@@ -1,0 +1,23 @@
+# Console主机的反向代理（console-fleet-design §8.3）。
+#
+# 按域名分流，**站点域名与管理域名必须是不同域名**：同域名下用路径前缀隔离时，
+# 一处配置写错就会把后台暴露给公网，风险不对称（§8.3的路径合同）。
+#
+# 证书预算（§6.5）：**不要启用Let's Encrypt短期（6天）证书**——那会让每台机器
+# 每周续期一次，N台＝N张/周，很快撞上「每注册域名50张/7天」。Caddy默认不启用，
+# 保持现状即可；重新部署也**禁止 docker compose down -v**（丢caddy-data＝证书重签）。
+
+{$CCW_SITE_DOMAIN} {
+	# 公开站点：落地页、下载分发、/connect查询。任何人可访问。
+	reverse_proxy ccw-console:8090
+}
+
+{$CCW_ADMIN_DOMAIN} {
+	# 管理后台：IP白名单之外一律404（不是403）——不暴露后台是否存在。
+	# 应用层还会独立校验白名单，不只依赖这里（§8.3的双重校验）。
+	@allowed remote_ip {$CCW_ADMIN_ALLOWLIST}
+	handle @allowed {
+		reverse_proxy ccw-console:8090
+	}
+	respond 404
+}

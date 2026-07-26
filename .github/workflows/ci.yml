@@ -66,6 +66,14 @@ jobs:
           done
           rm -f deploy/.ci-compose.yaml
 
+      - name: docker compose config（Console栈）
+        env:
+          CONSOLE_POSTGRES_PASSWORD: dummy
+          CCW_SITE_DOMAIN: ccw.example.com
+          CCW_ADMIN_DOMAIN: admin.example.com
+          CCW_ADMIN_ALLOWLIST: 127.0.0.1
+        run: docker compose -f deploy/console/compose.yaml -p ci-console config > /dev/null
+
   # store的用量写入端（幂等键、GREATEST语义、游标往返）只能对真实PostgreSQL验证：
   # 那些行为在SQL里，假实现测不到。没有这个job，internal/store的测试会永远停在skip，
   # 等于"没验证"被当成"通过"——正是CLAUDE.md禁止的那种误报。
