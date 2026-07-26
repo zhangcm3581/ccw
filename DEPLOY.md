@@ -325,7 +325,8 @@ ls deploy/console/compose.yaml    # 确认存在，这就是 Console 栈的编�
 ```bash
 # 都在 Docker data-root 之外，避免磁盘被撑爆时连数据库一起挂
 sudo mkdir -p /var/lib/ccw-console/pgdata /var/lib/ccw-console/logs /srv/ccw-console/dist
-sudo chown 65532:65532 /var/lib/ccw-console/logs   # 容器内以 nonroot 运行，漏了日志写不进去
+sudo chown 65532:65532 /var/lib/ccw-console/logs    # 容器内以 nonroot 运行，漏了日志写不进去
+sudo chown -R "$USER":"$USER" /srv/ccw-console/dist # 你要往这里 rsync/scp 产物，漏了传不上去
 ```
 
 | 目录 | 存什么 |
@@ -333,7 +334,7 @@ sudo chown 65532:65532 /var/lib/ccw-console/logs   # 容器内以 nonroot 运行
 | `/opt/ccw-console/` | 代码与编排文件（git clone 来的） |
 | `/var/lib/ccw-console/pgdata` | Console 数据库 |
 | `/var/lib/ccw-console/logs` | 纳管流水线的运行日志 |
-| `/srv/ccw-console/dist` | 客户端产物（B4 发布的二进制） |
+| `/srv/ccw-console/dist` | 客户端产物（B4 发布的二进制）。属主要给你自己，否则 B4 传不上去；容器只读挂载，不受影响 |
 
 **③ 配置**——之后所有 compose 命令都在这个目录执行：
 
@@ -444,10 +445,11 @@ make release VERSION=v0.1.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64"
 同步到 Console 主机并登记：
 
 ```bash
-# 开发机
-rsync -av dist/ user@console-host:/srv/ccw-console/dist/
+# 开发机（EC2 记得带密钥；没装 rsync 就用 scp -i ... dist/* ...）
+rsync -av -e "ssh -i ~/你的密钥.pem" dist/ ubuntu@<Console的IP>:/srv/ccw-console/dist/
 
 # Console 主机
+ls -la /srv/ccw-console/dist/     # 确认产物真的传到了
 cd /opt/ccw-console/deploy/console
 alias console='docker compose run --rm --entrypoint /ccw-console ccw-console'
 

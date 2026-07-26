@@ -299,6 +299,19 @@ docker compose up -d
 
 排查顺序：`docker compose ps`（有没有 Restarting）→ `docker compose logs <崩溃的容器>` → `curl localhost:8090/healthz`（绕开 Caddy 看后端）→ 最后才是 DNS 与证书。
 
+### 产物传不到 /srv/ccw-console/dist
+
+`Permission denied` 多半是目录属主还是 root（`sudo mkdir` 建的）：
+
+```bash
+# Console 主机
+sudo chown -R "$USER":"$USER" /srv/ccw-console/dist
+```
+
+容器是只读挂载这个目录、以 nonroot 运行，属主给你自己不影响它读。
+
+其余对号入座：`Permission denied (publickey)` ＝ 没带 `.pem`（`-e "ssh -i ~/key.pem"`）；`rsync: command not found` ＝ 远端没装 rsync，改用 `scp -i ~/key.pem dist/* ubuntu@IP:/srv/ccw-console/dist/`；`Connection timed out` ＝ 安全组没放行 22。
+
 ### 访问后台域名却看到官网页面
 
 `CCW_ADMIN_DOMAIN` 没传给 `ccw-console` 容器。两个域名的 Caddy 站点块转发到同一个后端进程，应用层要靠这个变量才知道该把 `/admin/*` 限制在哪个域名上；不设置时两个域名的内容完全一样——**后台在官网域名上也是开着的**。
