@@ -347,7 +347,7 @@ cp .env.example .env
 ```bash
 CCW_SITE_DOMAIN=ccw.example.com          # 官网：落地页、下载、/connect
 CCW_ADMIN_DOMAIN=my-ops-panel.net        # 管理后台
-CCW_ADMIN_ALLOWLIST=0.0.0.0/0,::/0       # 见下方「白名单怎么填」
+CCW_ADMIN_ALLOWLIST=0.0.0.0/0 ::/0       # 见下方「白名单怎么填」
 CCW_SECRET_KEY=<openssl rand -hex 32>
 CONSOLE_POSTGRES_PASSWORD=<openssl rand -hex 16>
 ```
@@ -367,12 +367,16 @@ CONSOLE_POSTGRES_PASSWORD=<openssl rand -hex 16>
 
 ### 白名单怎么填
 
-`CCW_ADMIN_ALLOWLIST` 是 Caddy 的 `remote_ip` 语法，空格或逗号分隔的 IP 与 CIDR。两种取法：
+`CCW_ADMIN_ALLOWLIST` 是 Caddy 的 `remote_ip` 语法：**必须用空格分隔，不能用逗号**。
+
+> 逗号会让 Caddy 把整串当成一个 CIDR 解析失败、启动失败、无限重启，结果是**两个域名都连不上**。而应用层的解析器空格和逗号都接受，所以启动日志仍会显示「白名单 N 条」——看着正常，实际 Caddy 已经死了。排查时先看 `docker compose ps` 有没有 `Restarting`。
+
+两种取法：
 
 | 取法 | 值 | 未认证者看到 | 剩下的防线 |
 |---|---|---|---|
 | **限制来源**（推荐） | `203.0.113.7 198.51.100.0/24` | 404，不确认后台存在 | 网络层 + 密码 + TOTP |
-| **对外开放** | `0.0.0.0/0,::/0` | 完整登录页 | 密码 + TOTP + 双维限速 |
+| **对外开放** | `0.0.0.0/0 ::/0` | 完整登录页 | 密码 + TOTP + 双维限速 |
 
 出口 IP 固定就填 ①。IP 不固定又想随处登录就填 ②——密码 + 两步验证对登录页是合格姿态，但你把两道门减成了一道，**补偿办法是管理员密码用 20 位以上随机串**（`openssl rand -base64 24`，反正存密码管理器）。
 

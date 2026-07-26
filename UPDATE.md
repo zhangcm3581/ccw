@@ -277,6 +277,28 @@ docker image prune -f
 docker exec -it ccw-project-a du -sh /workspace/* | sort -h | tail
 ```
 
+### Caddy 无限重启 / 域名连不上
+
+`docker compose ps` 里 caddy 是 `Restarting`、PORTS 列为空 ＝ 它根本没起来，80/443 没人监听。**先看它的日志，别急着查 DNS：**
+
+```bash
+cd /opt/ccw-console/deploy/console
+docker compose logs caddy --tail=50
+```
+
+最常见的原因是 `CCW_ADMIN_ALLOWLIST` **用了逗号分隔**——Caddy 的 `remote_ip` 只认空格：
+
+```bash
+# 错：CCW_ADMIN_ALLOWLIST=0.0.0.0/0,::/0
+# 对：CCW_ADMIN_ALLOWLIST=0.0.0.0/0 ::/0
+sed -i 's|^CCW_ADMIN_ALLOWLIST=.*|CCW_ADMIN_ALLOWLIST=0.0.0.0/0 ::/0|' .env
+docker compose up -d
+```
+
+迷惑之处在于应用层的解析器空格和逗号都接受，所以 `ccw-console` 的启动日志仍会显示「白名单 N 条」，看着一切正常。
+
+排查顺序：`docker compose ps`（有没有 Restarting）→ `docker compose logs <崩溃的容器>` → `curl localhost:8090/healthz`（绕开 Caddy 看后端）→ 最后才是 DNS 与证书。
+
 ### Console 的机队管理没启用
 
 启动日志会写明原因，常见三种：
