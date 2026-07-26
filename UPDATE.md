@@ -58,6 +58,13 @@ git reset --hard origin/main      # 对齐 GitHub。.env 是未跟踪文件，�
 >
 > 本次更新还会执行一个新迁移（`002_account_pool_limits.sql`，给 `accounts` 加两列池上限），由 control-api 启动时自动跑，无需手动操作。
 
+> **2026-07-26第二批改动（C13/C12/C14/P1-2）升级须知：**
+>
+> - 新迁移`003_cdk_created_at.sql`由control-api启动时自动执行，无需手动操作
+> - `deploy/compose.yaml`改为`ccwadmin render-compose`的渲染产物，与旧手写文件**语义完全相同**（`docker compose config`逐字节比对过），`up -d`不会因此重建任何容器；今后**不要手工编辑**该文件，加项目见下方第⑤节
+> - `cclaude`客户端有行为变化（寻址改造）：不再默认连任何写死域名，首次运行提示输入API地址；旧`~/.ccw/cdk`缓存自动迁移到`~/.ccw/config.json`。**需要重新分发客户端二进制**；已有用户旧二进制配旧服务端仍可用，不强制同步升级
+> - 符号链接不再参与文件同步（两端一律跳过，安全边界的一部分）；此前依赖同步符号链接的目录结构会表现为"该文件不同步"，这是预期行为
+
 **以后每次更新，三步：**
 
 ```bash
