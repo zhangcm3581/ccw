@@ -309,15 +309,36 @@ Console 是**独立主机、独立数据库**的控制平面，与节点栈完�
 
 ## B2 目录与配置
 
+**① 取代码**——`deploy/console/` 这个目录来自仓库，不需要你手工创建：
+
 ```bash
-sudo mkdir -p /opt/ccw-console && cd /opt/ccw-console
+sudo mkdir -p /opt/ccw-console && sudo chown "$USER" /opt/ccw-console
+cd /opt/ccw-console
 git clone https://github.com/zhangcm3581/ccw.git .
+ls deploy/console/compose.yaml    # 确认存在，这就是 Console 栈的编排
+```
 
-# 数据目录都在 Docker data-root 之外，避免磁盘被撑爆时连数据库一起挂
+> `chown` 不能省：`sudo mkdir` 建出的目录属主是 root，普通用户 `git clone` 进去会 Permission denied。
+
+**② 建数据目录**——这些在仓库之外，是数据落盘的地方，与上面的 `deploy/console/` 无关：
+
+```bash
+# 都在 Docker data-root 之外，避免磁盘被撑爆时连数据库一起挂
 sudo mkdir -p /var/lib/ccw-console/pgdata /var/lib/ccw-console/logs /srv/ccw-console/dist
-sudo chown 65532:65532 /var/lib/ccw-console/logs   # 容器内以 nonroot 运行
+sudo chown 65532:65532 /var/lib/ccw-console/logs   # 容器内以 nonroot 运行，漏了日志写不进去
+```
 
-cd deploy/console
+| 目录 | 存什么 |
+|---|---|
+| `/opt/ccw-console/` | 代码与编排文件（git clone 来的） |
+| `/var/lib/ccw-console/pgdata` | Console 数据库 |
+| `/var/lib/ccw-console/logs` | 纳管流水线的运行日志 |
+| `/srv/ccw-console/dist` | 客户端产物（B4 发布的二进制） |
+
+**③ 配置**——之后所有 compose 命令都在这个目录执行：
+
+```bash
+cd /opt/ccw-console/deploy/console
 cp .env.example .env
 ```
 

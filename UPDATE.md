@@ -23,7 +23,7 @@
 ```bash
 cd /opt/ccw
 git pull origin v2
-cd deploy
+cd /opt/ccw/deploy
 docker compose build          # 代码或 Dockerfile 变了才需要
 docker compose up -d          # 滚动重启
 ```
@@ -91,7 +91,7 @@ docker compose exec postgres psql -U ccw -d ccw -c "SELECT count(*) FROM usage_e
 ```bash
 cd /opt/ccw-console
 git pull origin v2
-cd deploy/console
+cd /opt/ccw-console/deploy/console
 docker compose build ccw-console
 docker compose up -d
 ```
@@ -185,7 +185,7 @@ console register-release --version v0.2.0 --publish        # 确认后发布
 cd /opt/ccw
 git log --oneline -10
 git checkout <commit>          # 或用打的 tag
-cd deploy && docker compose build && docker compose up -d
+cd /opt/ccw/deploy && docker compose build && docker compose up -d
 ```
 
 数据卷不受回滚影响。**跨迁移回滚要看具体迁移：**
