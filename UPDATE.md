@@ -164,11 +164,16 @@ ccwadmin disable-cdk --public-id <id>               # 精确禁用某一张
 只有装了 Console 才需要——否则直接把编译好的二进制发给用户。
 
 ```bash
-# 开发机
-make release VERSION=v0.2.0
-rsync -av dist/ user@console-host:/srv/ccw-console/dist/
+# 方式一：在 Console 主机上直接编（不需要本机装 Go，也不用传输）
+cd /opt/ccw-console && git pull origin v2
+VERSION=v0.2.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64" \
+  DIST_DIR=/srv/ccw-console/dist ./scripts/build-release-docker.sh
 
-# Console 主机
+# 方式二：开发机编好再传
+make release VERSION=v0.2.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64"
+rsync -av dist/ ubuntu@<Console的IP>:/srv/ccw-console/dist/
+
+# 登记与发布（Console 主机）
 cd /opt/ccw-console/deploy/console
 alias console='docker compose run --rm --entrypoint /ccw-console ccw-console'
 console register-release --version v0.2.0 --notes "..."   # 先登记，核对清单
@@ -301,7 +306,15 @@ docker compose up -d
 
 ### 产物传不到 /srv/ccw-console/dist
 
-`Permission denied` 多半是目录属主还是 root（`sudo mkdir` 建的）：
+**没有 SSH 密钥**（只用 EC2 Instance Connect 之类连机器）就别传了——在 Console 主机上直接编：
+
+```bash
+cd /opt/ccw-console
+VERSION=v0.1.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64" \
+  DIST_DIR=/srv/ccw-console/dist ./scripts/build-release-docker.sh
+```
+
+要传的话，`Permission denied` 多半是目录属主还是 root（`sudo mkdir` 建的）：
 
 ```bash
 # Console 主机

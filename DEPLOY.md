@@ -421,13 +421,31 @@ curl -s -o /dev/null -w '%{http_code}\n' https://my-ops-panel.net/download      
 
 ## B4 发布客户端
 
-**在开发机上**（＝你本地装了 Go 的机器，不是 Console 主机）交叉编译：
+产物可以在两个地方生成，选一个：
+
+### 方式一：在 Console 主机上直接编（推荐，没有 SSH 密钥时尤其省事）
+
+Console 主机已经有代码与 Docker，用容器里的 Go 交叉编译，**不需要本机装 Go，也不需要任何文件传输**：
+
+```bash
+cd /opt/ccw-console
+VERSION=v0.1.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64" \
+  DIST_DIR=/srv/ccw-console/dist ./scripts/build-release-docker.sh
+
+ls -la /srv/ccw-console/dist/     # 产物直接落到发布目录
+```
+
+首次会拉 `golang:1.22-bookworm` 镜像（几百 MB）并下载依赖，之后有缓存会快很多。
+
+### 方式二：在开发机上编再传过去
+
+「开发机」＝你本地装了 Go 的机器，不是 Console 主机。
 
 ```bash
 make release VERSION=v0.1.0        # 默认六个平台，输出到 dist/，含 SHA256SUMS
 ```
 
-**只需要部分平台就用 `TARGETS` 指定**，没编的平台只会在登记时打印一行警告，不影响发布：
+**只需要部分平台就用 `TARGETS` 指定**（两种方式通用），没编的平台只会在登记时打印一行警告，不影响发布：
 
 ```bash
 make release VERSION=v0.1.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64"
@@ -442,14 +460,20 @@ make release VERSION=v0.1.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64"
 
 > **Mac 是两个目标**，别只编一个——M 系列跑不了 amd64 的包（Rosetta 只对已签名的应用生效，命令行二进制会直接报架构不符）。
 
-同步到 Console 主机并登记：
+传到 Console 主机：
 
 ```bash
 # 开发机（EC2 记得带密钥；没装 rsync 就用 scp -i ... dist/* ...）
 rsync -av -e "ssh -i ~/你的密钥.pem" dist/ ubuntu@<Console的IP>:/srv/ccw-console/dist/
+```
 
+> 只用 EC2 Instance Connect、手上没有密钥时，走**方式一**，跳过这一步。
+
+### 登记与发布（两种方式都要做）
+
+```bash
 # Console 主机
-ls -la /srv/ccw-console/dist/     # 确认产物真的传到了
+ls -la /srv/ccw-console/dist/     # 确认产物在位
 cd /opt/ccw-console/deploy/console
 alias console='docker compose run --rm --entrypoint /ccw-console ccw-console'
 
