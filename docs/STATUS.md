@@ -111,6 +111,7 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
 - **C8 DNS**：Provider接口 + manual实现（双解析器交叉校验）+ 子域名分配器（序号单调递增、永不回收、保留名单）+ CAA预检（用x/net的dnsmessage自实现，标准库无CAA支持）
 - **C11 bootstrap 12步**：probe（发行版白名单、磁盘核算）→harden→install-docker→dns-allocate→push-source（**推完整源码包**，节点靠它构建镜像）→push-artifacts（渲染的compose.yaml，sha256 precheck）→render-env（**密钥节点本地生成**）→compose-up→cert-wait→healthcheck→init-projects→disk-guard。硬顺序dns-allocate在compose-up之前有测试守卫；**CDK明文只经回调一次、绝不进日志**（有测试守卫）
 - **C15 后台UI**：机队总览、新增节点向导、节点详情（含待添加的DNS记录提示）、运行详情与**SSE实时日志**；跨节点访问运行会404；日志落盘+推流前再脱敏一次；慢订阅者丢行不阻塞流水线
+- **后台外壳**（2026-07-27）：改成传统的左侧栏 + 内容区操作台（`admin_layout.html`），全部管理页共用；导航标出当前位置、窄屏收成抽屉、主题三态（自动/浅/深，登录页共用同一份偏好）。外壳契约有测试守卫（`adminshell_test.go`：新增页面忘了走`renderAdmin`会红）。**只有本机浏览器截图证据**
 - **本机端到端冒烟**：向导提交→纳管goroutine启动→日志落盘→节点入库→超上限当场拒绝，全部实测
 
 **未实施**：C9（Route 53自动化）、C10（证书预算记账）、C16（域名管理UI）、C17（后台CDK签发/轮换、超卖水位）、C19（审计页与节点巡检）、C22（真实VPS纳管验收）、C21剩余（备份恢复演练）、解除纳管流水线。

@@ -4,6 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>登录 · ccw 控制台</title>
+<script>
+// 与后台外壳同一份主题偏好：登录页也照它渲染，否则选了深色的人
+// 每次登录都会被闪一次白底。auto 不写属性，交回给 prefers-color-scheme。
+(function () {
+  try {
+    var t = localStorage.getItem('ccw-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+})();
+</script>
 <style>
 :root{
   --ground:#f3f5f8;--panel:#fff;--line:#dbe1e9;--ink:#111820;--ink-2:#525d6b;--ink-3:#7c8797;

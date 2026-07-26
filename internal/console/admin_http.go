@@ -167,7 +167,6 @@ func (s *Server) adminHome(w http.ResponseWriter, r *http.Request, sess consoles
 	data["Nodes"] = rows
 	data["Runs"] = runs
 	data["Attention"] = attention
-	data["adminBase"] = nil // 占位，实际字段在下面合并
 	s.renderAdmin(w, "admin_dashboard.html", "dashboard", sess, csrf, len(rows), data)
 }
 

@@ -4,6 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{block "title" .}}控制台 · ccw{{end}}</title>
+<script>
+// 主题在首屏绘制前定好，避免深色偏好下先闪一下白底。
+// 三态：auto（跟随系统）/ light / dark，存 localStorage。
+(function () {
+  try {
+    var t = localStorage.getItem('ccw-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+})();
+</script>
 <style>
 /* ccw 控制台 —— 单管理员的运维操作台。
    设计取向：这是仪表盘不是文档。机器值一律等宽字体，状态用形状+颜色双编码，
@@ -73,10 +83,12 @@ a:hover{text-decoration:underline}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
 /* ── 骨架：左轨 + 内容 ───────────────────────────── */
-.shell{display:grid;grid-template-columns:236px 1fr;min-height:100%}
+/* minmax(0,1fr)而不是1fr：网格列的默认min-width是auto，
+   宽表格会把这一列撑破视口，横向滚动条出现在<body>而不是表格自己身上。 */
+.shell{display:grid;grid-template-columns:236px minmax(0,1fr);min-height:100%}
 .rail{
   background:var(--rail);border-right:1px solid var(--line);
-  display:flex;flex-direction:column;position:sticky;top:0;height:100vh;
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh;z-index:20;
 }
 .rail-brand{
   display:flex;align-items:baseline;gap:8px;
@@ -107,6 +119,17 @@ a:hover{text-decoration:underline}
 .nav-item.muted:hover{background:none;color:var(--ink-3)}
 .rail-foot{border-top:1px solid var(--line-soft);padding:14px}
 .who{display:flex;align-items:center;gap:9px;margin-bottom:10px}
+/* 主题三态开关：跟随系统是默认值，所以它必须是可回到的一个档位，
+   而不是只在浅/深之间来回切——切过一次就再也回不去系统偏好。 */
+.theme{display:flex;border:1px solid var(--line);border-radius:5px;overflow:hidden;margin-bottom:10px}
+.theme button{
+  flex:1;padding:4px 0;border:none;background:transparent;cursor:pointer;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--ink-3);
+  border-right:1px solid var(--line);
+}
+.theme button:last-child{border-right:none}
+.theme button:hover{color:var(--ink)}
+.theme button[aria-pressed="true"]{background:var(--accent-wash);color:var(--accent);font-weight:600}
 .who .av{
   width:26px;height:26px;border-radius:5px;background:var(--accent);color:var(--accent-ink);
   display:flex;align-items:center;justify-content:center;
@@ -126,6 +149,12 @@ a:hover{text-decoration:underline}
   position:sticky;top:0;z-index:5;
 }
 .topbar h1{font-size:20px;margin:0;letter-spacing:-.015em;font-weight:650}
+.menu-btn{
+  display:none;align-items:center;justify-content:center;width:32px;height:32px;flex:none;
+  border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--ink-2);cursor:pointer;
+}
+.menu-btn svg{width:16px;height:16px}
+.scrim{display:none}
 .topbar .sub{font-family:var(--mono);font-size:12px;color:var(--ink-3)}
 .topbar .spacer{margin-left:auto}
 .content{padding:26px 30px 64px;max-width:1180px}
@@ -246,11 +275,26 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
   font-variant-numeric:tabular-nums;
 }
 .steplist .s .nm{font-family:var(--mono);font-size:13px}
+/* plan变体用在「将要执行的步骤」上：说明文字紧贴步骤名，
+   而不是被 auto 列甩到行尾——那样两者之间隔着半屏空白，读不成一句话。 */
+/* 类名不能叫.note——那是全局的提示框（有底色与左边框），
+   同名会让每条步骤说明变成一个色块。 */
+.steplist.plan .s{grid-template-columns:26px 148px minmax(0,1fr)}
+.steplist.plan .s .step-note{font-size:12.5px;color:var(--ink-3)}
 .steplist .s.pending .nm{color:var(--ink-3)}
 .steplist .s.failed .nm{color:var(--bad);font-weight:600}
 .steplist .s.running .nm{color:var(--accent);font-weight:600}
 
-/* ── 终端窗格 ───────────────────────────────────── */
+/* ── 运行详情：步骤表 + 终端 ─────────────────────── */
+/* 日志是这一页的主体，所以让它吃满视口高度；步骤表跟着滚动固定住，
+   翻长日志时「现在跑到第几步」始终在视线里。 */
+.runsplit{display:grid;grid-template-columns:260px minmax(0,1fr);gap:22px;align-items:start}
+.runsplit .side{position:sticky;top:96px}
+@media (max-width:1000px){
+  .runsplit{grid-template-columns:minmax(0,1fr)}
+  .runsplit .side{position:static}
+}
+
 .term{background:var(--term-bg);border-radius:8px;overflow:hidden;border:1px solid var(--line)}
 .term-hd{
   display:flex;align-items:center;gap:10px;padding:9px 14px;
@@ -261,11 +305,12 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 .term-hd .lamp.live{background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
 .term-hd .spacer{margin-left:auto}
 .term-bd{
-  margin:0;padding:14px 16px;max-height:560px;overflow:auto;
+  margin:0;padding:14px 16px;overflow:auto;
+  height:calc(100vh - 224px);min-height:320px;
   font-family:var(--mono);font-size:12.5px;line-height:1.65;
   color:var(--term-ink);white-space:pre-wrap;word-break:break-word;
 }
-.term-bd:empty{padding:0}
+.term-bd:empty{padding:0;height:auto;min-height:0}
 .term-empty{
   padding:34px 20px 40px;text-align:center;
   font-family:var(--mono);font-size:12.5px;line-height:1.9;color:#7b8697;
@@ -273,21 +318,31 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 .term-empty code{background:rgba(255,255,255,.07);color:#9fb0c2;padding:2px 6px}
 .term-bd::selection{background:var(--accent);color:var(--accent-ink)}
 
+/* 窄屏：左轨改成抽屉。**不把它压成一条横向导航条**——
+   导航项一多就横向溢出，页面整体出现横滚，操作台最忌讳这个。 */
 @media (max-width:860px){
-  .shell{grid-template-columns:1fr}
-  .rail{position:static;height:auto;flex-direction:column;border-right:none;border-bottom:1px solid var(--line)}
-  .rail-nav{flex-direction:row;flex-wrap:wrap;gap:6px;padding:10px 12px}
-  .nav-label{display:none}
-  .rail-foot{display:flex;align-items:center;gap:12px}
-  .who{margin-bottom:0}
-  .signout{width:auto;padding:6px 12px}
-  .topbar,.content{padding-left:18px;padding-right:18px}
+  .shell{grid-template-columns:minmax(0,1fr)}
+  .rail{
+    position:fixed;left:0;top:0;width:250px;
+    transform:translateX(-100%);transition:transform .18s ease;
+    box-shadow:var(--shadow);
+  }
+  .shell.nav-open .rail{transform:none}
+  .shell.nav-open .scrim{
+    display:block;position:fixed;inset:0;z-index:15;
+    background:rgba(8,12,17,.42);border:none;padding:0;
+  }
+  .menu-btn{display:inline-flex}
+  .topbar{padding:14px 18px}
+  .topbar h1{font-size:18px}
+  .content{padding:20px 18px 56px}
 }
 </style>
 </head>
 <body>
-<div class="shell">
-  <aside class="rail">
+<div class="shell" id="shell">
+  <button class="scrim" id="scrim" type="button" aria-label="关闭菜单" tabindex="-1"></button>
+  <aside class="rail" id="rail">
     <div class="rail-brand"><b>ccw</b><span>控制台</span></div>
     <nav class="rail-nav">
       <div class="nav-label">运维</div>
@@ -299,11 +354,16 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
         {{if .NodeCount}}<span class="tally">{{.NodeCount}}</span>{{end}}
       </a>
       <div class="nav-label">待实施</div>
-      <span class="nav-item muted"><span class="dot"></span>CDK 管理</span>
-      <span class="nav-item muted"><span class="dot"></span>域名与证书</span>
-      <span class="nav-item muted"><span class="dot"></span>审计日志</span>
+      <span class="nav-item muted" aria-disabled="true" title="目前用 SSH + ccwadmin"><span class="dot"></span>CDK 管理</span>
+      <span class="nav-item muted" aria-disabled="true" title="目前用 SSH + ccwadmin"><span class="dot"></span>域名与证书</span>
+      <span class="nav-item muted" aria-disabled="true" title="目前直接查 Console 库"><span class="dot"></span>审计日志</span>
     </nav>
     <div class="rail-foot">
+      <div class="theme" role="group" aria-label="主题">
+        <button type="button" data-theme-set="auto">自动</button>
+        <button type="button" data-theme-set="light">浅色</button>
+        <button type="button" data-theme-set="dark">深色</button>
+      </div>
       <div class="who">
         <span class="av">{{.Initial}}</span>
         <span class="nm">{{.Username}}</span>
@@ -317,6 +377,11 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 
   <div class="main">
     <header class="topbar">
+      <button class="menu-btn" id="menu" type="button" aria-label="菜单" aria-expanded="false" aria-controls="rail">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+          <path d="M2 4h12M2 8h12M2 12h12"/>
+        </svg>
+      </button>
       <h1>{{block "pagetitle" .}}控制台{{end}}</h1>
       {{block "pagesub" .}}{{end}}
       <span class="spacer"></span>
@@ -327,5 +392,40 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
     </div>
   </div>
 </div>
+
+<script>
+(function () {
+  // 主题开关：auto 不写 data-theme，交回给 prefers-color-scheme。
+  var btns = document.querySelectorAll('[data-theme-set]');
+  function mark(cur) {
+    btns.forEach(function (b) {
+      b.setAttribute('aria-pressed', b.dataset.themeSet === cur ? 'true' : 'false');
+    });
+  }
+  var saved = 'auto';
+  try { saved = localStorage.getItem('ccw-theme') || 'auto'; } catch (e) {}
+  mark(saved);
+  btns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var v = b.dataset.themeSet;
+      if (v === 'auto') document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', v);
+      try { localStorage.setItem('ccw-theme', v); } catch (e) {}
+      mark(v);
+    });
+  });
+
+  // 窄屏抽屉：遮罩点击、Esc 与选中导航项都关闭它。
+  var shell = document.getElementById('shell');
+  var menu = document.getElementById('menu');
+  function close() { shell.classList.remove('nav-open'); menu.setAttribute('aria-expanded', 'false'); }
+  menu.addEventListener('click', function () {
+    var open = shell.classList.toggle('nav-open');
+    menu.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  document.getElementById('scrim').addEventListener('click', close);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+})();
+</script>
 </body>
 </html>{{end}}

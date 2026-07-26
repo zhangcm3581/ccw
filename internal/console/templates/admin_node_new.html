@@ -73,12 +73,12 @@
     <div class="card-hd"><h2>将要执行的步骤</h2><span class="spacer"></span>
       <span class="mono muted" style="font-size:11.5px">全过程日志实时可见，失败可从断点续跑</span></div>
     <div class="card-bd">
-      <div class="steplist">
+      <div class="steplist plan">
         {{range .Steps}}
         <div class="s pending">
           <span class="idx">{{.Seq}}</span>
           <span class="nm">{{.Name}}</span>
-          <span class="muted" style="font-size:12.5px">{{.Note}}</span>
+          <span class="step-note">{{.Note}}</span>
         </div>
         {{end}}
       </div>
