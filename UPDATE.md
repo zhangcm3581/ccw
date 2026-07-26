@@ -299,6 +299,19 @@ docker compose up -d
 
 排查顺序：`docker compose ps`（有没有 Restarting）→ `docker compose logs <崩溃的容器>` → `curl localhost:8090/healthz`（绕开 Caddy 看后端）→ 最后才是 DNS 与证书。
 
+### 访问后台域名却看到官网页面
+
+`CCW_ADMIN_DOMAIN` 没传给 `ccw-console` 容器。两个域名的 Caddy 站点块转发到同一个后端进程，应用层要靠这个变量才知道该把 `/admin/*` 限制在哪个域名上；不设置时两个域名的内容完全一样——**后台在官网域名上也是开着的**。
+
+```bash
+cd /opt/ccw-console/deploy/console
+grep CCW_ADMIN_DOMAIN .env          # 确认 .env 里有
+docker compose up -d                # compose.yaml 会把它传进容器
+docker compose logs ccw-console --tail=20 | grep -i CCW_ADMIN_DOMAIN   # 有告警说明还是没传进去
+```
+
+修好后：管理域名的根路径 302 到 `/admin/login`、官网内容 404；官网域名上的 `/admin/*` 404。
+
 ### Console 的机队管理没启用
 
 启动日志会写明原因，常见三种：

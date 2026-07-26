@@ -41,6 +41,9 @@ services:
       # 白名单在应用层独立复核，不只依赖下面Caddy的remote_ip匹配（设计§8.3）。
       CCW_SECRET_KEY: "${CCW_SECRET_KEY:-}"
       CCW_ADMIN_ALLOWLIST: "${CCW_ADMIN_ALLOWLIST:-}"
+      # 管理域名同时是**路由边界**：应用层据此把 /admin/* 限制在该域名上。
+      # 不传的话两个域名转发到同一个后端，后台在官网域名上照样可达。
+      CCW_ADMIN_DOMAIN: "${CCW_ADMIN_DOMAIN}"
       CCW_LOG_DIR: /var/lib/ccw-console/logs
     volumes:
       # 客户端产物：把 make release 的输出同步到宿主机这个目录即可。

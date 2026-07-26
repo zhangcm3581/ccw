@@ -45,6 +45,9 @@ type Server struct {
 	Auth *Auth
 	// Fleet为nil时不注册机队管理页（需要SSH执行层与信封加密齐备才有意义）。
 	Fleet *Fleet
+	// AdminHost是管理后台的域名。设置后按Host分流：管理路由只在该域名上存在，
+	// 官网路由只在其它域名上存在。留空＝不分流（本地开发）。
+	AdminHost string
 
 	rlMu     stdsync.Mutex
 	attempts map[string][]time.Time
@@ -85,7 +88,47 @@ func (s *Server) Handler() http.Handler {
 			s.registerFleet(mux)
 		}
 	}
-	return mux
+	return s.hostRouter(mux)
+}
+
+// hostRouter按Host把两个域名的路由面切开。
+//
+// **为什么必须在应用层做**：Caddy的两个站点块转发到同一个后端进程，
+// 后端只按路径分发的话，/admin/* 在官网域名上照样可达——
+// 「后台单独一个域名」就成了摆设，Caddy 上那份 IP 白名单也绕过去了
+// （它只挂在管理域名的站点块上）。
+//
+// 分流规则：
+//   - 管理域名：只有 /admin/* 与 /healthz；根路径重定向到登录页；其余404
+//   - 其它域名：官网全部路由；/admin/* 一律404
+//
+// AdminHost为空时不分流——本地开发没有域名，且此时Caddy也没在前面。
+func (s *Server) hostRouter(next http.Handler) http.Handler {
+	if s.AdminHost == "" {
+		return next
+	}
+	admin := strings.ToLower(s.AdminHost)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := strings.ToLower(r.Host)
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		onAdmin := host == admin
+		adminPath := r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/")
+
+		switch {
+		case onAdmin && r.URL.Path == "/":
+			http.Redirect(w, r, "/admin/login", http.StatusFound)
+			return
+		case onAdmin && !adminPath && r.URL.Path != "/healthz":
+			http.NotFound(w, r) // 管理域名上不提供官网内容
+			return
+		case !onAdmin && adminPath:
+			http.NotFound(w, r) // 管理路由只在管理域名上存在
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) render(w http.ResponseWriter, page string, data any) {

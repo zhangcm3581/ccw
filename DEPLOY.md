@@ -363,6 +363,8 @@ CONSOLE_POSTGRES_PASSWORD=<openssl rand -hex 16>
 
 **不能**用同一域名下的路径前缀隔离（`ccw.example.com/admin`）：Caddy 配置写错一处就会把后台暴露给公网，风险不对称。
 
+> **`CCW_ADMIN_DOMAIN` 同时是路由边界，不只是给 Caddy 用的。**两个站点块转发到同一个后端进程，应用层据此把 `/admin/*` 限制在管理域名上、把官网内容限制在站点域名上。不设置它的话两个域名的内容完全一样——后台在官网域名上照样可达，Caddy 上那份只挂在管理域名的白名单也就绕过去了。启动日志会对此告警。
+
 > 换域名**挡不住证书透明日志**。Caddy 签的每张证书都会进公开的 CT 日志，盯着 crt.sh 的人几分钟内就能看到你的后台主机名——换成不相干的域名也一样。真正拦住人的是白名单，见下。
 
 ### 白名单怎么填
@@ -401,13 +403,18 @@ docker compose logs ccw-console --tail=20
 
 启动日志里应看到「管理后台已启用」与「机队管理已启用（源码包 N KiB）」。若看到「机队管理未启用」，日志会写明缺什么。
 
-验证：
+验证——**两个域名各自只提供自己那一半**：
 
 ```bash
-curl -s https://ccw.example.com/healthz                                # ok
-curl -sI https://ccw.example.com/ | head -1                            # 200
-curl -s -o /dev/null -w '%{http_code}\n' https://admin.example.com/    # 白名单外 404
+curl -s https://ccw.example.com/healthz                                    # ok
+curl -sI https://ccw.example.com/ | head -1                                # 200 官网
+curl -s -o /dev/null -w '%{http_code}\n' https://ccw.example.com/admin/login   # 404 管理路由不在官网域名上
+
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://my-ops-panel.net/   # 302 → /admin/login
+curl -s -o /dev/null -w '%{http_code}\n' https://my-ops-panel.net/download          # 404 官网内容不在管理域名上
 ```
+
+白名单限制来源时，从名单外访问管理域名的任何路径都是 404。
 
 首访下载页会显示「暂无发布」——正常，下一步就是发布客户端。
 

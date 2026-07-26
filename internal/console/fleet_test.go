@@ -410,3 +410,86 @@ func readFile(p string) (string, error) {
 	b, err := os.ReadFile(p)
 	return string(b), err
 }
+
+// 两个域名的Caddy站点块转发到同一个后端进程，因此**必须由应用层按Host分流**：
+// 否则 /admin/* 在官网域名上照样可达，「后台单独一个域名」就成了摆设，
+// Caddy 上那份只挂在管理域名的 IP 白名单也一并被绕过。
+func TestHostRoutingSeparatesAdminFromSite(t *testing.T) {
+	s, _, sess, _ := newFleetServer(t)
+	s.AdminHost = "ad.example.net"
+
+	get := func(host, path string, withSession bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = host
+		req.Header.Set("X-Forwarded-For", "203.0.113.5")
+		if withSession {
+			req.AddCookie(sess)
+		}
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, req)
+		return w
+	}
+
+	// 官网域名：官网可达，/admin/* 一律404
+	if w := get("ccw.example.com", "/", false); w.Code != 200 {
+		t.Errorf("官网首页应200，got %d", w.Code)
+	}
+	for _, p := range []string{"/admin", "/admin/login", "/admin/nodes"} {
+		if w := get("ccw.example.com", p, true); w.Code != 404 {
+			t.Errorf("官网域名上的 %s 必须404（否则分域名等于没分），got %d", p, w.Code)
+		}
+	}
+
+	// 管理域名：根路径跳登录页，管理路由可达，官网内容404
+	w := get("ad.example.net", "/", false)
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/admin/login" {
+		t.Errorf("管理域名根路径应跳登录页，got %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if w := get("ad.example.net", "/admin/login", false); w.Code != 200 {
+		t.Errorf("管理域名上的登录页应200，got %d", w.Code)
+	}
+	if w := get("ad.example.net", "/admin/nodes", true); w.Code != 200 {
+		t.Errorf("管理域名上的机队页应200，got %d", w.Code)
+	}
+	for _, p := range []string{"/download", "/connect", "/quickstart", "/dist/SHA256SUMS"} {
+		if w := get("ad.example.net", p, false); w.Code != 404 {
+			t.Errorf("管理域名上不应提供官网内容 %s，got %d", p, w.Code)
+		}
+	}
+	// healthz 两边都要有（探针）
+	for _, h := range []string{"ccw.example.com", "ad.example.net"} {
+		if w := get(h, "/healthz", false); w.Code != 200 {
+			t.Errorf("%s 的 /healthz 应200，got %d", h, w.Code)
+		}
+	}
+}
+
+// Host 带端口时也要能匹配（反代或本地调试可能带 :443/:8090）。
+func TestHostRoutingIgnoresPortAndCase(t *testing.T) {
+	s, _, _, _ := newFleetServer(t)
+	s.AdminHost = "ad.example.net"
+	for _, host := range []string{"ad.example.net:443", "AD.Example.NET", "ad.example.net:8090"} {
+		req := httptest.NewRequest("GET", "/admin/login", nil)
+		req.Host = host
+		req.Header.Set("X-Forwarded-For", "203.0.113.5")
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Errorf("Host=%q 应识别为管理域名，got %d", host, w.Code)
+		}
+	}
+}
+
+// AdminHost 为空时不分流——本地开发没有域名，此时 Caddy 也没在前面。
+func TestHostRoutingDisabledWhenUnset(t *testing.T) {
+	s, _, _, _ := newFleetServer(t)
+	s.AdminHost = ""
+	req := httptest.NewRequest("GET", "/admin/login", nil)
+	req.Host = "whatever.local"
+	req.Header.Set("X-Forwarded-For", "203.0.113.5")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Errorf("未设置AdminHost时不应分流，got %d", w.Code)
+	}
+}

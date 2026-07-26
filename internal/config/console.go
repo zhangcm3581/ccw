@@ -24,6 +24,11 @@ type ConsoleConfig struct {
 	// AdminAllowlist是管理后台的IP白名单原文（Caddy同款语法）。
 	// 应用层独立解析与校验，不只依赖反代（设计§8.3的双重校验）。
 	AdminAllowlist string
+	// AdminDomain是管理后台的域名。**它同时是路由边界**：
+	// 两个域名的Caddy站点块转发到同一个后端进程，若应用层不按Host分流，
+	// /admin/* 在官网域名上照样可达——分域名就等于没分（设计§8.3的路径合同）。
+	// 留空＝不做Host分流（本地开发无域名时用）。
+	AdminDomain string
 	// AdminInsecureCookie=true时会话cookie不带Secure属性，仅供本地HTTP调试。
 	AdminInsecureCookie bool
 	// LogDir存放流水线运行日志（每run一个文件，0600）。空值＝只在内存里保留，
@@ -47,6 +52,7 @@ func LoadConsole(getenv func(string) string) (ConsoleConfig, error) {
 		DistDir:             getenv("CCW_DIST_DIR"),
 		ListenAddr:          or(getenv("CCW_CONSOLE_LISTEN_ADDR"), "127.0.0.1:8090"),
 		AdminAllowlist:      getenv("CCW_ADMIN_ALLOWLIST"),
+		AdminDomain:         getenv("CCW_ADMIN_DOMAIN"),
 		AdminInsecureCookie: getenv("CCW_ADMIN_INSECURE_COOKIE") == "1",
 		LogDir:              or(getenv("CCW_LOG_DIR"), "/var/lib/ccw-console/logs"),
 		NodeSrcPath:         or(getenv("CCW_NODE_SRC"), "/node-src.tar.gz"),

@@ -95,6 +95,12 @@ func serve() {
 			Store: st, Box: box, Allowlist: nets,
 			Secure: !cfg.AdminInsecureCookie,
 		}
+		// 按Host分流：管理路由只在管理域名上存在（见console.hostRouter）。
+		srv.AdminHost = cfg.AdminDomain
+		if srv.AdminHost == "" {
+			logf("警告：未设置CCW_ADMIN_DOMAIN，/admin/*在官网域名上同样可达——" +
+				"生产部署应设置它，让管理路由只存在于管理域名")
+		}
 		// 机队管理：SSH执行层 + 流水线 + 日志广播。与Auth同批启用——
 		// 它的每个入口都在requireAdmin之后。
 		// 节点源码包必须存在才启用机队管理：节点靠它构建镜像，
