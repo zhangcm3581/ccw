@@ -1,9 +1,9 @@
 # 实施状态与缺口清单
 
-**最后核对：**2026-07-26（对照分支`v2`，工作树含未提交的P0-2改动）
+**最后核对：**2026-07-26（对照分支`v2`，commit `feedb06`；P0-2改动已于`4093e3d`提交）
 **核对方式：**通读`cmd/`与`internal/`全部Go源码 + `deploy/`编排 + 跑`go build ./...`与`go test ./...`
 
-> 实施计划`docs/superpowers/plans/2026-07-19-remote-claude-workspace-plan.md`里的71个checkbox**一个都没勾**，不反映真实进度。本文件是进度的唯一可信来源；改动代码后请同步更新。
+> 实施计划`docs/superpowers/plans/2026-07-19-remote-claude-workspace-plan.md`已于2026-07-26**归档**（71个checkbox一个都没勾，且Task 13等内容已被推翻）。本文件是进度的唯一可信来源；改动代码后请同步更新。
 
 ## 一句话现状
 
@@ -26,7 +26,7 @@ Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`�
 | 10 | control-api | 完成（exchange限速、cleanup模式令牌、`/usage`门户） |
 | 11 | 本地CLI | 完成（三平台编译；超额不退出、令牌走header、CDK缓存0600） |
 | 12 | 同步接线、e2e、部署 | **部分**：compose/Caddy/同步端点已接线并可跑；e2e十条断言全是`t.Skip`；反代路径合同无自动化测试；备份恢复完全没做 |
-| 13 | 文件系统硬配额 | **部分且不可用**：`deploy/quota-setup.sh`写好了但无流程调用；更关键的是它创建的卷名与compose的**不兼容**，即使调用了也不生效——见下方P1-5 |
+| 13 | 文件系统硬配额 | **不采纳**（2026-07-26定）：脚本创建的卷名与compose不兼容，执行了也不生效；已决定不改卷布局，改走替代防线——见下方「已知取舍」 |
 
 ## 缺口清单
 
@@ -66,23 +66,6 @@ Task 1–13的代码都写过一遍，13个包全部有单测且`go test ./...`�
 
 `tests/e2e/two_projects_test.go`的十个子测试（bootstrap、CDK隔离、双向同步、冲突副本、逻辑配额、硬配额隔离、终端重连、超额关终端、秘密泄漏）全是`t.Skip`。**没有任何一条真实VPS验收跑过。**（用skip而不是空断言是对的，避免把"没验证"报成"通过"。）
 
-### P1-5 硬配额脚本与compose卷名不兼容，执行了也不生效（2026-07-26新发现）
-
-`deploy/quota-setup.sh`最后创建的是bind到loop挂载点的卷，卷名为`<slug>-workspace`：
-
-```bash
-docker volume create --driver local --opt type=none --opt o=bind \
-  --opt device="/srv/ccw/workspaces/${SLUG}" "${SLUG}-workspace"
-```
-
-但compose创建的卷带项目前缀——`docker compose config`实测输出为`deploy_project-a-workspace`。**两者不是同一个卷。**因此即使执行了该脚本，容器用的仍是不受配额约束的普通命名卷，且**没有任何报错**。
-
-**后果：**Task 13标称"部分完成"实际是"不可用"；多客户共用一台机器时，单个客户写满磁盘会拖垮同机所有人。
-
-**修复方向：**compose用`external: true` + 显式`name:`对齐脚本，或改为直接bind mount宿主机目录。方案对比见`docs/superpowers/plans/2026-07-26-compose-render-plan.md`§4。
-
-**证据强度：**静态代码审查 + `docker compose config`本机输出；**未在真实部署上复现**，实施前应先`docker volume ls`比对确认。
-
 ### P1-4 Phase 1证据缺两份
 
 `docs/phase1-evidence/`只有`jsonl-semantics.md`。计划要求的`dual-login-24h.md`（24小时双登录）与`tmux-prototype.md`（容器内tmux断连重连原型）都不存在。前者已被共享凭据方案绕过，但绕过的结论没有正式记录进spec。
@@ -104,10 +87,30 @@ docker volume create --driver local --opt type=none --opt o=bind \
 - 门户只有`/usage`单页，认证复用CDK session token，没有独立管理员登录（spec §11决定是localhost+SSH隧道，Caddy已按此对公网404，与设计一致）
 - CLI同步循环每2秒重新Dial一次WebSocket，无本地fsnotify去抖
 
+## 已知取舍（不是缺口，不要当待办）
+
+本节记录**已明确决定不做**的事。它们看起来像缺口，但改动方向已被否决，请勿重新提为待办。
+
+### T1 文件系统硬配额不启用，同机客户磁盘互相影响（2026-07-26定）
+
+**事实：**`deploy/quota-setup.sh`创建的卷名是`<slug>-workspace`，compose实际使用的卷带项目前缀（`docker compose config`实测为`deploy_project-a-workspace`）。**两者不是同一个卷**，因此脚本执行了也不生效，且没有任何报错——它会正常退出并打印"capped at NN GiB"。
+
+**决定：**不改卷布局（渲染计划§4.4，用户2026-07-26定）。因此硬配额不启用，脚本保留但已在文件头标注"勿接入流程"，也已从bootstrap流水线中删除（设计§5.3步骤12）。
+
+**承担的后果：**逻辑配额（`internal/storage`）只统计走同步接口的文件。客户在终端里`npm install`、堆构建缓存或直接`dd`可以突破15 GiB上限，撑爆后**同机全部客户一并受影响**。这通常不需要恶意即可触发。
+
+**替代防线**（设计§12.1的N4，尚未实施）：Docker`data-root`指向独立分区 + Postgres数据移出data-root + 磁盘水位告警。这些只把后果从"整台机器死亡且救不回来"降到"客户一起降级、管理员能登机处理"，**不消除客户间的互相影响**。
+
+**对外表述边界：**15 GiB只能称"配额"，**不得**表述为"保证不超过"（设计§7.6）。
+
+**若将来要重开：**回到`docs/superpowers/plans/2026-07-26-compose-render-plan.md`§4.2重新选型，代价是渲染器加`--workspace-mode`、bootstrap多一条硬顺序约束、已有部署迁卷。
+
+**证据强度：**静态代码审查 + `docker compose config`本机输出；**未在真实部署上复现**。将来若重开该方向，先`docker volume ls`比对确认。
+
 ## 建议推进顺序
 
-1. 定`claude-shared`的去留（P0-2）——它决定计量能不能做，是其他工作的前提
-2. 接线用量采集（P0-1）：worker起collector goroutine + `usage_events`/`usage_offsets`的PG实现 + 权重配置化
+1. ~~定`claude-shared`的去留（P0-2）~~——已于2026-07-26解决：JSONL按项目分卷，凭据仍共享（`4093e3d`）。**但未在真实部署上验证**
+2. 接线用量采集（P0-1）：worker起collector goroutine + `usage_events`/`usage_offsets`的PG实现 + 权重配置化。**注意：设计§12.1把N1标为依赖C13，该依赖已随`4093e3d`解除，现在即可开工**
 3. `modeFor`查额度（P1-1）：改动量小，但直接影响两条验收
 4. `openat2`路径解析（P1-2）：Linux生产必需
 5. 补CI与digest固定，然后在真实VPS上把e2e十条skip逐条填实（P1-3）

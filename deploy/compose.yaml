@@ -5,7 +5,8 @@
 # 项目容器project-a/project-b以sleep infinity运行，等待管理员登录与worker-agent附着。
 #
 # 提供：认证、连接、门户、终端通道、文件双向同步（/v1/sync）。
-# 未启用：用量采集（额度闸门因此不触发）、文件系统硬配额（见 quota-setup.sh）。详见 DEPLOY.md 第11节。
+# 未启用：用量采集（额度闸门因此不触发）。
+# 文件系统硬配额已决定不做（quota-setup.sh 在本布局下不生效，勿执行）。详见 DEPLOY.md 第11节。
 
 services:
   postgres:

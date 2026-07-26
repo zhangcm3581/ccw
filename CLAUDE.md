@@ -4,9 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-`ccw`（remote-claude-workspace）是**双项目远程Claude Code工作空间**：一台Linux VPS上跑两个隔离的Claude Code容器，本地用`cclaude` CLI凭CDK登录，附着云端tmux会话（断线不中断），本地目录与云端workspace双向同步，并对每个项目施加磁盘配额与5小时/7天内部额度闸门。
+`ccw`（remote-claude-workspace）是**远程Claude Code工作空间**：一台Linux VPS上跑多个隔离的Claude Code容器（单节点上限3个），本地用`cclaude` CLI凭CDK登录，附着云端tmux会话（断线不中断），本地目录与云端workspace双向同步，并对每个项目施加磁盘配额与5小时/7天内部额度闸门。
 
-个人版、单管理员、双项目。**非目标**：多租户、LLM Gateway计费代理、分块增量同步、Kubernetes、浏览器终端。
+**使用形态（2026-07-26定）：**一台节点只授权一次Claude账号，该节点上的全部项目共用这一个上游账号的额度；项目可以全归管理员自己，也可以分配给他人使用。**因此内部额度闸门不是锦上添花而是必需品**——它是唯一能阻止某个项目吃光全机额度的机制，而它当前空转（见「当前已知缺口」第1条）。此前文档写的"仅供本人两个项目使用"已作废，见`docs/design-deviations.md`的D6。
+
+个人版、单管理员。**非目标**：多租户（多个互不信任的付费客户共用一套控制面与计费）、LLM Gateway计费代理、分块增量同步、Kubernetes、浏览器终端。
+
+机队管理（多节点纳管、Provisioning流水线、域名分配）由Console负责，见`docs/superpowers/specs/2026-07-25-ccw-console-fleet-design.md`——它**不引入多租户**，仍是单管理员、每个节点独立自治。单节点上限为**3个项目容器**、单项目磁盘配额上限与默认值均为**15 GiB**（该设计§7.6，产品规则，不可由代码或配置绕过）。`deploy/compose.yaml`当前仍是硬编码的双项目，模板化见`docs/superpowers/plans/2026-07-26-compose-render-plan.md`。
 
 ## 权威文档链
 
@@ -15,9 +19,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. `docs/superpowers/specs/2026-07-19-remote-claude-workspace-v2-review-adjustments.md`（最高权威）
 2. `docs/superpowers/specs/2026-07-19-remote-claude-workspace-audit-corrections.md`
 3. `docs/superpowers/specs/2026-07-19-remote-claude-workspace-design.md`（Design Spec v3，已批准）
-4. `docs/superpowers/plans/2026-07-19-remote-claude-workspace-plan.md`（Task 0–13实施计划）
+4. `docs/superpowers/specs/2026-07-25-ccw-console-fleet-design.md`（v2 Console层设计，未实施；含产品硬性上限§7.6）
+5. `docs/superpowers/plans/2026-07-26-compose-render-plan.md`（C13 compose渲染，未实施）
 
-计划里的checkbox**全部未勾**，不能当进度用——实际进度看`docs/STATUS.md`与git log。代码与spec的已知偏离记录在`docs/design-deviations.md`，改动涉及这些点时必须先读。
+`docs/superpowers/plans/2026-07-19-remote-claude-workspace-plan.md`（Task 0–13）已于2026-07-26**归档**——保留为历史记录，**不再作为实施依据**，其中Task 13等内容已被明确推翻。文件顶部有归档横幅。
+
+计划里的checkbox**全部未勾**，不能当进度用——实际进度看`docs/STATUS.md`与git log。代码与spec的已知偏离记录在`docs/design-deviations.md`，**已明确决定不做的事**记在`docs/STATUS.md`的「已知取舍」一节（别把它们重新提为待办）；改动涉及这些点时必须先读。
 
 ## 常用命令
 
@@ -86,7 +93,10 @@ gofmt -l .                                        # 格式检查（应无输出�
 
 ## 当前已知缺口
 
-完整清单在`docs/STATUS.md`。最需要注意的两条：
+完整清单在`docs/STATUS.md`。最需要注意的三条：
 
 1. `internal/usage`的采集器写完了但**没有任何文件import它**，`usage_events`永远为空 → 所有额度闸门实际不触发。
-2. `deploy/compose.yaml`把`claude-shared`卷同时挂给两个项目（共享登录凭据），两个项目的JSONL因此混在一起，按项目归属用量在原理上不成立。这是对spec §6的偏离，详见`docs/design-deviations.md`。
+2. `cmd/worker-agent/main.go`的`modeFor`恒返回`"rw"`，超额时不降级为cleanup —— `control-api`已经会签发cleanup模式令牌，worker不据此限制写入。
+3. **文件系统硬配额已决定不做**（`docs/STATUS.md`的T1）：`deploy/quota-setup.sh`创建的卷名与compose实际使用的不是同一个，执行了也不生效且无报错——**不要执行它，也不要把它接进任何流程**。后果是容器内直接写盘可撑爆宿主机磁盘，这是明示的取舍。
+
+会话JSONL已于`4093e3d`按项目分卷（`<slug>-claude-projects`），凭据仍共享以保证「一台机器只授权一次」；这是对spec §6的偏离，详见`docs/design-deviations.md`的D1。**该改动尚未在真实部署上验证。**

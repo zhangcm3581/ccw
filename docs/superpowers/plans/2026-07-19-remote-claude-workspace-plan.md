@@ -1,5 +1,18 @@
 # 双项目远程Claude工作空间Implementation Plan（v3）
 
+> # ⚠️ 已归档，不再维护，勿按此实施
+>
+> **归档于2026-07-26。**本文件保留为历史记录（Task 0–13当初是怎么规划的），**不是待办清单**。
+>
+> - **71个checkbox一个都没勾，不反映真实进度。**进度的唯一可信来源是`docs/STATUS.md`与git log
+> - **部分内容已被明确推翻**，按此实施会做错事，最典型的三条：
+>   - **Task 13（文件系统硬配额）已决定不做**——脚本与compose卷名不兼容，执行了也不生效；见`docs/design-deviations.md`的D5与`docs/STATUS.md`的T1。**不要实现它,也不要执行`deploy/quota-setup.sh`**
+>   - **Task 0 Step 1（24小时双登录验证）已被绕过**——改为共享Claude HOME，原验证目标不再适用；见D1
+>   - **"双项目"已过时**——单节点上限改为3个项目容器、单项目配额15 GiB；见console-fleet-design §7.6
+> - **当前工作的依据**是`docs/superpowers/specs/2026-07-25-ccw-console-fleet-design.md`（v2 Console设计）与`docs/superpowers/plans/2026-07-26-compose-render-plan.md`
+>
+> 读本文件前先读`docs/STATUS.md`（含「已知取舍」一节）与`docs/design-deviations.md`。
+
 > **v3修订说明：**本计划已按[v2审查与v3调整要求](../specs/2026-07-19-remote-claude-workspace-v2-review-adjustments.md)（最高权威）与[审计与修订说明](../specs/2026-07-19-remote-claude-workspace-audit-corrections.md)完成修订；配套设计为[Design Spec v3](../specs/2026-07-19-remote-claude-workspace-design.md)。
 >
 > **执行状态（2026-07-19）：**v3与调整后顺序已获用户批准，编码开始。24小时双登录验证消耗真实Claude额度，运行前仍需用户单独同意。

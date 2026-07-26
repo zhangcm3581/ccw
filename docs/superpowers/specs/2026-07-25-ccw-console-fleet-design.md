@@ -217,7 +217,7 @@ release: ## 交叉编译六目标 + 生成校验和
 - **签发CDK**（→节点`ccwadmin issue-cdk`，明文一次性展示）
 - **轮换CDK**（→节点`ccwadmin rotate-cdk`；默认24小时宽限，另提供「立即撤销」用于凭据泄露，§11.1.1）
 - **禁用CDK**
-- **执行硬配额脚本**（`quota-setup.sh`，对应STATUS的Task 13缺口）
+- **查看磁盘水位**（含告警阈值与当前占用；硬配额已决定不做，见§12.1的N4改写说明）
 - **收集诊断**（`docker compose ps`、磁盘、日志尾部）
 - **停止/启动栈**
 - **解除纳管**（移除托管公钥、删DNS记录、删Console侧记录；**不删节点数据**）
@@ -253,15 +253,17 @@ release: ## 交叉编译六目标 + 生成校验和
 | 1 | `connect` | 密码登录、记录host key、探测sudo可用性 | — |
 | 2 | `probe` | 采集发行版/内核/arch/内存/磁盘/已装Docker/端口22·80·443占用 | — |
 | 3 | `harden` | 建`ccw`运维用户、注入托管公钥、验证密钥登录、**丢弃密码**、防火墙放行22/80/443 | 公钥已在`authorized_keys` |
-| 4 | `install-docker` | 按`versions.lock`固定版本装Docker CE + compose插件 | `docker --version`匹配锁定版本 |
+| 4 | `install-docker` | 按`versions.lock`固定版本装Docker CE + compose插件；**写`/etc/docker/daemon.json`把`data-root`指向独立分区/盘**（N4） | `docker --version`匹配锁定版本且`data-root`已指向独立分区 |
 | 5 | `dns-allocate` | 从zone分配子域名、创建/UPSERT A记录、等待生效（§6.3） | 记录已存在且指向本节点IP |
-| 6 | `push-artifacts` | 上传`compose.yaml`/`Caddyfile`/`Dockerfile.*`/`quota-setup.sh`到`/srv/ccw` | 文件sha256全部匹配 |
+| 6 | `push-artifacts` | 上传`compose.yaml`/`Caddyfile`/`Dockerfile.*`到`/srv/ccw`（**不含`quota-setup.sh`**，见§12.1的N4改写说明） | 文件sha256全部匹配 |
 | 7 | `render-env` | **在节点上**生成`POSTGRES_PASSWORD`与`CCW_TOKEN_KEY`（`openssl rand -hex 32`），写`/srv/ccw/.env`（0600） | `.env`存在且变量齐全 |
 | 8 | `compose-up` | `docker compose up -d --build` | — |
 | 9 | `cert-wait` | 轮询443 TLS握手直到证书就绪，记录签发者与有效期（§6.5） | 现有证书未过期 |
 | 10 | `healthcheck` | 容器healthy + `/api/v1/...`可达；随后`docker builder prune -f`回收2–5 GiB构建缓存（§7.6） | — |
 | 11 | `init-projects` | 对每个slug跑`ccwadmin init-project --json`，回收CDK明文 | slug已存在则跳过 |
-| 12 | `quota-setup` | 可选执行`quota-setup.sh` | 配额已生效 |
+| 12 | `disk-guard` | 校验Docker`data-root`确在独立分区、Postgres数据目录不在data-root上；注册磁盘水位告警阈值（N4） | 两项校验通过且阈值已注册 |
+
+**步骤12曾是`quota-setup`（执行`deploy/quota-setup.sh`），已删除。**该脚本在当前卷布局下执行了也不生效，接进流水线只会制造「配额已启用」的假象——原因与替代方案见§12.1的N4改写说明。
 
 **关键约束1：**步骤7的密钥**在节点本地生成**，明文从不经过Console。Console只知道「已生成」，不知道值。这样Console库泄露不等于节点令牌泄露。
 
@@ -432,7 +434,7 @@ CDK格式是`ccw_<publicID>.<secret>`（`internal/auth/cdk.go:36`）。查询只
 | 层 | 靠什么实现 | 现状 |
 |---|---|---|
 | **文件隔离** | 项目容器 + 每项目独立workspace卷 | ✅ 已成立（非root、有资源上限，Task 4） |
-| **计量隔离** | 每客户独立的会话JSONL | ❌ `deploy/compose.yaml:90,101`把`claude-shared`同时挂给两个项目，JSONL混在一个卷里（STATUS的P0-2） |
+| **计量隔离** | 每客户独立的会话JSONL | ⚠️ 结构上已成立（`4093e3d`增加`<slug>-claude-projects`嵌套卷，§7.3），但**未在真实部署上验证**，且端到端计量仍依赖采集器接线（P0-1，未做） |
 | **额度隔离** | 上游Claude账号 | ❌ 一个节点一个账号＝物理上一个池子，**代码层面无法隔离** |
 
 第二层可以修（§7.3），第三层修不了——只能靠内部配额做公平分配（§7.4）。
@@ -516,7 +518,7 @@ volumes:
 
 **但两道闸门现在都空转**（P0-1：`internal/usage`的采集器没有任何文件import，`usage_events`永远为空）。
 
-**因此定为硬约束：P0-1与P0-2是「共享节点上线」的阻断项，不是技术债。**在它们修好之前，一台机器只能服务一个客户。否则没有任何机制阻止一个客户吃光额度，而受害的是同机所有客户——他们会同时断线、同时投诉。
+**因此定为硬约束：P0-1是「共享节点上线」的阻断项，不是技术债。**在它修好之前，一台机器只能服务一个客户。（P0-2已于`4093e3d`解除结构性障碍，但未在真实部署上验证。）否则没有任何机制阻止一个客户吃光额度，而受害的是同机所有客户——他们会同时断线、同时投诉。
 
 后台需展示**超卖水位**：单节点 `Σ(各客户5h配额) / 账号池5h容量`。
 
@@ -932,7 +934,7 @@ Console通过SSH调用它，因此必须机器可读。当前只有`init-project
 
 现在硬编码`project-a`/`project-b`。Console要支持任意slug与数量，改为Go模板渲染后上传。
 
-**顺带解决STATUS的P0-2**，按§7.3的方案——**共享HOME卷保持不变**，只额外把`.claude/projects`挂成每客户独立卷：
+**P0-2部分已于`4093e3d`落地**（模板化本身仍未做），按§7.3的方案——**共享HOME卷保持不变**，只额外把`.claude/projects`挂成每客户独立卷：
 
 ```yaml
 volumes:
@@ -993,10 +995,10 @@ Console后台goroutine，每5分钟对每个`ready`节点执行`ccwadmin status 
 | C11 | bootstrap流水线12步实现 | C6,C7,C8 | |
 | C12 | `ccwadmin`扩展 + 幂等化（节点侧） | — | 可与C1–C11并行 |
 | C13 | compose渲染（`ccwadmin render-compose`） | C12 | **详见`plans/2026-07-26-compose-render-plan.md`**；`projects/`独立卷部分已于07-26落地 |
-| **N1** | **用量采集接线**（worker起collector、`usage_events`/`usage_offsets`的PG实现、权重配置化） | C13 | **共享节点上线阻断项**，解P0-1 |
+| **N1** | **用量采集接线**（worker起collector、`usage_events`/`usage_offsets`的PG实现、权重配置化） | —（原标C13，已随`4093e3d`解除） | **共享节点上线阻断项**，解P0-1 |
 | **N2** | **`modeFor`查额度**（`cmd/worker-agent/main.go:119`恒返回`"rw"`） | N1 | 解P1-1，改动量极小 |
 | **N3** | **account模型改造**：一节点一account，客户为其下project；`ccwadmin`不再硬编码`default-pool` | C12 | §7.4 |
-| **N4** | **硬配额接入流程**：`quota-setup.sh`纳入bootstrap（STATUS的Task 13） | C11 | 多客户下必需，防逻辑配额被击穿 |
+| **N4** | **磁盘失控防线**：Docker`data-root`指向独立分区 + Postgres数据移出data-root + 磁盘水位告警 | C11 | **取代原「硬配额接入流程」**，见下方说明 |
 | C14 | **`cclaude`寻址改造 + 配置迁移** | — | 独立性强，可早做 |
 | C15 | 管理后台UI：总览、向导、详情、SSE日志 | C3,C7 | |
 | C16 | 域名管理UI：zone列表、预算水位、记录状态 | C8,C10,C15 | |
@@ -1007,13 +1009,27 @@ Console后台goroutine，每5分钟对每个`ready`节点执行`ccwadmin status 
 | C21 | Console自身部署：compose、Caddyfile、备份恢复runbook | C1–C20 | |
 | C22 | e2e：对一台真实空VPS走完整bootstrap（**staging CA**） | C21 | **不允许用`t.Skip`充数** |
 
+#### N4改写说明（2026-07-26）
+
+原N4是「把`deploy/quota-setup.sh`纳入bootstrap」。**该任务在当前卷布局下达不成它自己的目的，已废弃。**
+
+原因：`quota-setup.sh`创建的是bind到loop挂载点的卷`<slug>-workspace`，而compose实际使用的卷带项目前缀（`deploy_<slug>-workspace`）——**两者不是同一个卷**。脚本会正常退出并打印成功，容器却仍挂着不受约束的普通命名卷，且没有任何报错。要让它生效必须改卷布局（渲染计划§4.2方案B或§4.3方案C），而用户2026-07-26已定**沿用现状的普通命名卷**（渲染计划§4.4）。
+
+因此N4改为在**不动卷布局**的前提下收敛爆炸半径，三项内容：
+
+1. `install-docker`步骤把Docker`data-root`指向独立分区/盘——客户写满的是该盘，宿主机根分区与SSH救援能力不受影响
+2. **Postgres数据移出data-root**：`deploy/compose.yaml`的`ccw-pg`现在是普通命名卷，落在`/var/lib/docker/volumes`即data-root上，客户写满盘会连数据库一起拖死。须改为bind到data-root之外的宿主机目录（如`/var/lib/ccw/pgdata`）。**已有部署改此项需要迁移数据**（`pg_dump`后恢复，或停栈后拷贝卷内容），不可直接改配置重启
+3. 磁盘水位告警并入§11.5节点巡检——按§7.6，这在方案A下是必要功能而非可选项
+
+**未被N4解决、且不打算解决的：**同一节点上客户之间的磁盘互相影响。逻辑配额只统计走同步接口的文件，客户在终端里`npm install`、堆构建缓存或直接`dd`可以突破15 GiB上限，撑爆后同机全部客户一并受影响。这是方案A的**已接受取舍**，不是待修缺陷——不得在STATUS.md或本文档中记为待办。若商业上不能接受，须回到渲染计划§4.2重新选型，代价是渲染器加`--workspace-mode`、bootstrap多一条硬顺序约束、已有部署迁卷。
+
 ### 12.2 建议顺序
 
 1. **C20 + C14**（用户端站点 + 客户端寻址改造）：独立性最强、风险最低、马上有可见产出，且C14是多节点的前提
-2. **C12 + C13**（`ccwadmin`扩展与模板化）：所有后台功能的前置，顺手解掉P0-2
-3. **N1 + N2 + N3**（采集接线、`modeFor`查额度、account模型）：**共享节点的上线闸门，见§12.3**
+2. **N1 + N2**（采集接线、`modeFor`查额度）：**共享节点的上线闸门，见§12.3**。N1原标为依赖C13，该依赖已随`4093e3d`（JSONL按项目分卷）解除，**现在即可开工**，不必等模板化
+3. **C12 + C13 + N3**（`ccwadmin`扩展、模板化、account模型）：所有后台功能的前置
 4. **C1–C7**（Console核心：认证、SSH、流水线）
-5. **C8 + C10 + C11 + N4**（DNS分配、证书预算、bootstrap全流程含硬配额）——先用`manual`模式跑通
+5. **C8 + C10 + C11 + N4**（DNS分配、证书预算、bootstrap全流程含磁盘失控防线）——先用`manual`模式跑通
 6. **C15–C19**（UI、查询页、审计巡检、超卖水位）
 7. **C9**（Route 53自动化）——此时`manual`已能用，接不接是纯效率问题
 8. **C21–C22**（部署与真实验收）
@@ -1028,10 +1044,12 @@ Console会把节点从1台变成N台，且每台服务多个客户。STATUS里�
 
 | 闸门 | 内容 | 阻断什么 |
 |---|---|---|
-| **N1 + C13** | 采集接线 + `projects/`独立卷 | 未完成前，**一台机器只能服务一个客户** |
+| **N1** | 采集接线（`projects/`独立卷已于`4093e3d`落地） | 未完成前，**一台机器只能服务一个客户** |
 | **N2** | `modeFor`查额度 | 未完成前，超额客户仍能上传，配额形同虚设 |
-| **N4** | 硬配额接入 | 未完成前，单客户磁盘失控会拖垮同机所有人 |
+| **N4** | 磁盘失控防线（data-root独立分区 + pg数据外移 + 水位告警） | 未完成前，单客户写满盘会连宿主机根分区与数据库一起拖死，**无法SSH救援**；完成后爆炸半径收敛为「同机客户一并降级，但机器可救、数据不丢」 |
 | P1-2 | `openat2`路径解析 | 不阻断共享上线（单管理员场景风险有限），但仍是spec的「必须」欠账 |
+
+**N4的闸门含义与其他三条不同，不要误读：**N1/N2/N3完成后对应的洞就补上了；N4完成后**同机客户之间的磁盘互相影响依然存在**（原因见§12.1的N4改写说明）。N4只把后果从「整台机器死亡且救不回来」降到「客户一起降级、管理员能登机处理」。把它当成「做完就隔离好了」会导致对外承诺越界——按§7.6，15 GiB对外只能称「配额」，不得表述为「保证不超过」。
 
 **单客户独占的节点不受这些闸门约束**，可以先上线——这给了一条「先服务少量客户、边跑边补闸门」的渐进路径。
 
@@ -1077,7 +1095,8 @@ Console会把节点从1台变成N台，且每台服务多个客户。STATUS里�
 | A36 | **CDK轮换（默认宽限）**：新CDK立即可用，旧CDK在宽限期内仍可用，宽限期过后自动失效且无需任何定时任务 |
 | A37 | **CDK轮换（`--revoke-now`）**：旧CDK当场失效；持旧CDK的`cclaude`收到`invalid_cdk`并清除本地缓存，输入新CDK后**原tmux现场完好** |
 | A38 | 轮换后`list-cdks`能看到新旧两张的状态，且**任何输出与日志中都不含CDK明文** |
-| A32 | 单客户磁盘写满自己配额后，同节点其他客户的读写不受影响（硬配额N4生效的证据） |
+| A32a | 客户在容器内`dd`撑爆workspace所在盘后：宿主机SSH可登录、Postgres仍可查询、Console巡检仍能读到该节点状态（N4的data-root隔离与pg数据外移生效的证据） |
+| A32b | 可用空间跌破阈值时后台告警，且告警**先于**撑爆发生（水位告警生效的证据） |
 | A33 | 备份恢复演练：Console库恢复后，机队列表、凭据、域名分配可用，能继续操作节点 |
 
 **诚实表述要求（CLAUDE.md）：**上述任何一条未真实跑过，就不得在STATUS.md标为完成。e2e里未实现的断言用`t.Skip`，不用空断言。

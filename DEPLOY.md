@@ -117,7 +117,7 @@ docker compose run --rm --entrypoint /ccwadmin control-api init-project project-
 
 ## 7. 管理员登录Claude（共享授权，只需一次）
 
-两个项目容器共用同一个 Claude HOME 卷（`claude-shared`），所以**只在一个容器登录一次**，两个项目共用同一份凭据（本人自用自己账号）。详见 `docs/admin-login-runbook.md`。
+同一节点上的全部项目容器共用一个 Claude HOME 卷（`claude-shared`），所以**整台节点只在一个容器登录一次**，全部项目共用同一份凭据与同一个上游额度池。详见 `docs/admin-login-runbook.md`。
 
 ```bash
 # 准备并附着 project-a 的 tmux 会话（PROJECT_A_ID 为第6步输出的 project id）
@@ -239,23 +239,28 @@ VPS重启后 `docker compose up -d`（或依赖 `restart: unless-stopped` 自动
 **尚未包含：**
 
 - **用量采集**：`internal/usage` 的JSONL采集器没有接进 worker-agent，`usage_events` 表始终为空。后果是 **5小时/7天额度闸门不会真正触发**——门户与CLI状态栏的用量恒显示0，超额也不会关闭终端。部署后请自行留意实际消耗。
-- **文件系统硬配额**：`deploy/quota-setup.sh` 已提供（每项目一个固定大小的 ext4 loop 文件系统），但**本编排默认不调用它**，直接用普通命名卷。若不手工执行该脚本，容器内的 Claude 可以绕过同步接口把宿主机磁盘写满。用法见第11.1节。
+- **文件系统硬配额**：**已决定不做**（2026-07-26）。容器内的 Claude 可以绕过同步接口把宿主机磁盘写满，这是明示的取舍，详见第11.1节与 `docs/STATUS.md` 的 T1。
 - **cleanup模式的服务端降级**：超额时 control-api 会签发 cleanup 模式的同步令牌，但 worker-agent 目前不据此限制写入。
 - **完整备份/恢复演练**：无脚本、无演练记录。第10节只有数据库的 `pg_dump`，卷数据未覆盖。
 - **反向代理路径合同与e2e自动化验收**：`tests/e2e` 的断言全部是 skip 状态。
 
 完整缺口清单与建议推进顺序见 `docs/STATUS.md`；与设计spec的偏离见 `docs/design-deviations.md`。
 
-### 11.1 启用文件系统硬配额（可选但强烈建议）
+### 11.1 文件系统硬配额：不要执行 `quota-setup.sh`
 
-必须在 `docker compose up` **之前**执行，否则命名卷已按默认方式创建，需要先删卷：
+**该脚本在当前编排下不生效，请勿执行。**它创建的卷名是 `<slug>-workspace`，而 compose 实际使用的卷带项目前缀（`deploy_<slug>-workspace`）——两者不是同一个卷。脚本会正常退出并打印 `capped at NN GiB`，容器却仍挂着不受约束的普通命名卷，**没有任何报错**。执行它唯一的效果是让你误以为配额已经生效。
 
-```bash
-sudo ./quota-setup.sh project-a 20     # 给 project-a 的 workspace 封顶 20GiB
-sudo ./quota-setup.sh project-b 20
-```
+要让它生效必须改卷布局（compose 用 `external: true` 对齐脚本），用户 2026-07-26 已决定不改。脚本保留在仓库里，供将来重开该方向时使用，文件头已标注同样的警告。
 
-脚本幂等：建 `/srv/ccw/quota/<slug>.img` → `mkfs.ext4` → 挂到 `/srv/ccw/workspaces/<slug>` → 写 `/etc/fstab` 保证重启自动挂回 → 用 `--opt device=` 把该目录注册成 `<slug>-workspace` 命名卷。之后 compose 复用这个卷，容器内写满只会撑爆自己那个 loop 文件系统，不影响另一个项目与宿主机系统盘。
+**因此当前的实际状况：**`internal/storage` 的逻辑配额只统计走同步接口的文件。容器内 `npm install`、构建缓存、日志堆积或直接 `dd` 都可以突破配额并撑爆宿主机磁盘。**这不需要恶意即可触发。**
+
+**建议的替代防线**（尚未实施，见设计文档 §12.1 的 N4）：
+
+1. 把 Docker `data-root` 指向独立分区/盘——撑爆的是该盘，宿主机根分区与 SSH 救援能力不受影响
+2. 把 Postgres 数据移出 data-root（`ccw-pg` 现在是普通命名卷，落在 data-root 上，会跟着一起挂）
+3. 磁盘水位告警——在撑爆之前收到通知
+
+在这三项完成之前，请定期人工检查 `df -h` 与 `docker system df`。
 
 ## 12. 安全要点
 
