@@ -1,0 +1,331 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{block "title" .}}控制台 · ccw{{end}}</title>
+<style>
+/* ccw 控制台 —— 单管理员的运维操作台。
+   设计取向：这是仪表盘不是文档。机器值一律等宽字体，状态用形状+颜色双编码，
+   信息密度优先于留白。零外部资源（CSP 禁止外链）。 */
+:root{
+  --ground:#f3f5f8;   --panel:#ffffff;   --rail:#e9edf2;
+  --line:#dbe1e9;     --line-soft:#e7ecf2;
+  --ink:#111820;      --ink-2:#525d6b;   --ink-3:#7c8797;
+  --accent:#0d7d84;   --accent-ink:#ffffff; --accent-wash:#dcefef;
+  --ok:#2b7a54;       --ok-wash:#dff0e6;
+  --warn:#8f5d0c;     --warn-wash:#f7ecd7;
+  --bad:#a3352f;      --bad-wash:#f8e3e1;
+  --idle:#8b95a3;     --idle-wash:#e6e9ee;
+  --term-bg:#111820;  --term-ink:#d8dee7;
+  --shadow:0 1px 2px rgba(17,24,32,.06), 0 8px 24px -16px rgba(17,24,32,.28);
+  --sans:system-ui,-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,"Cascadia Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --ground:#0d1117; --panel:#151b23; --rail:#10161d;
+    --line:#232c37;   --line-soft:#1b232c;
+    --ink:#e8edf3;    --ink-2:#98a4b4;  --ink-3:#6d7887;
+    --accent:#3cbcc4; --accent-ink:#06181a; --accent-wash:#0e2f33;
+    --ok:#4fb287;     --ok-wash:#122c21;
+    --warn:#d9a441;   --warn-wash:#302512;
+    --bad:#e2726b;    --bad-wash:#331c1a;
+    --idle:#5d6874;   --idle-wash:#1c232c;
+    --term-bg:#080c11; --term-ink:#c8d2de;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0d1117; --panel:#151b23; --rail:#10161d;
+  --line:#232c37;   --line-soft:#1b232c;
+  --ink:#e8edf3;    --ink-2:#98a4b4;  --ink-3:#6d7887;
+  --accent:#3cbcc4; --accent-ink:#06181a; --accent-wash:#0e2f33;
+  --ok:#4fb287;     --ok-wash:#122c21;
+  --warn:#d9a441;   --warn-wash:#302512;
+  --bad:#e2726b;    --bad-wash:#331c1a;
+  --idle:#5d6874;   --idle-wash:#1c232c;
+  --term-bg:#080c11; --term-ink:#c8d2de;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.6);
+}
+:root[data-theme="light"]{
+  --ground:#f3f5f8; --panel:#ffffff; --rail:#e9edf2;
+  --line:#dbe1e9;   --line-soft:#e7ecf2;
+  --ink:#111820;    --ink-2:#525d6b;  --ink-3:#7c8797;
+  --accent:#0d7d84; --accent-ink:#ffffff; --accent-wash:#dcefef;
+  --ok:#2b7a54;     --ok-wash:#dff0e6;
+  --warn:#8f5d0c;   --warn-wash:#f7ecd7;
+  --bad:#a3352f;    --bad-wash:#f8e3e1;
+  --idle:#8b95a3;   --idle-wash:#e6e9ee;
+  --term-bg:#111820; --term-ink:#d8dee7;
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--ground);color:var(--ink);
+  font-family:var(--sans);font-size:14.5px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ── 骨架：左轨 + 内容 ───────────────────────────── */
+.shell{display:grid;grid-template-columns:236px 1fr;min-height:100%}
+.rail{
+  background:var(--rail);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh;
+}
+.rail-brand{
+  display:flex;align-items:baseline;gap:8px;
+  padding:20px 20px 18px;border-bottom:1px solid var(--line-soft);
+}
+.rail-brand b{font-size:17px;letter-spacing:-.02em}
+.rail-brand span{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-3);
+}
+.rail-nav{padding:14px 12px;display:flex;flex-direction:column;gap:2px;flex:1;overflow-y:auto}
+.nav-label{
+  font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-3);padding:14px 8px 6px;
+}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:5px;
+  color:var(--ink-2);font-size:14px;text-decoration:none;
+}
+.nav-item:hover{background:var(--panel);color:var(--ink);text-decoration:none}
+.nav-item[aria-current="page"]{background:var(--accent-wash);color:var(--accent);font-weight:600}
+.nav-item .dot{width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.55;flex:none}
+.nav-item .tally{
+  margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--ink-3);
+  font-variant-numeric:tabular-nums;
+}
+.nav-item.muted{color:var(--ink-3);cursor:default}
+.nav-item.muted:hover{background:none;color:var(--ink-3)}
+.rail-foot{border-top:1px solid var(--line-soft);padding:14px}
+.who{display:flex;align-items:center;gap:9px;margin-bottom:10px}
+.who .av{
+  width:26px;height:26px;border-radius:5px;background:var(--accent);color:var(--accent-ink);
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:12px;font-weight:700;flex:none;
+}
+.who .nm{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis}
+.signout{
+  width:100%;padding:6px;border:1px solid var(--line);background:transparent;border-radius:5px;
+  color:var(--ink-2);font-family:var(--sans);font-size:12.5px;cursor:pointer;
+}
+.signout:hover{border-color:var(--bad);color:var(--bad)}
+
+.main{min-width:0;display:flex;flex-direction:column}
+.topbar{
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  padding:20px 30px;border-bottom:1px solid var(--line);background:var(--ground);
+  position:sticky;top:0;z-index:5;
+}
+.topbar h1{font-size:20px;margin:0;letter-spacing:-.015em;font-weight:650}
+.topbar .sub{font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.topbar .spacer{margin-left:auto}
+.content{padding:26px 30px 64px;max-width:1180px}
+
+/* ── 通用件 ─────────────────────────────────────── */
+.btn{
+  display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:5px;
+  background:var(--accent);color:var(--accent-ink);border:1px solid transparent;
+  font-family:var(--sans);font-size:13.5px;font-weight:600;cursor:pointer;text-decoration:none;
+}
+.btn:hover{filter:brightness(1.07);text-decoration:none}
+.btn.ghost{background:transparent;color:var(--accent);border-color:var(--line)}
+.btn.ghost:hover{border-color:var(--accent);filter:none}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
+.card-hd{
+  display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid var(--line-soft);
+}
+.card-hd h2{font-size:14px;margin:0;font-weight:650;letter-spacing:-.005em}
+.card-hd .spacer{margin-left:auto}
+.card-bd{padding:18px}
+.grid{display:grid;gap:16px}
+.g3{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+
+.eyebrow{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.15em;text-transform:uppercase;
+  color:var(--ink-3);margin:0 0 10px;
+}
+.mono{font-family:var(--mono);font-size:12.5px}
+.muted{color:var(--ink-3)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* 状态徽标：颜色 + 形状双编码，不只靠颜色区分 */
+.st{
+  display:inline-flex;align-items:center;gap:6px;padding:2px 9px 2px 7px;border-radius:20px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.02em;white-space:nowrap;font-weight:500;
+}
+.st::before{content:"";width:6px;height:6px;flex:none;background:currentColor}
+.st-ok{color:var(--ok);background:var(--ok-wash)}
+.st-ok::before{border-radius:50%}
+.st-run{color:var(--accent);background:var(--accent-wash)}
+.st-run::before{border-radius:50%;animation:pulse 1.4s ease-in-out infinite}
+.st-warn{color:var(--warn);background:var(--warn-wash)}
+.st-warn::before{clip-path:polygon(50% 0,100% 100%,0 100%)}
+.st-bad{color:var(--bad);background:var(--bad-wash)}
+.st-bad::before{clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
+.st-idle{color:var(--idle);background:var(--idle-wash)}
+.st-idle::before{border-radius:1px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+.tablewrap{overflow-x:auto}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+th{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:500;white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--ground)}
+td.nowrap{white-space:nowrap}
+
+.note{
+  border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--accent-wash);
+  border-radius:0 6px 6px 0;padding:12px 16px;font-size:13.5px;
+}
+.note.warn{border-left-color:var(--warn);background:var(--warn-wash)}
+.note.bad{border-left-color:var(--bad);background:var(--bad-wash)}
+.note b{font-weight:650}
+.note code,code{
+  font-family:var(--mono);font-size:.88em;background:var(--idle-wash);
+  padding:1.5px 5px;border-radius:3px;
+}
+
+.empty{text-align:center;padding:44px 20px;color:var(--ink-3)}
+.empty h3{color:var(--ink);font-size:15px;margin:0 0 6px;font-weight:600}
+.empty p{margin:0 0 18px;font-size:13.5px}
+
+label.fld{display:block;margin-bottom:14px}
+label.fld .lb{
+  display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:5px;
+}
+label.fld .hint{display:block;font-size:12.5px;color:var(--ink-3);margin-top:5px;line-height:1.5}
+input[type=text],input[type=password],select{
+  width:100%;padding:8px 11px;border:1px solid var(--line);border-radius:5px;
+  background:var(--panel);color:var(--ink);font-family:var(--mono);font-size:13px;
+}
+input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--accent-wash)}
+.row2{display:grid;grid-template-columns:1fr 120px;gap:12px}
+
+/* ── 签名件：bootstrap 步骤轨 ──────────────────────
+   12 步是真实的顺序，所以用序列化的形状表达它是恰当的。
+   一眼看出「跑到哪一步、卡在哪一步」，比任何计数卡片都有用。 */
+.rail-steps{display:flex;gap:3px;align-items:stretch}
+.rail-steps .seg{
+  flex:1;height:6px;border-radius:2px;background:var(--idle-wash);
+  border:1px solid transparent;min-width:6px;
+}
+.rail-steps .seg.done{background:var(--ok)}
+.rail-steps .seg.skip{background:transparent;border-color:var(--ok)}
+.rail-steps .seg.run{background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
+.rail-steps .seg.fail{background:var(--bad)}
+.rail-cap{
+  display:flex;justify-content:space-between;gap:10px;margin-top:7px;
+  font-family:var(--mono);font-size:11px;color:var(--ink-3);
+}
+
+.steplist{display:flex;flex-direction:column}
+.steplist .s{
+  display:grid;grid-template-columns:26px 1fr auto;gap:12px;align-items:center;
+  padding:9px 0;border-bottom:1px solid var(--line-soft);
+}
+.steplist .s:last-child{border-bottom:none}
+.steplist .s .idx{
+  font-family:var(--mono);font-size:11px;color:var(--ink-3);text-align:right;
+  font-variant-numeric:tabular-nums;
+}
+.steplist .s .nm{font-family:var(--mono);font-size:13px}
+.steplist .s.pending .nm{color:var(--ink-3)}
+.steplist .s.failed .nm{color:var(--bad);font-weight:600}
+.steplist .s.running .nm{color:var(--accent);font-weight:600}
+
+/* ── 终端窗格 ───────────────────────────────────── */
+.term{background:var(--term-bg);border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+.term-hd{
+  display:flex;align-items:center;gap:10px;padding:9px 14px;
+  border-bottom:1px solid rgba(255,255,255,.08);
+  font-family:var(--mono);font-size:11px;color:#8b96a5;letter-spacing:.04em;
+}
+.term-hd .lamp{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.term-hd .lamp.live{background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
+.term-hd .spacer{margin-left:auto}
+.term-bd{
+  margin:0;padding:14px 16px;max-height:560px;overflow:auto;
+  font-family:var(--mono);font-size:12.5px;line-height:1.65;
+  color:var(--term-ink);white-space:pre-wrap;word-break:break-word;
+}
+.term-bd:empty{padding:0}
+.term-empty{
+  padding:34px 20px 40px;text-align:center;
+  font-family:var(--mono);font-size:12.5px;line-height:1.9;color:#7b8697;
+}
+.term-empty code{background:rgba(255,255,255,.07);color:#9fb0c2;padding:2px 6px}
+.term-bd::selection{background:var(--accent);color:var(--accent-ink)}
+
+@media (max-width:860px){
+  .shell{grid-template-columns:1fr}
+  .rail{position:static;height:auto;flex-direction:column;border-right:none;border-bottom:1px solid var(--line)}
+  .rail-nav{flex-direction:row;flex-wrap:wrap;gap:6px;padding:10px 12px}
+  .nav-label{display:none}
+  .rail-foot{display:flex;align-items:center;gap:12px}
+  .who{margin-bottom:0}
+  .signout{width:auto;padding:6px 12px}
+  .topbar,.content{padding-left:18px;padding-right:18px}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="rail-brand"><b>ccw</b><span>控制台</span></div>
+    <nav class="rail-nav">
+      <div class="nav-label">运维</div>
+      <a class="nav-item" href="/admin" {{if eq .Nav "dashboard"}}aria-current="page"{{end}}>
+        <span class="dot"></span>总览
+      </a>
+      <a class="nav-item" href="/admin/nodes" {{if eq .Nav "nodes"}}aria-current="page"{{end}}>
+        <span class="dot"></span>机队
+        {{if .NodeCount}}<span class="tally">{{.NodeCount}}</span>{{end}}
+      </a>
+      <div class="nav-label">待实施</div>
+      <span class="nav-item muted"><span class="dot"></span>CDK 管理</span>
+      <span class="nav-item muted"><span class="dot"></span>域名与证书</span>
+      <span class="nav-item muted"><span class="dot"></span>审计日志</span>
+    </nav>
+    <div class="rail-foot">
+      <div class="who">
+        <span class="av">{{.Initial}}</span>
+        <span class="nm">{{.Username}}</span>
+      </div>
+      <form method="POST" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <button class="signout" type="submit">退出登录</button>
+      </form>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>{{block "pagetitle" .}}控制台{{end}}</h1>
+      {{block "pagesub" .}}{{end}}
+      <span class="spacer"></span>
+      {{block "pageactions" .}}{{end}}
+    </header>
+    <div class="content">
+      {{block "content" .}}{{end}}
+    </div>
+  </div>
+</div>
+</body>
+</html>{{end}}

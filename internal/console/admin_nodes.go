@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	stdsync "sync"
@@ -53,42 +54,20 @@ func (s *Server) registerFleet(mux *http.ServeMux) {
 }
 
 type nodeRow struct {
-	Node        consolestore.Node
-	FQDN        string
-	StatusText  string
-	StatusClass string
-	LastSeen    string
-}
-
-// statusText把内部状态翻成中文并给出配色类。
-func statusText(s string) (string, string) {
-	switch s {
-	case "new":
-		return "待部署", "muted"
-	case "provisioning":
-		return "部署中", ""
-	case "ready":
-		return "就绪", "ok"
-	case "degraded":
-		return "异常", "warn"
-	case "unreachable":
-		return "失联", "warn"
-	case "host_key_changed":
-		return "host key已变更（需确认）", "warn"
-	}
-	return s, "muted"
-}
-
-func humanTime(t *time.Time) string {
-	if t == nil {
-		return "—"
-	}
-	return t.Local().Format("2006-01-02 15:04")
+	Node       consolestore.Node
+	FQDN       string
+	StatusText string
+	Tone       string
+	LastSeen   string
+	OSRelease  string
 }
 
 func (s *Server) nodeRow(ctx context.Context, n consolestore.Node) nodeRow {
-	text, class := statusText(n.Status)
-	r := nodeRow{Node: n, StatusText: text, StatusClass: class, LastSeen: humanTime(n.LastSeenAt)}
+	text, tone := nodeTone(n.Status)
+	r := nodeRow{Node: n, StatusText: text, Tone: tone, LastSeen: humanWhen(n.LastSeenAt)}
+	if n.OSRelease != nil {
+		r.OSRelease = *n.OSRelease
+	}
 	if d, err := s.Fleet.Store.DomainByNode(ctx, n.ID); err == nil {
 		r.FQDN = d.FQDN
 	}
@@ -107,24 +86,26 @@ func (s *Server) adminNodes(w http.ResponseWriter, r *http.Request, sess console
 	for _, n := range nodes {
 		rows = append(rows, s.nodeRow(r.Context(), n))
 	}
-	s.render(w, "admin_nodes.html", map[string]any{
-		"Nodes": rows, "Zones": zones, "CSRF": s.Auth.issueCSRF(w, r),
-	})
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Node.Name < rows[j].Node.Name })
+	s.renderAdmin(w, "admin_nodes.html", "nodes", sess, s.Auth.issueCSRF(w, r), len(rows),
+		map[string]any{"Nodes": rows, "Zones": zones})
 }
 
 func (s *Server) adminNodeNew(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
 	zones, _ := s.Fleet.Store.ListZones(r.Context())
-	s.render(w, "admin_node_new.html", map[string]any{"Zones": zones, "CSRF": s.Auth.issueCSRF(w, r)})
+	nodes, _ := s.Fleet.Store.ListNodes(r.Context())
+	s.renderAdmin(w, "admin_node_new.html", "nodes", sess, s.Auth.issueCSRF(w, r), len(nodes),
+		map[string]any{"Zones": zones, "Steps": plannedSteps()})
 }
 
 func (s *Server) adminNodeCreate(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
 	ctx := r.Context()
 	renderErr := func(msg string) {
 		zones, _ := s.Fleet.Store.ListZones(ctx)
+		nodes, _ := s.Fleet.Store.ListNodes(ctx)
 		w.WriteHeader(http.StatusBadRequest)
-		s.render(w, "admin_node_new.html", map[string]any{
-			"Zones": zones, "CSRF": s.Auth.issueCSRF(w, r), "Error": msg,
-		})
+		s.renderAdmin(w, "admin_node_new.html", "nodes", sess, s.Auth.issueCSRF(w, r), len(nodes),
+			map[string]any{"Zones": zones, "Steps": plannedSteps(), "Error": msg})
 	}
 
 	name := strings.TrimSpace(r.PostFormValue("name"))
@@ -232,26 +213,29 @@ func (s *Server) adminNodeDetail(w http.ResponseWriter, r *http.Request, sess co
 	}
 	row := s.nodeRow(ctx, node)
 	runs, _ := s.Fleet.Store.ListRuns(ctx, node.ID, 20)
-	type runRow struct{ ID, Kind, Status, Started string }
-	var rrs []runRow
+	var rvs []runView
 	for _, run := range runs {
-		rrs = append(rrs, runRow{run.ID, run.Kind, run.Status, run.StartedAt.Local().Format("2006-01-02 15:04")})
+		full, err := s.Fleet.Store.GetRun(ctx, run.ID)
+		if err != nil {
+			continue
+		}
+		rvs = append(rvs, makeRunView(full, node.Name))
 	}
 	_, _, _, cerr := s.Fleet.Store.NodeCredential(ctx, node.ID)
 	d, derr := s.Fleet.Store.DomainByNode(ctx, node.ID)
+	nodes, _ := s.Fleet.Store.ListNodes(ctx)
 
 	data := map[string]any{
-		"Node": node, "StatusText": row.StatusText, "StatusClass": row.StatusClass,
-		"FQDN": row.FQDN, "LastSeen": row.LastSeen, "Runs": rrs,
+		"Node": node, "StatusText": row.StatusText, "Tone": row.Tone,
+		"FQDN": row.FQDN, "LastSeen": row.LastSeen, "Runs": rvs,
 		"HasCredential": cerr == nil,
 		"CanResume":     node.Status != "provisioning",
-		"CSRF":          s.Auth.issueCSRF(w, r),
 	}
 	if derr == nil && d.RecordState == "pending" {
 		data["DomainPending"] = true
 		data["DNSInstruction"] = dns.Instructions(d.FQDN, d.TargetIP)
 	}
-	s.render(w, "admin_node.html", data)
+	s.renderAdmin(w, "admin_node.html", "nodes", sess, s.Auth.issueCSRF(w, r), len(nodes), data)
 }
 
 // adminNodeResume从上次失败处继续部署（A9）。
@@ -297,10 +281,20 @@ func (s *Server) adminRunDetail(w http.ResponseWriter, r *http.Request, sess con
 		http.NotFound(w, r) // 防止用别的节点ID拼URL看到不属于它的运行
 		return
 	}
-	s.render(w, "admin_run.html", map[string]any{
-		"Run": run, "NodeID": node.ID, "NodeName": node.Name,
-		"History": s.Fleet.Logs.History(run.ID),
-	})
+	steps, progress := makeStepViews(run)
+	statusText, tone := runTone(run.Status)
+	nodes, _ := s.Fleet.Store.ListNodes(r.Context())
+	s.renderAdmin(w, "admin_run.html", "nodes", sess, s.Auth.issueCSRF(w, r), len(nodes),
+		map[string]any{
+			"Run": run, "NodeID": node.ID, "NodeName": node.Name,
+			"History": s.Fleet.Logs.History(run.ID),
+			"Steps":   steps, "Progress": progress,
+			"StatusText": statusText, "Tone": tone,
+			// 「实时」以数据库里的运行状态为准，内存里的 done 标记只是补充：
+			// Console 重启后 LogHub 里没有这次运行的任何记录，
+			// 只看 IsDone 会把一次早已结束的运行显示成还在跑。
+			"Live": run.Status == "running" && !s.Fleet.Logs.IsDone(run.ID),
+		})
 }
 
 // adminRunStream是SSE端点（§5.4）：把流水线日志实时推给浏览器。

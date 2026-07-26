@@ -1,26 +1,76 @@
-{{define "title"}}管理登录 · ccw{{end}}
-{{define "content"}}
-<div style="max-width:420px;margin:40px auto">
-  <h1 style="font-size:24px">管理后台</h1>
-  {{if .Error}}<div class="notice warn">{{.Error}}</div>{{end}}
-  <form method="POST" action="/admin/login" autocomplete="off">
-    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-    <p>
-      <label class="muted" for="u">用户名</label><br>
-      <input type="text" id="u" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required>
-    </p>
-    <p>
-      <label class="muted" for="p">密码</label><br>
-      <input type="password" id="p" name="password" autocomplete="current-password" required
-             style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font-size:14px">
-    </p>
-    <p>
-      <label class="muted" for="c">两步验证码</label><br>
-      <input type="text" id="c" name="code" inputmode="numeric" pattern="[0-9 ]*" maxlength="9"
-             autocomplete="one-time-code" placeholder="6位数字" required>
-    </p>
-    <p><button class="btn" type="submit">登录</button></p>
-  </form>
-  <p class="muted" style="font-size:13px">密码与两步验证码缺一不可。多次失败会被临时限速。</p>
+{{define "login"}}<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · ccw 控制台</title>
+<style>
+:root{
+  --ground:#f3f5f8;--panel:#fff;--line:#dbe1e9;--ink:#111820;--ink-2:#525d6b;--ink-3:#7c8797;
+  --accent:#0d7d84;--accent-ink:#fff;--accent-wash:#dcefef;--bad:#a3352f;--bad-wash:#f8e3e1;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --ground:#0d1117;--panel:#151b23;--line:#232c37;--ink:#e8edf3;--ink-2:#98a4b4;--ink-3:#6d7887;
+  --accent:#3cbcc4;--accent-ink:#06181a;--accent-wash:#0e2f33;--bad:#e2726b;--bad-wash:#331c1a;}}
+:root[data-theme="dark"]{
+  --ground:#0d1117;--panel:#151b23;--line:#232c37;--ink:#e8edf3;--ink-2:#98a4b4;--ink-3:#6d7887;
+  --accent:#3cbcc4;--accent-ink:#06181a;--accent-wash:#0e2f33;--bad:#e2726b;--bad-wash:#331c1a;}
+:root[data-theme="light"]{
+  --ground:#f3f5f8;--panel:#fff;--line:#dbe1e9;--ink:#111820;--ink-2:#525d6b;--ink-3:#7c8797;
+  --accent:#0d7d84;--accent-ink:#fff;--accent-wash:#dcefef;--bad:#a3352f;--bad-wash:#f8e3e1;}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+  background:var(--ground);color:var(--ink);
+  font-family:system-ui,-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:14.5px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.box{width:100%;max-width:380px}
+.brand{display:flex;align-items:baseline;gap:9px;margin-bottom:22px}
+.brand b{font-size:20px;letter-spacing:-.02em}
+.brand span{font-family:var(--mono);font-size:10.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-3)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:26px 24px;
+  box-shadow:0 1px 2px rgba(17,24,32,.06),0 16px 40px -28px rgba(17,24,32,.5)}
+h1{font-size:17px;margin:0 0 20px;font-weight:650}
+label{display:block;margin-bottom:15px}
+.lb{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:5px}
+input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:5px;
+  background:var(--ground);color:var(--ink);font-family:var(--mono);font-size:13.5px}
+input:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--accent-wash)}
+button{width:100%;padding:9px;border:none;border-radius:5px;background:var(--accent);
+  color:var(--accent-ink);font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;margin-top:4px}
+button:hover{filter:brightness(1.07)}
+.err{background:var(--bad-wash);color:var(--bad);border-radius:5px;padding:9px 12px;
+  font-size:13px;margin-bottom:18px}
+.foot{margin-top:16px;font-size:12.5px;color:var(--ink-3);line-height:1.55}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="brand"><b>ccw</b><span>控制台</span></div>
+  <div class="card">
+    <h1>登录</h1>
+    {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+    <form method="POST" action="/admin/login" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <label>
+        <span class="lb">用户名</span>
+        <input type="text" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required autofocus>
+      </label>
+      <label>
+        <span class="lb">密码</span>
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <label>
+        <span class="lb">两步验证码</span>
+        <input type="text" name="code" inputmode="numeric" pattern="[0-9 ]*" maxlength="9"
+               autocomplete="one-time-code" placeholder="6 位数字" required>
+      </label>
+      <button type="submit">登录</button>
+    </form>
+    <p class="foot">密码与两步验证码缺一不可。连续失败会按 IP 与用户名两个维度限速。</p>
+  </div>
 </div>
-{{end}}
+</body>
+</html>{{end}}

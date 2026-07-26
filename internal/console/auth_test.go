@@ -168,8 +168,18 @@ func TestLoginSuccessAndSession(t *testing.T) {
 	req.AddCookie(sess)
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "机队总览") {
-		t.Errorf("带会话应能访问总览，got %d", rec.Code)
+	body := rec.Body.String()
+	if rec.Code != 200 {
+		t.Fatalf("带会话应能访问总览，got %d", rec.Code)
+	}
+	// 后台是操作台外壳：侧边栏 + 当前用户 + 退出，而不是官网那套导航
+	for _, want := range []string{"总览", "机队", "退出登录", `class="rail"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("总览页缺少%q", want)
+		}
+	}
+	if strings.Contains(body, "云端 Claude Code 工作空间") {
+		t.Error("后台不应渲染官网落地页内容")
 	}
 }
 

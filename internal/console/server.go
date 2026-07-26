@@ -61,11 +61,17 @@ func New(store SiteStore, distDir string, logf func(string, ...any)) *Server {
 	}
 	s := &Server{Store: store, DistDir: distDir, Logf: logf,
 		attempts: map[string][]time.Time{}, tmpl: map[string]*template.Template{}}
-	for _, page := range []string{"home.html", "download.html", "quickstart.html", "connect.html",
-		"admin_login.html", "admin_home.html", "admin_nodes.html", "admin_node_new.html",
-		"admin_node.html", "admin_run.html"} {
+	// 公开站点与管理后台是两套外壳：站点是可读的文档页，后台是操作台。
+	// 用不同的 layout 而不是同一个套两种样式——它们的信息密度与导航模型不同。
+	for _, page := range []string{"home.html", "download.html", "quickstart.html", "connect.html"} {
 		s.tmpl[page] = template.Must(template.ParseFS(tmplFS, "templates/layout.html", "templates/"+page))
 	}
+	for _, page := range []string{"admin_dashboard.html", "admin_nodes.html",
+		"admin_node_new.html", "admin_node.html", "admin_run.html"} {
+		s.tmpl[page] = template.Must(template.ParseFS(tmplFS, "templates/admin_layout.html", "templates/"+page))
+	}
+	// 登录页没有侧边栏（此时还没登录），自带完整文档结构。
+	s.tmpl["admin_login.html"] = template.Must(template.ParseFS(tmplFS, "templates/admin_login.html"))
 	return s
 }
 
@@ -132,8 +138,12 @@ func (s *Server) hostRouter(next http.Handler) http.Handler {
 }
 
 func (s *Server) render(w http.ResponseWriter, page string, data any) {
+	root := "layout"
+	if page == "admin_login.html" {
+		root = "login"
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmpl[page].ExecuteTemplate(w, "layout", data); err != nil {
+	if err := s.tmpl[page].ExecuteTemplate(w, root, data); err != nil {
 		s.Logf("console: render %s: %v", page, err)
 	}
 }

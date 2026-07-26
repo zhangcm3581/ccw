@@ -1,40 +1,57 @@
-{{define "title"}}部署日志 · ccw{{end}}
+{{define "title"}}部署日志 · ccw 控制台{{end}}
+{{define "pagetitle"}}部署日志{{end}}
+{{define "pagesub"}}<span class="st st-{{.Tone}}">{{.StatusText}}</span>
+  <span class="sub"><a href="/admin/nodes/{{.NodeID}}">{{.NodeName}}</a> · {{.Run.Kind}}</span>{{end}}
+{{define "pageactions"}}<a class="btn ghost" href="/admin/nodes/{{.NodeID}}">返回节点</a>{{end}}
 {{define "content"}}
-<h1 style="font-size:24px">部署日志</h1>
-<p class="lead">
-  节点 <a href="/admin/nodes/{{.NodeID}}">{{.NodeName}}</a> ·
-  {{.Run.Kind}} · <span id="runstatus">{{.Run.Status}}</span>
-</p>
 
-<h2>步骤</h2>
-<div class="scroll">
-<table>
-  <tr><th>#</th><th>步骤</th><th>状态</th><th>退出码</th></tr>
-  {{range .Run.Steps}}
-  <tr><td>{{.Seq}}</td><td>{{.Name}}</td><td>{{.Status}}</td><td>{{if .ExitCode}}{{.ExitCode}}{{else}}—{{end}}</td></tr>
-  {{end}}
-</table>
-</div>
+<div class="grid" style="grid-template-columns:260px 1fr;gap:22px;align-items:start">
+  <div class="card">
+    <div class="card-hd"><h2>步骤</h2><span class="spacer"></span>
+      <span class="mono muted" style="font-size:11px">{{.Progress}}</span></div>
+    <div class="card-bd" style="padding:8px 18px">
+      <div class="steplist">
+        {{range .Steps}}
+        <div class="s {{.Class}}">
+          <span class="idx">{{.Seq}}</span>
+          <span class="nm">{{.Name}}</span>
+          <span class="st st-{{.Tone}}">{{.Label}}</span>
+        </div>
+        {{end}}
+      </div>
+    </div>
+  </div>
 
-<h2>实时输出</h2>
-<pre id="log" style="max-height:460px;overflow:auto;white-space:pre-wrap">{{range .History}}{{.}}
+  <div class="term">
+    <div class="term-hd">
+      <span class="lamp {{if .Live}}live{{end}}"></span>
+      <span>{{if .Live}}实时输出{{else}}运行已结束{{end}}</span>
+      <span class="spacer"></span>
+      <span>密码 · 私钥 · CDK 明文 · 令牌已脱敏</span>
+    </div>
+    <pre class="term-bd" id="log">{{range .History}}{{.}}
 {{end}}</pre>
-<p class="muted" style="font-size:13px">日志已脱敏：密码、私钥、CDK 明文、令牌一律显示为 [REDACTED]。</p>
-
-<p style="margin-top:20px">
-  <a href="/admin/nodes/{{.NodeID}}">返回节点详情</a>
-</p>
+    {{if not .History}}
+    <div class="term-empty">
+      {{if .Live}}等待输出…{{else}}
+      本进程内存里没有这次运行的日志——Console 重启过。<br>
+      完整日志仍在磁盘上：<code>/var/lib/ccw-console/logs/{{.Run.ID}}.log</code>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+</div>
 
 <script>
 (function () {
   var log = document.getElementById('log');
-  var status = document.getElementById('runstatus');
   var atBottom = true;
   log.addEventListener('scroll', function () {
     atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
   });
   log.scrollTop = log.scrollHeight;
 
+  if (!{{.Live}}) return;    // 运行已结束，不必建立 SSE 连接
   var es = new EventSource('/admin/nodes/{{.NodeID}}/runs/{{.Run.ID}}/stream');
   es.onmessage = function (e) {
     log.textContent += e.data + '\n';
@@ -42,9 +59,9 @@
   };
   es.addEventListener('done', function () {
     es.close();
-    status.textContent = '已结束（刷新查看最终状态）';
+    location.reload();   // 步骤表与状态由服务端渲染，结束后刷新一次即为最终态
   });
-  es.onerror = function () { /* 浏览器会自动重连；结束时服务端发done后我们主动close */ };
 })();
 </script>
+
 {{end}}

@@ -1,74 +1,94 @@
-{{define "title"}}新增节点 · ccw{{end}}
+{{define "title"}}新增节点 · ccw 控制台{{end}}
+{{define "pagetitle"}}新增节点{{end}}
+{{define "pageactions"}}<a class="btn ghost" href="/admin/nodes">取消</a>{{end}}
 {{define "content"}}
-<h1 style="font-size:24px">新增节点</h1>
-{{if .Error}}<div class="notice warn">{{.Error}}</div>{{end}}
 
-<div class="notice">
-  开始前请确认：目标机器是 <strong>Ubuntu 22.04/24.04 或 Debian 12</strong>、有公网IP、
-  已放行 22/80/443、磁盘 ≥80 GB。填写的密码<strong>只用于首次连接</strong>，
-  换成托管密钥后即被丢弃，不会保存到任何地方。
+{{if .Error}}<div class="note bad" style="margin-bottom:20px">{{.Error}}</div>{{end}}
+
+<div class="note" style="margin-bottom:22px">
+  <b>开始前确认：</b>目标机器是 Ubuntu 22.04/24.04 或 Debian 12、有公网 IP、已放行 22/80/443、磁盘 ≥80 GB。
+  填写的密码<b>只用于首次连接</b>——注入托管密钥并验证成功后立即丢弃，不落库、不进日志。
 </div>
 
 <form method="POST" action="/admin/nodes/new" autocomplete="off">
   <input type="hidden" name="csrf_token" value="{{.CSRF}}">
 
-  <h2>1. 连接信息</h2>
-  <p>
-    <label class="muted" for="name">节点名称</label><br>
-    <input type="text" id="name" name="name" placeholder="node-hk-1" required>
-  </p>
-  <p>
-    <label class="muted" for="host">公网IP</label><br>
-    <input type="text" id="host" name="host" placeholder="203.0.113.7" required>
-  </p>
-  <p style="display:flex;gap:12px">
-    <span style="flex:1">
-      <label class="muted" for="user">SSH用户名</label><br>
-      <input type="text" id="user" name="ssh_user" value="root" required>
-    </span>
-    <span style="width:120px">
-      <label class="muted" for="port">端口</label><br>
-      <input type="text" id="port" name="ssh_port" value="22">
-    </span>
-  </p>
-  <p>
-    <label class="muted" for="pw">SSH密码</label><br>
-    <input type="password" id="pw" name="password" required
-           style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font-size:14px">
-    <span class="muted" style="font-size:13px">用完即弃：注入托管密钥并验证成功后立即丢弃，不落库、不进日志。</span>
-  </p>
+  <div class="grid g2" style="margin-bottom:22px">
+    <div class="card">
+      <div class="card-hd"><h2>连接</h2></div>
+      <div class="card-bd">
+        <label class="fld">
+          <span class="lb">节点名称</span>
+          <input type="text" name="name" placeholder="node-hk-1" required>
+        </label>
+        <label class="fld">
+          <span class="lb">公网 IP</span>
+          <input type="text" name="host" placeholder="203.0.113.7" required>
+        </label>
+        <div class="row2">
+          <label class="fld">
+            <span class="lb">SSH 用户名</span>
+            <input type="text" name="ssh_user" value="root" required>
+          </label>
+          <label class="fld">
+            <span class="lb">端口</span>
+            <input type="text" name="ssh_port" value="22">
+          </label>
+        </div>
+        <label class="fld" style="margin-bottom:0">
+          <span class="lb">SSH 密码</span>
+          <input type="password" name="password" required>
+          <span class="hint">用完即弃。非 root 用户需要 sudo 权限；不在 sudoers 里会在 harden 步骤明确失败，不做猜测性修复。</span>
+        </label>
+      </div>
+    </div>
 
-  <h2>2. 域名</h2>
-  {{if .Zones}}
-  <p>
-    <label class="muted" for="zone">选择 zone（自动分配下一个子域名）</label><br>
-    <select id="zone" name="zone_id" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font-size:14px">
-      {{range .Zones}}<option value="{{.ID}}">{{.Domain}}（{{.Provider}}，{{.SubdomainPrefix}}-NN）</option>{{end}}
-    </select>
-  </p>
-  {{end}}
-  <p>
-    <label class="muted" for="newzone">{{if .Zones}}或新建 zone{{else}}创建第一个 zone{{end}}</label><br>
-    <input type="text" id="newzone" name="new_zone_domain" placeholder="example.com"{{if not .Zones}} required{{end}}>
-    <span class="muted" style="font-size:13px">DNS 记录当前为手动模式：部署过程会告诉你要添加哪条 A 记录。</span>
-  </p>
+    <div class="card">
+      <div class="card-hd"><h2>域名与项目</h2></div>
+      <div class="card-bd">
+        {{if .Zones}}
+        <label class="fld">
+          <span class="lb">选择 zone</span>
+          <select name="zone_id">
+            {{range .Zones}}<option value="{{.ID}}">{{.Domain}}（{{.Provider}}，{{.SubdomainPrefix}}-NN）</option>{{end}}
+          </select>
+          <span class="hint">Console 自动分配下一个序号，退役后不复用。</span>
+        </label>
+        {{end}}
+        <label class="fld">
+          <span class="lb">{{if .Zones}}或新建 zone{{else}}创建第一个 zone{{end}}</span>
+          <input type="text" name="new_zone_domain" placeholder="example.com"{{if not .Zones}} required{{end}}>
+          <span class="hint">DNS 当前是手动模式：部署过程会告诉你要添加哪条 A 记录。</span>
+        </label>
+        <label class="fld" style="margin-bottom:0">
+          <span class="lb">初始项目 slug</span>
+          <input type="text" name="slugs" placeholder="project-a,project-b" required>
+          <span class="hint">逗号分隔，最多 3 个。小写字母、数字、连字符，2–32 字符。每个项目一个容器，磁盘配额 15 GiB。</span>
+        </label>
+      </div>
+    </div>
+  </div>
 
-  <h2>3. 初始项目</h2>
-  <p>
-    <label class="muted" for="slugs">项目 slug（逗号分隔，最多3个）</label><br>
-    <input type="text" id="slugs" name="slugs" placeholder="project-a,project-b" required>
-    <span class="muted" style="font-size:13px">小写字母、数字、连字符；2–32字符。每个项目一个容器，磁盘配额 15 GiB。</span>
-  </p>
+  <div class="card">
+    <div class="card-hd"><h2>将要执行的步骤</h2><span class="spacer"></span>
+      <span class="mono muted" style="font-size:11.5px">全过程日志实时可见，失败可从断点续跑</span></div>
+    <div class="card-bd">
+      <div class="steplist">
+        {{range .Steps}}
+        <div class="s pending">
+          <span class="idx">{{.Seq}}</span>
+          <span class="nm">{{.Name}}</span>
+          <span class="muted" style="font-size:12.5px">{{.Note}}</span>
+        </div>
+        {{end}}
+      </div>
+    </div>
+  </div>
 
-  <p style="margin-top:24px">
+  <div style="margin-top:22px;display:flex;align-items:center;gap:14px">
     <button class="btn" type="submit">开始部署</button>
-    <a href="/admin/nodes" style="margin-left:12px">取消</a>
-  </p>
+    <span class="muted" style="font-size:13px">部署会停在 dns-allocate 等你添加 A 记录，加完回来点「继续」。</span>
+  </div>
 </form>
 
-<div class="notice" style="margin-top:24px">
-  <strong>会发生什么：</strong>探测系统 → 注入托管密钥 → 装 Docker → 分配域名并等你添加 A 记录 →
-  上传编排 → 在节点本地生成密钥 → 起栈 → 等证书 → 健康检查 → 建项目签发 CDK → 磁盘检查。
-  全过程日志实时可见，中途失败可以修好后从失败步重跑。
-</div>
 {{end}}

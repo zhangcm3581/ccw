@@ -1,0 +1,104 @@
+{{define "title"}}总览 · ccw 控制台{{end}}
+{{define "pagetitle"}}总览{{end}}
+{{define "pagesub"}}<span class="sub">{{.Now}}</span>{{end}}
+{{define "pageactions"}}<a class="btn" href="/admin/nodes/new">新增节点</a>{{end}}
+{{define "content"}}
+
+{{if .Attention}}
+<div class="grid" style="margin-bottom:22px">
+  {{range .Attention}}
+  <div class="note {{.Tone}}">
+    <b>{{.Title}}</b> — {{.Detail}}
+    {{if .Link}} <a href="{{.Link}}">{{.LinkText}}</a>{{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+<div class="grid g3" style="margin-bottom:22px">
+  <div class="card">
+    <div class="card-hd"><h2>机队</h2><span class="spacer"></span>
+      <a class="mono muted" href="/admin/nodes">查看</a></div>
+    <div class="card-bd">
+      {{if .Nodes}}
+        <div style="display:flex;flex-direction:column;gap:10px">
+          {{range .Nodes}}
+          <div style="display:flex;align-items:center;gap:10px">
+            <a class="mono" href="/admin/nodes/{{.Node.ID}}" style="flex:1;overflow:hidden;text-overflow:ellipsis">{{.Node.Name}}</a>
+            <span class="st st-{{.Tone}}">{{.StatusText}}</span>
+          </div>
+          {{end}}
+        </div>
+      {{else}}
+        <p class="muted" style="margin:0;font-size:13.5px">还没有纳管任何节点。</p>
+      {{end}}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-hd"><h2>客户端发布</h2></div>
+    <div class="card-bd">
+      {{if .Release}}
+        <p class="mono" style="margin:0 0 4px;font-size:15px">{{.Release.Version}}</p>
+        <p class="muted" style="margin:0;font-size:13px">{{.ArtifactCount}} 个平台已发布</p>
+      {{else}}
+        <p class="muted" style="margin:0 0 8px;font-size:13.5px">尚未发布任何版本。</p>
+        <p class="mono muted" style="margin:0;font-size:11.5px">在 Console 主机上构建后<br>register-release --publish</p>
+      {{end}}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-hd"><h2>域名</h2></div>
+    <div class="card-bd">
+      {{if .Zones}}
+        <div style="display:flex;flex-direction:column;gap:8px">
+          {{range .Zones}}
+          <div style="display:flex;align-items:baseline;gap:10px">
+            <span class="mono" style="flex:1">{{.Domain}}</span>
+            <span class="mono muted" style="font-size:11.5px">{{.Provider}}</span>
+          </div>
+          {{end}}
+        </div>
+      {{else}}
+        <p class="muted" style="margin:0;font-size:13.5px">新增节点时可以直接创建第一个 zone。</p>
+      {{end}}
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-hd"><h2>最近部署</h2></div>
+  {{if .Runs}}
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>节点</th><th>类型</th><th>进度</th><th>状态</th><th>开始</th><th></th></tr></thead>
+      <tbody>
+        {{range .Runs}}
+        <tr>
+          <td class="mono nowrap">{{.NodeName}}</td>
+          <td class="mono muted nowrap">{{.Kind}}</td>
+          <td style="min-width:180px">
+            <div class="rail-steps">
+              {{range .Segments}}<span class="seg {{.}}"></span>{{end}}
+            </div>
+            <div class="rail-cap"><span>{{.StepLabel}}</span><span>{{.Progress}}</span></div>
+          </td>
+          <td><span class="st st-{{.Tone}}">{{.StatusText}}</span></td>
+          <td class="mono muted nowrap">{{.Started}}</td>
+          <td class="nowrap"><a href="/admin/nodes/{{.NodeID}}/runs/{{.ID}}">日志</a></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="empty">
+    <h3>还没有部署记录</h3>
+    <p>纳管第一台节点后，这里会显示每次部署的步骤进度与日志。</p>
+    <a class="btn" href="/admin/nodes/new">新增节点</a>
+  </div>
+  {{end}}
+</div>
+
+{{end}}

@@ -544,3 +544,17 @@ func dirOf(p string) string {
 	}
 	return "."
 }
+
+// BootstrapStepNames返回 bootstrap 流水线的规范步骤名（按执行顺序）。
+//
+// 供 Console 的 UI 渲染步骤轨与步骤清单使用：UI 不再自己维护一份步骤列表，
+// 因此改流水线时 UI 自动跟上，不会出现「界面上还画着已经删掉的步骤」。
+// 用零值 Deps 构造是安全的——步骤构造函数只捕获 d，不解引用它。
+func BootstrapStepNames() []string {
+	steps := BootstrapSteps(Deps{})
+	out := make([]string, 0, len(steps))
+	for _, s := range steps {
+		out = append(out, s.Name)
+	}
+	return out
+}

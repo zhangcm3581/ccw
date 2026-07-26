@@ -493,3 +493,48 @@ func TestHostRoutingDisabledWhenUnset(t *testing.T) {
 		t.Errorf("未设置AdminHost时不应分流，got %d", w.Code)
 	}
 }
+
+// UI 的步骤轨与步骤清单直接取自流水线的规范顺序——
+// 改流水线时界面自动跟上，不会出现「界面上还画着已经删掉的步骤」。
+func TestStepNamesTrackPipeline(t *testing.T) {
+	want := provision.BootstrapStepNames()
+	if len(stepNames) != len(want) {
+		t.Fatalf("步骤数不一致：UI %d，流水线 %d", len(stepNames), len(want))
+	}
+	for i := range want {
+		if stepNames[i] != want[i] {
+			t.Errorf("第%d步不一致：UI %q，流水线 %q", i+1, stepNames[i], want[i])
+		}
+		if stepNotes[want[i]] == "" {
+			t.Errorf("步骤 %q 缺少给管理员看的说明（stepNotes）", want[i])
+		}
+	}
+}
+
+// 步骤轨要把「跑到哪、卡在哪」表达出来：失败步标红，其后的步骤保持未开始。
+func TestRunViewSegments(t *testing.T) {
+	run := consolestore.RunSummary{ID: "r1", NodeID: "n1", Kind: "bootstrap", Status: "failed",
+		StartedAt: time.Now(), Steps: []consolestore.StepSummary{
+			{Seq: 1, Name: "probe", Status: "succeeded"},
+			{Seq: 2, Name: "harden", Status: "skipped"},
+			{Seq: 3, Name: "install-docker", Status: "failed"},
+		}}
+	v := makeRunView(run, "node-1")
+	if v.Segments[0] != "done" || v.Segments[1] != "skip" || v.Segments[2] != "fail" {
+		t.Errorf("前三段应为 done/skip/fail，got %v", v.Segments[:3])
+	}
+	for i := 3; i < len(v.Segments); i++ {
+		if v.Segments[i] != "" {
+			t.Errorf("失败步之后应保持未开始，第%d段却是 %q", i+1, v.Segments[i])
+		}
+	}
+	if v.StepLabel != "install-docker" {
+		t.Errorf("应标出卡住的步骤，got %q", v.StepLabel)
+	}
+	if v.Progress != "2/12" {
+		t.Errorf("进度应只算成功与跳过，got %q", v.Progress)
+	}
+	if v.Tone != "bad" {
+		t.Errorf("失败的运行应为 bad，got %q", v.Tone)
+	}
+}

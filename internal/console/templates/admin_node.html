@@ -1,57 +1,89 @@
-{{define "title"}}{{.Node.Name}} · ccw{{end}}
+{{define "title"}}{{.Node.Name}} · ccw 控制台{{end}}
+{{define "pagetitle"}}{{.Node.Name}}{{end}}
+{{define "pagesub"}}<span class="st st-{{.Tone}}">{{.StatusText}}</span>
+  <span class="sub">{{.Node.SSHUser}}@{{.Node.Host}}:{{.Node.SSHPort}}</span>{{end}}
+{{define "pageactions"}}
+<form method="POST" action="/admin/nodes/{{.Node.ID}}/resume">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <button class="btn ghost" type="submit"{{if not .CanResume}} disabled{{end}}>继续 / 重新部署</button>
+</form>
+{{end}}
 {{define "content"}}
-<h1 style="font-size:24px">{{.Node.Name}}</h1>
-<p class="lead">
-  <span class="{{.StatusClass}}">{{.StatusText}}</span> ·
-  {{.Node.SSHUser}}@{{.Node.Host}}:{{.Node.SSHPort}}
-  {{if .FQDN}} · <code>{{.FQDN}}</code>{{end}}
-</p>
-
-<div class="grid">
-  <div class="card"><h3>系统</h3><p>{{if .Node.OSRelease}}{{.Node.OSRelease}}{{if .Node.Arch}} / {{.Node.Arch}}{{end}}{{else}}尚未探测{{end}}</p></div>
-  <div class="card"><h3>host key 指纹</h3><p style="word-break:break-all;font-size:12px">{{if .Node.HostKeyFP}}{{.Node.HostKeyFP}}{{else}}未记录{{end}}</p></div>
-  <div class="card"><h3>托管密钥</h3><p>{{if .HasCredential}}已保存（加密）{{else}}<span class="warn">未建立</span>{{end}}</p></div>
-  <div class="card"><h3>最近连通</h3><p>{{.LastSeen}}</p></div>
-</div>
 
 {{if .DomainPending}}
-<div class="notice warn">
-  <strong>等待 DNS 记录生效。</strong>请在你的 DNS 服务商处添加：<br>
-  <code>{{.DNSInstruction}}</code><br>
-  添加后回到最近一次运行页点「继续部署」。
+<div class="note warn" style="margin-bottom:22px">
+  <b>等待 DNS 记录生效。</b>到你的 DNS 服务商添加这条记录，然后点右上角「继续 / 重新部署」——
+  已完成的步骤会跳过，从 dns-allocate 继续。
+  <div class="mono" style="margin-top:9px;padding:9px 12px;background:var(--panel);border-radius:5px;border:1px solid var(--line)">{{.DNSInstruction}}</div>
+  <div class="mono muted" style="margin-top:7px;font-size:11.5px">校验会交叉查询 1.1.1.1 与 8.8.8.8，两个都指向本节点 IP 才算生效。</div>
 </div>
 {{end}}
 
-<h2>部署历史</h2>
-{{if not .Runs}}
-<p class="muted">还没有运行记录。</p>
-{{else}}
-<div class="scroll">
-<table>
-  <tr><th>类型</th><th>状态</th><th>开始</th><th></th></tr>
-  {{range .Runs}}
-  <tr>
-    <td>{{.Kind}}</td>
-    <td>{{.Status}}</td>
-    <td>{{.Started}}</td>
-    <td><a href="/admin/nodes/{{$.Node.ID}}/runs/{{.ID}}">查看日志</a></td>
-  </tr>
+<div class="grid g2" style="margin-bottom:22px">
+  <div class="card">
+    <div class="card-hd"><h2>接入</h2></div>
+    <div class="card-bd" style="display:flex;flex-direction:column;gap:12px">
+      <div>
+        <div class="eyebrow" style="margin-bottom:4px">客户端连接地址</div>
+        <div class="mono">{{if .FQDN}}https://{{.FQDN}}{{else}}<span class="muted">尚未分配</span>{{end}}</div>
+      </div>
+      <div>
+        <div class="eyebrow" style="margin-bottom:4px">系统</div>
+        <div class="mono">{{if .Node.OSRelease}}{{.Node.OSRelease}}{{if .Node.Arch}} · {{.Node.Arch}}{{end}}{{else}}<span class="muted">尚未探测</span>{{end}}</div>
+      </div>
+      <div>
+        <div class="eyebrow" style="margin-bottom:4px">最近连通</div>
+        <div class="mono">{{.LastSeen}}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-hd"><h2>凭据</h2></div>
+    <div class="card-bd" style="display:flex;flex-direction:column;gap:12px">
+      <div>
+        <div class="eyebrow" style="margin-bottom:4px">托管 SSH 密钥</div>
+        <div>{{if .HasCredential}}<span class="st st-ok">已保存（加密）</span>{{else}}<span class="st st-warn">未建立</span>{{end}}</div>
+      </div>
+      <div>
+        <div class="eyebrow" style="margin-bottom:4px">host key 指纹 · 请带外核对</div>
+        <div class="mono" style="font-size:11.5px;word-break:break-all">{{if .Node.HostKeyFP}}{{.Node.HostKeyFP}}{{else}}<span class="muted">未记录</span>{{end}}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:22px">
+  <div class="card-hd"><h2>部署历史</h2><span class="spacer"></span>
+    <span class="mono muted" style="font-size:11.5px">同一次运行可反复续跑，已完成的步骤会跳过</span></div>
+  {{if .Runs}}
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>类型</th><th>进度</th><th>状态</th><th>开始</th><th></th></tr></thead>
+      <tbody>
+        {{range .Runs}}
+        <tr>
+          <td class="mono muted nowrap">{{.Kind}}</td>
+          <td style="min-width:200px">
+            <div class="rail-steps">{{range .Segments}}<span class="seg {{.}}"></span>{{end}}</div>
+            <div class="rail-cap"><span>{{.StepLabel}}</span><span>{{.Progress}}</span></div>
+          </td>
+          <td><span class="st st-{{.Tone}}">{{.StatusText}}</span></td>
+          <td class="mono muted nowrap">{{.Started}}</td>
+          <td class="nowrap"><a href="/admin/nodes/{{$.Node.ID}}/runs/{{.ID}}">日志</a></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="empty"><h3>还没有运行记录</h3><p>点右上角「继续 / 重新部署」开始。</p></div>
   {{end}}
-</table>
-</div>
-{{end}}
-
-<h2>操作</h2>
-<form method="POST" action="/admin/nodes/{{.Node.ID}}/resume" style="display:inline">
-  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-  <button class="btn" type="submit"{{if not .CanResume}} disabled{{end}}>继续/重新部署</button>
-</form>
-<span class="muted" style="margin-left:12px;font-size:13px">从上次失败的步骤继续；已完成的步骤会被跳过。</span>
-
-<div class="notice" style="margin-top:24px">
-  尚未实施的操作：更换域名、轮换托管密钥、签发/轮换 CDK、收集诊断、解除纳管。
-  这些目前请用 SSH + <code>ccwadmin</code>（见 <code>DEPLOY.md</code>）。
 </div>
 
-<p style="margin-top:24px"><a href="/admin/nodes">返回机队列表</a></p>
+<div class="note">
+  <b>这些操作还没做进后台。</b>更换域名、轮换托管密钥、签发与轮换 CDK、收集诊断、解除纳管——
+  目前用 SSH + <code>ccwadmin</code>，见 <code>DEPLOY.md</code> 的 A6。
+</div>
+
 {{end}}
