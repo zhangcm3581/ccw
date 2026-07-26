@@ -38,11 +38,11 @@
 cd deploy && cp .env.example .env
 # 填 CCW_DOMAIN、POSTGRES_PASSWORD，并生成 CCW_TOKEN_KEY=$(openssl rand -hex 32)
 docker compose up -d --build
-docker compose run --rm --entrypoint /ccwadmin control-api init-project project-a
+docker compose run --rm --entrypoint /ccwadmin control-api init-project --slug project-a
 # 打印的CDK只显示一次，立即保存
 ```
 
-管理员登录Claude（共享凭据，只需一次）与无域名的IP测试模式见`DEPLOY.md`第7、9节。
+管理员登录Claude（共享凭据，只需一次）见`DEPLOY.md`的A7，无域名的IP测试模式见A10。官网与管理后台的部署见同一文档的B部分。
 
 ### 本地使用
 
@@ -83,7 +83,8 @@ Docker与数据库逻辑用假API/内存实现做单测；需要真实VPS的验�
 | `docs/design-deviations.md` | 代码与spec的已知偏离及其代价 |
 | `docs/superpowers/specs/` | 设计spec v3与两份审查文档（权威顺序见`CLAUDE.md`） |
 | `docs/superpowers/plans/` | compose渲染计划（未实施）；Task 0–13实施计划**已归档**，仅供历史参考 |
-| `DEPLOY.md` / `UPDATE.md` | 部署与更新运维 |
+| `DEPLOY.md` | 部署：A节点 · B Console · C运维（含已知边界） |
+| `UPDATE.md` | 更新、加项目、轮换CDK、回滚、排障 |
 | `docs/admin-login-runbook.md` | 管理员在容器内完成Claude登录的流程 |
 | `deploy/versions.lock` | 版本固定清单 |
 

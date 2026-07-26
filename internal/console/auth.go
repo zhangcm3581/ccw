@@ -42,7 +42,7 @@ type AdminStore interface {
 }
 
 // Auth持有管理后台的认证依赖。为nil时Server不注册任何/admin路由——
-// 没有认证就不上管理页面（DEPLOY-CONSOLE.md §8）。
+// 没有认证就不上管理页面（设计§8.3；部署说明见DEPLOY.md的B部分）。
 type Auth struct {
 	Store AdminStore
 	Box   *secretbox.Box // 解TOTP secret用

@@ -1,43 +1,44 @@
-# 部署文档：Ubuntu 24 + Docker Compose一键部署
+# 部署文档
 
-面向运营方管理员。本文档在一台全新Ubuntu 24.04VPS上，用Docker Compose一键起全部服务，创建项目与CDK，供客户端CLI登录并附着云端终端。
+从零把 ccw 跑起来。两部分互相独立，按需要读：
 
-> **当前范围说明**（最后核对：2026-07-26）
-> 本编排提供：CDK认证、连接令牌、额度门户、**云端终端通道**（tmux会话保持、断线重连）、**文件双向同步**（`/ws/sync`，已接线可用）、**用量采集与额度闸门**（2026-07-26接线，**未经真机验证**，见第11.2节的自查步骤）。
-> **不含**：文件系统硬配额（已决定不做，见第11.1节）、备份恢复。
-> worker-agent挂载docker.sock，等同宿主机高权限，因此**只在内部网络运行、不对公网暴露**。
+| 部分 | 部署什么 | 什么时候需要 |
+|---|---|---|
+| **[A · 节点](#a-节点)** | 提供工作空间的机器：终端、同步、额度闸门 | **必需**。一台节点最多 3 个项目 |
+| **[B · Console](#b-console)** | 官网、客户端下载、管理后台、纳管流水线 | 可选。只有一台节点、愿意用 SSH 管理时可以完全不装 |
+| **[C · 运维](#c-运维)** | 常用命令、备份、安全要点、已知边界 | 部署后必读 |
 
-> **重装用户看这里**：如果你之前部署过（尤其遇到"登录后反复要求登录"），先按 **第 0 节卸载**清掉旧的坏卷，再从第 3 节走一遍。授权模式已改为**共享授权、登录一次**（第 7 节）。
-
----
-
-## 0. 卸载旧部署（重装前必做）
-
-早期部署的 Claude 卷是 `root:root`、`claude` 用户写不进凭据，必须清掉重来。在 `deploy/` 目录执行：
-
-```bash
-cd /opt/ccw/deploy
-./uninstall.sh                 # 停服务 + 删所有数据卷（含旧的坏卷）
-# 或者彻底一点，连镜像也删（重装会重新 build）：
-# ./uninstall.sh --purge-images
-```
-
-脚本做的事：`docker compose down -v` 删掉容器/网络/卷，并额外清理早期版本遗留的独立 `project-a-claude / project-b-claude` 卷。跑完会打印残留检查，正常应显示"无残留卷"。
-
-> ⚠ 这会删除数据库、已登录凭据、项目 workspace——重装本就要全新开始，属预期。若只想停服务保留数据，用 `docker compose down`（不加 `-v`）。
-
-卸载后，重新获取最新代码（含权限修复的 `Dockerfile.claude` 与共享授权的 `compose.yaml`），然后从第 3 节继续。
+**最后核对：**2026-07-26，对照分支 `v2`。
 
 ---
 
-## 1. 硬件与前置
+## 先读这一页
 
-- Ubuntu 24.04LTS，x86_64
-- 建议8 vCPU/16GB/150–200GB SSD（最低4 vCPU/8GB/100GB）
-- 一个解析到本机公网IP的域名（Caddy自动签发HTTPS证书用）。无域名的快速验证见第9节。
-- root或具备sudo的账号
+**这套系统给你什么：**本地 `cclaude` 凭 CDK 登录，附着云端 tmux 会话（断线不中断、重连即恢复），本地目录与云端 `/workspace` 双向同步，每个项目独立容器与磁盘配额，内部额度闸门按项目计量。
 
-## 2. 安装Docker与Compose插件
+**四条会影响预期的边界，部署前请确认能接受：**
+
+1. **额度闸门未经真机验证，且当前实际不会拦人。** 代码链路是闭环的（用量入库 → 超额关终端 → 同步降级 cleanup），但从未在真实部署上跑过；加权系数处于「先记账、后校准」第一阶段，限额刻意设得很宽。**在你按 [A9](#a9-部署后自查用量采集是否真的在工作) 自查并校准之前，不要依赖它防止某个项目吃光额度。**
+2. **磁盘配额是逻辑配额，不是硬配额。** 15 GiB 只统计走同步接口的文件。项目在终端里 `npm install`、堆构建缓存或直接 `dd`，可以突破上限并撑爆宿主机磁盘，撑爆后**同机全部项目一并受影响**。这不需要恶意即可触发。文件系统硬配额**已决定不做**（原因见 [C4](#c4-已知边界与取舍)）。
+3. **同节点项目之间不是强隔离边界。** Claude HOME 共享（凭据、命令历史、shell 快照互相可见，只有会话 JSONL 按项目分卷）；`worker-agent` 持有 docker.sock 等同宿主机 root，任一容器逃逸即影响全机。设计上按「使用者可信」处理，**不做 gVisor/Kata 等加固**。
+4. **Console 的纳管流水线从未对真实 VPS 走完。** 有单测与本机冒烟，但 12 步没有在真机上完整跑过一次。首次使用请拿一台可以随时重装的机器。
+
+完整缺口清单见 `docs/STATUS.md`；系统结构与数据流见 `docs/diagrams/index.html`（七张图，浏览器直接打开）。
+
+---
+
+# A · 节点
+
+## A1 前置
+
+- **Ubuntu 22.04 / 24.04 或 Debian 12**，x86_64 或 arm64
+- **磁盘 ≥ 80 GB**：3 个项目 × 15 GiB workspace = 45 GiB，加系统、镜像、构建缓存与数据库 13–17 GiB，余量约 17 GiB
+- 建议 8 vCPU / 16 GB（最低 4 vCPU / 8 GB）
+- 一个解析到本机公网 IP 的域名（Caddy 自动签 HTTPS）。没有域名的验证方式见 [A10](#a10-无域名的-ip-测试模式)
+- 放行 22 / 80 / 443
+- root 或有 sudo 的账号
+
+## A2 安装 Docker
 
 ```bash
 sudo apt-get update
@@ -53,241 +54,186 @@ sudo systemctl enable --now docker
 docker --version && docker compose version
 ```
 
-## 3. 获取代码
+> Debian 12 把上面两处 `ubuntu` 换成 `debian`。
 
-把项目目录（含本文件与 `deploy/`）放到服务器，例如 `/opt/ccw`：
+## A3 取代码
 
 ```bash
 sudo mkdir -p /opt/ccw && sudo chown "$USER" /opt/ccw
-# 用scp/rsync/git把项目内容传到/opt/ccw
 cd /opt/ccw
+git clone https://github.com/zhangcm3581/ccw.git .
 ls deploy/compose.yaml   # 确认存在
 ```
 
-## 4. 配置环境变量
+> **重装的人看这里：**如果之前部署过（尤其遇到过「登录后反复要求登录」），先跑 `deploy/uninstall.sh` 清掉旧卷再继续——详见 `UPDATE.md` 的「历史问题」一节。
+
+## A4 配置环境变量
 
 ```bash
 cd /opt/ccw/deploy
 cp .env.example .env
-# 生成令牌签名密钥（64位hex）
 sed -i "s|^CCW_TOKEN_KEY=.*|CCW_TOKEN_KEY=$(openssl rand -hex 32)|" .env
-# 设置强数据库密码
 sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 16)|" .env
-# 填写你的域名
 sed -i "s|^CCW_DOMAIN=.*|CCW_DOMAIN=你的域名.example.com|" .env
-# 可选：固定Claude Code版本
-# sed -i "s|^CLAUDE_CODE_VERSION=.*|CLAUDE_CODE_VERSION=1.2.3|" .env
 cat .env    # 核对
 ```
 
-## 5. 构建镜像并启动
+| 变量 | 说明 |
+|---|---|
+| `CCW_DOMAIN` | 公网域名，Caddy 用它签证书 |
+| `CCW_TOKEN_KEY` | 令牌签名密钥，**必须 64 位 hex** |
+| `POSTGRES_PASSWORD` | 数据库密码 |
+| `CCW_USAGE_WEIGHTS` | 用量加权系数 `input,output,cache_read,cache_write`，默认 `1,5,1,1`。**缺了它 worker-agent 会拒绝启动**——这是有意的，带着空配置跑起来时采集器看着正常但永远采不到东西 |
+| `CLAUDE_CODE_VERSION` | 留空＝装最新。生产建议填具体版本 |
 
-> `deploy/compose.yaml` 由 `ccwadmin render-compose` 生成（文件头有再生成命令），**不要手工编辑**——手工改动会在下次渲染时丢失。加第3个项目的流程见 `UPDATE.md` 第⑥节；单节点项目数上限为3（产品规则）。
+> `.env` 含密钥与密码，**不得提交版本库、不得进日志**。
 
-所有compose命令在 `deploy/` 目录执行：
+## A5 渲染 compose 并启动
+
+`deploy/compose.yaml` 是 `ccwadmin render-compose` 的产物，仓库里那份是双项目版本。**不要手工编辑**——加项目、改项目列表都走渲染命令（见 `UPDATE.md`）。
+
+按你要的项目列表重新渲染（1–3 个）：
+
+```bash
+cd /opt/ccw
+go run ./cmd/ccwadmin render-compose --projects project-a,project-b --out deploy/compose.yaml
+# 服务器上没装 Go 时，可先用仓库自带的双项目版本，起服务后再用容器里的 ccwadmin 渲染
+```
+
+启动：
 
 ```bash
 cd /opt/ccw/deploy
-docker compose build          # 构建control-api/worker-agent/项目容器镜像
-docker compose up -d          # 后台启动全部服务
-docker compose ps             # 应看到postgres/control-api/worker-agent/caddy/project-a/project-b均Up
-```
-
-control-api启动时自动执行数据库迁移（`schema_migrations` 保证只执行一次）。
-
-查看日志确认无错误：
-
-```bash
+docker compose build          # 首次要构建 control-api / worker-agent / 项目镜像，需要几分钟
+docker compose up -d
+docker compose ps             # postgres / control-api / worker-agent / caddy / 各项目容器均 Up
 docker compose logs control-api worker-agent caddy --tail=50
 ```
 
-对外只有Caddy的80/443端口；control-api、worker-agent不映射宿主机端口，仅在内部 `ccw` 网络中被Caddy访问。
+control-api 启动时自动跑数据库迁移（`schema_migrations` 保证每个迁移只执行一次）。
 
-## 6. 创建项目并签发CDK
+对外只有 Caddy 的 80/443；control-api 与 worker-agent 不映射宿主机端口，只在内部 `ccw` 网络里被 Caddy 访问。
 
-用 `ccwadmin`（打包在control-api镜像内）创建两个项目，各得一张一次性CDK：
+**公开路径合同**（改 Caddyfile 必须同步改 spec §3，否则客户端连不上）：
+
+| 公开路径 | 后端 | 处理 |
+|---|---|---|
+| `/api/*` | control-api | 剥前缀：`/api/v1/auth/exchange` → `/v1/auth/exchange` |
+| `/ws/terminal` | worker-agent | rewrite → `/v1/terminal` |
+| `/ws/sync` | worker-agent | rewrite → `/v1/sync` |
+| `/portal`、`/usage` | — | 公网 404；门户走 SSH 隧道访问 localhost |
+
+## A6 创建项目并签发 CDK
+
+`ccwadmin` 打包在 control-api 镜像里。为方便，先起个别名：
 
 ```bash
-# 磁盘配额默认15 GiB（上限15，产品规则）；5h/7d限额默认1000000/10000000（先记账阶段的宽值）
-docker compose run --rm --entrypoint /ccwadmin control-api init-project --slug project-a
-docker compose run --rm --entrypoint /ccwadmin control-api init-project --slug project-b
-# 旧式位置参数仍兼容：init-project <slug> [disk_gib] [five_hour_units] [seven_day_units]
+cd /opt/ccw/deploy
+alias ccwadmin='docker compose run --rm --entrypoint /ccwadmin control-api'
 ```
 
-每条命令末尾会打印形如 `ccw_<public>.<secret>` 的CDK——**只显示一次，立即保存**。project-a的CDK只能连project-a容器，project-b同理。**单节点最多3个项目、单项目磁盘配额上限15 GiB**（产品规则，第4个项目与`--disk-gib 16`都会被拒绝）。
-
-> 容器名约定：`ccwadmin init-project --slug project-a` 建立的项目container_name为 `ccw-project-a`，与compose中的项目容器一一对应。
-> `init-project`幂等：slug已存在时返回现有信息、不报错、不签发新CDK。
-
-其他管理命令（全部支持`--json`）：
+建项目：
 
 ```bash
-docker compose run --rm --entrypoint /ccwadmin control-api list-projects
-docker compose run --rm --entrypoint /ccwadmin control-api issue-cdk --slug project-a     # 补发新CDK
-docker compose run --rm --entrypoint /ccwadmin control-api rotate-cdk --slug project-a    # 轮换：旧CDK默认24h宽限后失效
-docker compose run --rm --entrypoint /ccwadmin control-api rotate-cdk --slug project-a --revoke-now   # 泄露应急：旧CDK当场失效
-docker compose run --rm --entrypoint /ccwadmin control-api list-cdks --slug project-a     # 各CDK状态（无明文，明文不可再取）
-docker compose run --rm --entrypoint /ccwadmin control-api disable-cdk --public-id <id>
-docker compose run --rm --entrypoint /ccwadmin control-api status                         # schema版本/磁盘水位/每项目用量新鲜度
+ccwadmin init-project --slug project-a
+ccwadmin init-project --slug project-b
 ```
 
-轮换后客户端的表现：旧CDK失效时`cclaude`收到`invalid_cdk`并清除本地缓存，输入新CDK重连即可，**云端tmux现场不受影响**。
+每条命令末尾打印形如 `ccw_<public>.<secret>` 的 CDK——**只显示一次，立即保存**。一张 CDK 只能连它自己的项目。
 
-## 7. 管理员登录Claude（共享授权，只需一次）
+**产品硬上限**：单节点最多 3 个项目、单项目磁盘配额上限 15 GiB。第 4 个项目与 `--disk-gib 16` 都会被当场拒绝。默认值：磁盘 15 GiB，5 小时限额 1000000，7 天限额 10000000（先记账阶段的宽值）。
 
-同一节点上的全部项目容器共用一个 Claude HOME 卷（`claude-shared`），所以**整台节点只在一个容器登录一次**，全部项目共用同一份凭据与同一个上游额度池。详见 `docs/admin-login-runbook.md`。
+`init-project` 是幂等的：slug 已存在时返回现有信息、不报错、**不签发新 CDK**（要新 CDK 用 `issue-cdk`）。
+
+其他管理命令，全部支持 `--json`：
 
 ```bash
-# 准备并附着 project-a 的 tmux 会话（PROJECT_A_ID 为第6步输出的 project id）
+ccwadmin list-projects                              # 项目与配额
+ccwadmin issue-cdk --slug project-a                 # 补发一张新 CDK
+ccwadmin rotate-cdk --slug project-a                # 轮换：旧 CDK 24 小时宽限后自动失效
+ccwadmin rotate-cdk --slug project-a --revoke-now   # 凭据泄露应急：旧 CDK 当场失效
+ccwadmin list-cdks --slug project-a                 # 各 CDK 状态（无明文，明文不可再取）
+ccwadmin disable-cdk --public-id <id>
+ccwadmin status                                     # schema 版本 / 磁盘水位 / 每项目用量新鲜度
+```
+
+轮换后客户端的表现：旧 CDK 失效时 `cclaude` 收到 `invalid_cdk` 并清除本地缓存的 CDK（保留 API 地址），输入新 CDK 重连即可，**云端 tmux 现场不受影响**。
+
+> `ccwadmin status` 里的 `last_usage_event_at` 是发现「采集停摆」的关键信号：项目明明在用、这个时间却停在几小时前，说明采集链路断了。
+
+## A7 管理员登录 Claude（整台机器只需一次）
+
+同一节点的全部项目容器共用一个 Claude HOME 卷（`claude-shared`），所以**整台节点只在一个容器里登录一次**，全部项目共用同一份凭据与同一个上游额度池。
+
+```bash
+# PROJECT_A_ID 是 A6 输出的 project id
 docker exec ccw-project-a tmux -L "$PROJECT_A_ID" has-session -t main \
   || docker exec ccw-project-a tmux -L "$PROJECT_A_ID" new-session -d -s main -c /workspace claude
 docker exec -it ccw-project-a tmux -L "$PROJECT_A_ID" attach-session -t main
-# 按提示完成登录，然后 Ctrl-b d 脱离。project-b 无需再登录（共用同一凭据卷）。
+# 按提示完成登录，然后 Ctrl-b d 脱离
 
-# 验证：两个项目都应已登录，且容器重建后仍保持
+# 验证：全部项目都应已登录
 docker exec ccw-project-a claude auth status    # 期望 loggedIn: true
 docker exec ccw-project-b claude auth status    # 期望 loggedIn: true（共用凭据）
 ```
 
-凭据（`.claude.json` 与 `.claude/.credentials.json`）持久化在 `claude-shared` 卷，容器重建不丢。
+凭据（`.claude.json` 与 `.claude/.credentials.json`）持久化在 `claude-shared` 卷，容器重建不丢。详细流程见 `docs/admin-login-runbook.md`。
 
-> **重要**：登录能持久化的前提是卷可写。镜像已在 `Dockerfile.claude` 里预建挂载目录并 chown 给 claude(1001)，空卷首次挂载会继承该所有权。**若你之前用旧镜像部署过、卷是 root:root，必须先删旧卷再重建**（见下方"升级已部署实例"）。
+**为什么会话 JSONL 又是分开的：**`~/.claude/projects/` 被每项目独立卷嵌套挂载遮蔽，而凭据文件是它的兄弟节点、仍在共享卷里。所以「授权一次」与「按项目计量」同时成立——见 `docs/diagrams/06-volumes.svg`。
 
-### 升级已部署实例（修复登录不持久）
+## A8 客户端接入
 
-若已按旧版部署、遇到"登录后反复要求登录"，按此修复：
-
-```bash
-cd /opt/ccw/deploy
-docker compose down                       # 停服务（不加 -v，先保留数据库）
-# 删除权限错误的旧 Claude 卷（workspace/数据库不受影响）
-docker volume rm deploy_project-a-claude deploy_project-b-claude 2>/dev/null || true
-docker compose build --no-cache project-a # 用带权限修复的 Dockerfile 重建镜像
-docker compose up -d                      # 全新空卷 claude-shared 会继承 claude 所有权
-# 然后回到本节顶部，登录一次即可
-```
-
-## 8. 客户端使用（CLI）
-
-在客户端机器上准备 `cclaude` 二进制（在开发机交叉编译）：
+在开发机上编译，或从 Console 的下载页取（见 [B4](#b4-发布客户端)）：
 
 ```bash
-# Linux
 GOOS=linux   GOARCH=amd64 go build -o cclaude       ./cmd/cclaude
-# macOS (Apple Silicon)
 GOOS=darwin  GOARCH=arm64 go build -o cclaude-macos ./cmd/cclaude
-# Windows
 GOOS=windows GOARCH=amd64 go build -o cclaude.exe   ./cmd/cclaude
 ```
 
-进入本地项目目录，用CDK登录并附着云端终端：
+进入本地项目目录使用：
 
 ```bash
 cd ~/my-project-a
-./cclaude --api https://你的域名.example.com   # 首次指定API地址（自动补/api前缀并写入~/.ccw/config.json）
-# 提示输入CDK（不回显）；之后直接运行 ./cclaude 即可
+./cclaude --api https://你的域名.example.com   # 首次指定地址，自动补 /api 前缀并记住
+# 提示输入 CDK（不回显）；之后直接 ./cclaude 即可
 ```
 
-寻址优先级：`--api`参数 > `CCW_API`环境变量 > `~/.ccw/config.json`（0600）> 交互提示。旧版`~/.ccw/cdk`缓存文件会自动迁移进config.json。`cclaude logout`清除本地配置；CDK只走交互输入或`CCW_CDK`环境变量，**不做命令行参数**。
+寻址优先级：`--api` > `CCW_API` 环境变量 > `~/.ccw/config.json`（0600）> 交互提示。旧版 `~/.ccw/cdk` 单行文件会自动迁移。`cclaude logout` 清除本地配置。**CDK 不接受命令行参数**（会进 shell history 与 `ps` 输出），只走交互输入或 `CCW_CDK`。
 
-状态栏形如 `[project-a] 5h:10/1000000 7d:60/10000000 disk:0/21474836480 mode:rw`。断网会自动重连；session过期会用内存中的CDK自动重新换取。
+状态栏形如 `[project-a] 5h:10/1000000 7d:60/10000000 disk:0/16106127360 mode:rw`。断网自动重连；session 过期会用内存里的 CDK 自动换取。超额或磁盘满时**不退出**，转 cleanup 模式（仍可下载、删除、缩小），窗口恢复后自动回到正常模式。
 
-> 文件同步已启用：CLI 会把**当前目录**与云端 `/workspace` 双向同步（每2秒一轮）。首次运行前请确认 `cd` 到了正确的项目目录——同步以运行目录为根。凭据类文件（`.env*`、`.ssh/`、`.aws/`、`.claude/` 等）与 `.git/`、`node_modules/` 等目录默认排除，名单见 `internal/sync/paths.go`。本地基线索引存在目录下的 `.cclaude/index.json`，建议加进项目的 `.gitignore`。
+**同步的边界，第一次用之前要知道：**
 
-## 9. 用服务器 IP 测试（无域名，纯 HTTP）
+- 同步以**运行目录**为根，先 `cd` 对地方
+- 凭据类文件（`.env*`、`.ssh/`、`.aws/`、`.claude/` 等）与 `.git/`、`node_modules/` 等默认排除，名单在 `internal/sync/paths.go`
+- **符号链接不参与同步**（两端一律跳过，防止经链接把目录外内容带进清单）
+- 本地基线索引写在目录下的 `.cclaude/index.json`，建议加进 `.gitignore`
+- 两端同时改同一文件时不覆盖你的本地版本，云端版另存为 `<name>.conflict-remote-<UTC>`
 
-域名只用于 Caddy 自动签发 HTTPS 证书。没有域名时，用服务器公网 IP + HTTP 即可完整测试（认证、连接、终端）。**明文不加密，仅限测试，切勿用于生产。**
+## A9 部署后自查：用量采集是否真的在工作
 
-在 `deploy/` 目录执行（把 `<IP>` 换成服务器公网 IP）：
+**这一节别跳过。**采集链路只有单测证据，最危险的失败模式是「采集器在跑、日志正常、`usage_events` 永远为空」——与没接线时的现象完全一样。
 
-```bash
-cd /opt/ccw/deploy
-
-# 1) 配 .env：CCW_DOMAIN 填服务器公网 IP，并生成真实密钥
-sed -i "s|^CCW_DOMAIN=.*|CCW_DOMAIN=<IP>|" .env
-sed -i "s|^CCW_TOKEN_KEY=.*|CCW_TOKEN_KEY=$(openssl rand -hex 32)|" .env
-sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 16)|" .env
-
-# 2) 无 TLS：control-api 返回的终端地址改用 ws:// 而非 wss://
-sed -i 's|wss://\${CCW_DOMAIN}/ws|ws://\${CCW_DOMAIN}/ws|' compose.yaml
-
-# 3) Caddy 改用 HTTP 版（监听 80，不签证书）
-cp Caddyfile.http Caddyfile
-
-# 4) 起服务（确保云厂商安全组/防火墙放行 80 端口）
-docker compose up -d
-docker compose ps
-```
-
-创建项目、拿 CDK（第 6 节），然后验证：
-
-```bash
-# 认证端点（任意机器）
-curl -s http://<IP>/api/v1/auth/exchange \
-  -H 'Content-Type: application/json' -d '{"cdk":"<你的CDK>"}'
-# 成功返回 {"session_token":"...","project_id":"...","project_slug":"project-a"}
-
-# 客户端连终端（HTTP裸IP同样自动补/api）
-./cclaude --api http://<IP>
-```
-
-上线时改回域名版：`cp` 回原 `Caddyfile`、把 `compose.yaml` 的 `ws://` 改回 `wss://`、`CCW_DOMAIN` 填真实域名并让 DNS 指向本机。
-
-## 10. 运维常用命令
-
-```bash
-docker compose ps                       # 服务状态
-docker compose logs -f control-api      # 跟踪日志
-docker compose restart worker-agent     # 重启单个服务
-docker compose down                     # 停止（保留数据卷）
-docker compose down -v                  # 停止并删除所有卷（销毁数据，慎用）
-
-# 秘密泄漏自查（应无输出）
-docker compose logs | grep -iE 'ccw_[0-9a-f]{16}\.|oauth|refresh_token|access_token'
-
-# 数据库备份（一致性）
-docker compose exec postgres pg_dump -U ccw ccw | gzip > ccw-$(date +%Y%m%d).sql.gz
-```
-
-VPS重启后 `docker compose up -d`（或依赖 `restart: unless-stopped` 自动拉起）。tmux内存会话会丢失，worker-agent重新准备会话时对已登录项目执行 `claude --continue` 恢复上下文（该行为尚未做过真实验证，见 `docs/STATUS.md`）。
-
-## 11. 尚未包含（部署前请确认你能接受）
-
-本编排**已包含**：CDK认证与令牌、云端终端（tmux保持+断线重连）、文件双向同步（`/ws/sync`，含冲突副本与逻辑磁盘配额）、`/usage`门户。
-
-**尚未包含：**
-
-- **用量采集的真机验证**：采集器已于 2026-07-26 接进 worker-agent（`usage_events` 会被写入，额度闸门在代码层面闭环），但**尚未在真实部署上验证过**——JSONL 是否确实被扫到、超额是否真的关终端，都还没有实测证据。部署后请对照第11.2节自查。
-- **文件系统硬配额**：**已决定不做**（2026-07-26）。容器内的 Claude 可以绕过同步接口把宿主机磁盘写满，这是明示的取舍，详见第11.1节与 `docs/STATUS.md` 的 T1。
-- **cleanup模式的端到端验收**：worker-agent 已按实时额度降级为 cleanup（查询失败也降级），但验收21与27未在真机跑过。
-- **完整备份/恢复演练**：无脚本、无演练记录。第10节只有数据库的 `pg_dump`，卷数据未覆盖。
-- **反向代理路径合同与e2e自动化验收**：`tests/e2e` 的断言全部是 skip 状态。
-
-完整缺口清单与建议推进顺序见 `docs/STATUS.md`；与设计spec的偏离见 `docs/design-deviations.md`。
-
-### 11.2 部署后自查：用量采集是否真的在工作
-
-采集链路 2026-07-26 才接上，**只有单测证据**。最危险的失败模式是"采集器在跑、日志正常、`usage_events` 永远为空"——因此部署后请实际确认一遍。
-
-**第一步：worker-agent 起来了。**它现在会在启动时校验用量配置，配置缺失直接拒绝启动：
+**① worker-agent 起来了**
 
 ```bash
 docker compose logs worker-agent --tail=20
-# 若看到 "config: CCW_USAGE_ROOT is required" 或 "CCW_USAGE_WEIGHTS ... all zero"，
-# 说明 .env 缺变量——照 .env.example 补上再起。
 ```
 
-**第二步：JSONL 目录确实挂进来了。**这是最容易漏的一步：
+看到 `config: CCW_USAGE_ROOT is required` 或 `CCW_USAGE_WEIGHTS ... all zero` 说明 `.env` 缺变量。这是有意的硬失败，照 `.env.example` 补上再起。
+
+**② JSONL 目录确实挂进来了**——最容易漏的一步
 
 ```bash
 docker compose exec worker-agent ls /srv/ccw/usage/project-a
-# 应看到 *.jsonl（若该项目还没跑过 Claude 会话，可能为空目录——空目录是正常的，
-# "目录不存在"才是问题）
+# 应看到 *.jsonl。项目还没跑过会话时是空目录——空目录正常，"目录不存在"才是问题
+
 docker compose logs worker-agent | grep 'JSONL目录不存在'
-# 有输出＝漏挂卷，该项目的用量不会被记录
+# 有输出＝漏挂卷，该项目的用量永远不会被记录
 ```
 
-**第三步：事件真的进库了。**在项目容器里跑一次 Claude 会话，等 30 秒（采集周期），然后：
+**③ 事件真的进库了**——在项目容器里跑一次 Claude 会话，等 30 秒（采集周期），然后：
 
 ```bash
 docker compose exec postgres psql -U ccw -d ccw -c \
@@ -295,32 +241,284 @@ docker compose exec postgres psql -U ccw -d ccw -c \
      JOIN projects p ON p.id=u.project_id GROUP BY p.slug;"
 ```
 
-有行且计数随会话增长＝采集链路通了。**始终为空＝没通**，回到第二步。
+有行且随会话增长＝链路通了。**始终为空＝没通**，回到 ②。
 
-**第四步（可选）：归属没串。**两个项目各跑一次会话，上面那条 SQL 应该看到两行、各自增长；某个项目的数字被算到另一个头上，说明卷挂错了。
+**④ 归属没串**——两个项目各跑一次会话，上面那条 SQL 应看到两行、各自增长。某个项目的数字算到另一个头上，说明卷挂错了。
 
-**注意：**`CCW_USAGE_WEIGHTS` 当前是估算起点、项目限额也刻意设得很宽——闸门处于"先记账、后校准"阶段，**实际不会拦人**。这是有意的：先让真实数据长出来，再定限额。校准之前不要依赖它防止某个项目吃光额度。
+> **首轮采集会把历史 JSONL 全部入账。**已经跑过一段时间的部署，第一轮扫描会把过去积累的会话一次性写进 `usage_events`，用量数字突然跳高——这是预期行为，那些用量本来就消耗了真实额度。
 
-### 11.1 文件系统硬配额：不要执行 `quota-setup.sh`
+**校准之前，闸门不会拦人。**权重与限额都是估算起点。跑够一周真实数据后按实际分布调整（改权重是改一个环境变量，改限额是一条 UPDATE），否则闸门会永远停在「看着完成、从未生效」。
 
-**该脚本在当前编排下不生效，请勿执行。**它创建的卷名是 `<slug>-workspace`，而 compose 实际使用的卷带项目前缀（`deploy_<slug>-workspace`）——两者不是同一个卷。脚本会正常退出并打印 `capped at NN GiB`，容器却仍挂着不受约束的普通命名卷，**没有任何报错**。执行它唯一的效果是让你误以为配额已经生效。
+## A10 无域名的 IP 测试模式
 
-要让它生效必须改卷布局（compose 用 `external: true` 对齐脚本），用户 2026-07-26 已决定不改。脚本保留在仓库里，供将来重开该方向时使用，文件头已标注同样的警告。
+域名只用于 Caddy 签 HTTPS。没有域名时用公网 IP + HTTP 可以完整验证认证、连接、终端、同步。**明文不加密，仅限测试。**
 
-**因此当前的实际状况：**`internal/storage` 的逻辑配额只统计走同步接口的文件。容器内 `npm install`、构建缓存、日志堆积或直接 `dd` 都可以突破配额并撑爆宿主机磁盘。**这不需要恶意即可触发。**
+```bash
+cd /opt/ccw/deploy
 
-**建议的替代防线**（尚未实施，见设计文档 §12.1 的 N4）：
+# 1) .env 里 CCW_DOMAIN 填 IP
+sed -i "s|^CCW_DOMAIN=.*|CCW_DOMAIN=<IP>|" .env
 
-1. 把 Docker `data-root` 指向独立分区/盘——撑爆的是该盘，宿主机根分区与 SSH 救援能力不受影响
-2. 把 Postgres 数据移出 data-root（`ccw-pg` 现在是普通命名卷，落在 data-root 上，会跟着一起挂）
+# 2) 用 override 文件把终端地址改成 ws://（不要改生成的 compose.yaml）
+cat > compose.override.yaml <<'EOF'
+services:
+  control-api:
+    environment:
+      CCW_AGENT_WS_BASE: ws://${CCW_DOMAIN}/ws
+EOF
+
+# 3) Caddy 改用 HTTP 版
+cp Caddyfile.http Caddyfile
+
+# 4) 起服务（确认安全组放行 80）
+docker compose up -d && docker compose ps
+```
+
+`docker compose` 会自动合并 `compose.override.yaml`——这样重新渲染 compose.yaml 时你的本地改动不会丢。
+
+验证：
+
+```bash
+curl -s http://<IP>/api/v1/auth/exchange \
+  -H 'Content-Type: application/json' -d '{"cdk":"<你的CDK>"}'
+# 成功返回 {"session_token":"...","project_id":"...","project_slug":"project-a"}
+
+./cclaude --api http://<IP>     # 裸 IP 同样自动补 /api
+```
+
+**改回生产：**删掉 `compose.override.yaml`、`git checkout deploy/Caddyfile`、`.env` 里填真实域名并让 DNS 指向本机，然后 `docker compose up -d`。
+
+---
+
+# B · Console
+
+Console 是**独立主机、独立数据库**的控制平面，与节点栈完全分开。它**不在用户数据路径上**：Console 停机时，已配置好的 `cclaude` 终端与同步完全不受影响。
+
+**现在能做：**公开站点（落地页、下载页、快速开始）、客户端产物分发与校验和、`/connect` 查询页、管理员登录（密码 + 两步验证、IP 白名单、可立即撤销、审计）、**在浏览器里纳管新节点**。
+
+**还不能做：**DNS 自动化（当前是手动模式）、后台里签发/轮换 CDK、节点巡检与证书预算、解除纳管。**CDK 签发与日常项目管理仍走 [A6](#a6-创建项目并签发-cdk) 的 SSH + `ccwadmin`。**
+
+> **纳管流程从未在真实 VPS 上跑完过。**首次使用请拿一台可以随时重装的机器。
+
+## B1 前置
+
+- 一台独立的 Linux 主机（Ubuntu 22.04/24.04 或 Debian 12），公网 IP，放行 80/443
+- **两个域名**：站点域名（如 `ccw.example.com`）与管理域名（如 `admin.example.com`）。**必须不同**——同域名下靠路径隔离，配置写错就把后台暴露给公网
+- 两个域名的 A 记录都指向本机且已生效
+- Docker 与 compose 插件（装法同 [A2](#a2-安装-docker)）
+
+## B2 目录与配置
+
+```bash
+sudo mkdir -p /opt/ccw-console && cd /opt/ccw-console
+git clone https://github.com/zhangcm3581/ccw.git .
+
+# 数据目录都在 Docker data-root 之外，避免磁盘被撑爆时连数据库一起挂
+sudo mkdir -p /var/lib/ccw-console/pgdata /var/lib/ccw-console/logs /srv/ccw-console/dist
+sudo chown 65532:65532 /var/lib/ccw-console/logs   # 容器内以 nonroot 运行
+
+cd deploy/console
+cp .env.example .env
+```
+
+编辑 `.env`：
+
+| 变量 | 说明 |
+|---|---|
+| `CCW_SITE_DOMAIN` | 公开站点域名 |
+| `CCW_ADMIN_DOMAIN` | 管理后台域名，**必须与站点域名不同** |
+| `CCW_ADMIN_ALLOWLIST` | 管理后台 IP 白名单（你自己的出口 IP 或 CIDR），空格分隔 |
+| `CCW_SECRET_KEY` | 信封加密主密钥，`openssl rand -hex 32`。**必须单独备份** |
+| `CONSOLE_POSTGRES_PASSWORD` | Console 数据库密码（与节点的无关） |
+
+**`CCW_SECRET_KEY` 与 `CCW_ADMIN_ALLOWLIST` 缺任一项，`/admin/*` 路由根本不注册**——启动日志会说明原因。这是有意的：没有认证与网络层限制就不上管理页面。
+
+`CCW_SECRET_KEY` 加密着全部节点的托管 SSH 私钥与管理员的两步验证密钥。**丢了就要对每台节点重新纳管、重建管理员账号。**
+
+## B3 启动
+
+```bash
+cd /opt/ccw-console/deploy/console
+docker compose build && docker compose up -d
+docker compose ps
+docker compose logs ccw-console --tail=20
+```
+
+启动日志里应看到「管理后台已启用」与「机队管理已启用（源码包 N KiB）」。若看到「机队管理未启用」，日志会写明缺什么。
+
+验证：
+
+```bash
+curl -s https://ccw.example.com/healthz                                # ok
+curl -sI https://ccw.example.com/ | head -1                            # 200
+curl -s -o /dev/null -w '%{http_code}\n' https://admin.example.com/    # 白名单外 404
+```
+
+首访下载页会显示「暂无发布」——正常，下一步就是发布客户端。
+
+## B4 发布客户端
+
+**在开发机上**交叉编译六个平台：
+
+```bash
+make release VERSION=v0.1.0        # 输出到 dist/，含 SHA256SUMS
+```
+
+同步到 Console 主机并登记：
+
+```bash
+# 开发机
+rsync -av dist/ user@console-host:/srv/ccw-console/dist/
+
+# Console 主机
+cd /opt/ccw-console/deploy/console
+alias console='docker compose run --rm --entrypoint /ccw-console ccw-console'
+
+console register-release --version v0.1.0 --notes "首个版本"   # 先登记，核对清单与 sha256
+console register-release --version v0.1.0 --publish            # 确认无误再发布
+```
+
+**未 `--publish` 的版本对下载页完全不可见**，`/dist/<文件>` 也不发——只发已发布版本登记过的文件名。往产物目录里放一半的文件不会被任何人下载到。缺平台时命令会显式警告，不会静默略过。
+
+验证：
+
+```bash
+curl -s https://ccw.example.com/dist/SHA256SUMS | head -3
+curl -sO https://ccw.example.com/dist/cclaude_v0.1.0_linux_amd64
+sha256sum -c SHA256SUMS --ignore-missing      # 期望 OK
+```
+
+## B5 创建管理员
+
+```bash
+cd /opt/ccw-console/deploy/console
+docker compose run --rm -it --entrypoint /ccw-console ccw-console create-admin --username admin
+# 交互输入密码两次（至少 12 位，不回显、不进 shell history）
+```
+
+输出会打印**只显示一次**的两步验证密钥与 `otpauth://` 链接——立刻添加到认证器 App，随后登录一次确认可用。密钥丢失只能重建账号。
+
+登录：浏览器打开 `https://admin.example.com/admin/login`。
+
+几个刻意的行为，遇到别当成 bug：
+
+- 用户名不存在、密码错、验证码错三种情况提示**完全一样**——避免用错误差异枚举用户名
+- IP 白名单之外返回 **404 而不是 403**——不暴露后台是否存在。Caddy 与应用层各校验一遍
+- 连续失败按 IP 与用户名两个维度限速（每分钟 5 次）
+- 会话 12 小时绝对超时、30 分钟空闲超时；退出登录**立即**作废服务端会话
+
+## B6 在后台纳管一台新节点
+
+「机队管理」→「新增节点」，填三段：连接信息（IP、用户名、SSH 密码）、域名（选或新建 zone，自动分配 `api-01`、`api-02`…）、初始项目 slug（最多 3 个）。
+
+SSH 密码**只用于首次连接**——注入托管 ed25519 密钥并验证成功后立即丢弃，不落库、不进日志。
+
+点「开始部署」跳到实时日志页，流水线依次做：
+
+```
+probe（发行版白名单、磁盘核算）→ harden（托管密钥、防火墙）→ install-docker
+→ dns-allocate → push-source（推源码包）→ push-artifacts（渲染的 compose.yaml）
+→ render-env（密钥在节点本地生成）→ compose-up → cert-wait
+→ healthcheck → init-projects → disk-guard
+```
+
+**中途一定会停在 dns-allocate**：手动 DNS 模式下，日志打出要添加的 A 记录（形如 `类型 A ｜ 主机记录 api-01.example.com ｜ 记录值 203.0.113.7 ｜ TTL 60`）。到你的 DNS 服务商加完这条记录，回节点详情页点「继续/重新部署」——已完成的步骤跳过，从 dns-allocate 继续。
+
+> DNS 校验交叉查询 1.1.1.1 与 8.8.8.8，两个都指向节点 IP 才算生效。这不是保守：DNS 没生效就起 Caddy 会连续触发 Let's Encrypt 验证失败，撞上「每标识符每小时 5 次失败」后即使 DNS 修好也要再等一小时。
+
+其他会遇到的行为：
+
+- **只支持 Ubuntu 22.04/24.04 与 Debian 12**，其它发行版当场失败不做猜测
+- **重跑安全**：同一节点点「继续/重新部署」用同一个 run，已成功的步骤标记 skipped；`.env` 里已有的数据库密码不会被换掉
+- **CDK 明文不经 Console 存储**：`init-projects` 签发的 CDK 在节点侧输出，Console 只记 `public_id`。当前需要从节点上取回明文（`ccwadmin issue-cdk --slug xxx`）
+- **Console 重启后**「继续部署」会失效：部署参数存在内存里，重启后请重走「新增节点」
+
+## B7 `/connect` 查询页现在还查不到东西
+
+查询页按「CDK 公开 ID → 项目 → 节点 → 域名」解析。纳管流水线已经会写 `nodes` 与 `node_domains`，但 `node_projects` 与 `cdk_issues` 还没有写入方——那属于后台的 CDK 管理，尚未实施。
+
+因此当前 `/connect` 对任何 CDK 仍返回「未找到」。页面本身与后端约束（只收公开 ID、拒绝完整 CDK、限速、统一错误）已就绪。在此之前，签发 CDK 时请直接把 API 域名一并告诉用户。
+
+---
+
+# C · 运维
+
+## C1 常用命令
+
+节点（在 `/opt/ccw/deploy`）：
+
+```bash
+docker compose ps                       # 服务状态
+docker compose logs -f control-api      # 跟踪日志
+docker compose restart worker-agent     # 重启单个服务
+docker compose down                     # 停止，保留数据卷
+docker compose down -v                  # 停止并删除全部卷（销毁数据，慎用）
+
+# 秘密泄漏自查（应无输出）
+docker compose logs | grep -iE 'ccw_[0-9a-f]{16}\.|oauth|refresh_token|access_token'
+
+# 磁盘水位
+df -h && docker system df
+```
+
+Console（在 `/opt/ccw-console/deploy/console`）：
+
+```bash
+docker compose ps
+docker compose logs -f ccw-console
+ls /var/lib/ccw-console/logs            # 流水线运行日志，每个 run 一个文件
+```
+
+VPS 重启后 `docker compose up -d`（或依赖 `restart: unless-stopped` 自动拉起）。tmux 内存会话会丢，worker-agent 重新准备会话时对已登录项目执行 `claude --continue` 恢复上下文——**该行为尚未做过真实验证**。
+
+## C2 备份
+
+```bash
+# 节点数据库（项目、CDK、用量、文件索引）
+cd /opt/ccw/deploy
+docker compose exec -T postgres pg_dump -U ccw ccw | gzip > ccw-$(date +%F).sql.gz
+
+# Console 数据库（机队元数据、发布记录、管理员）
+cd /opt/ccw-console/deploy/console
+docker compose exec -T postgres pg_dump -U ccw ccw_console | gzip > console-$(date +%F).sql.gz
+```
+
+**还必须单独备份的东西：**
+
+| 内容 | 丢了会怎样 |
+|---|---|
+| 节点 `.env`（`CCW_TOKEN_KEY`） | 全部已签发的令牌失效，客户端要重新登录 |
+| Console `.env`（`CCW_SECRET_KEY`） | 全部托管 SSH 私钥与两步验证密钥不可解，每台节点要重新纳管 |
+| `claude-shared` 卷 | 要重新登录 Claude 账号 |
+| 各项目 workspace 卷 | 客户的文件没了（本地还有，靠同步可恢复） |
+
+> **备份恢复演练没做过。**上面的命令只验证过导出侧，恢复流程未演练。
+
+## C3 安全要点
+
+- `.env` 不得提交版本库、不得进日志
+- worker-agent 挂 docker.sock 等同宿主机 root，务必只在内部网络、不映射公网端口（本 compose 已如此）
+- 项目容器非 root 运行、不挂 docker.sock、卷互相隔离
+- CDK 明文只在创建时显示一次；库中只存 Argon2id 哈希
+- 令牌只走 `Authorization` 头，全仓禁止 `?token=`
+- `/usage` 门户仅供管理员经 SSH 隧道访问 localhost，Caddy 对公网 404
+- Console 的特权动作都写审计日志，**审计写入失败时动作也失败**
+- 流水线日志在写盘与推流前都经过脱敏（密码、私钥、CDK 明文、令牌、云厂商 AccessKey）
+
+## C4 已知边界与取舍
+
+**文件系统硬配额：已决定不做。** `deploy/quota-setup.sh` 保留在仓库里但**请勿执行**——它创建的卷名是 `<slug>-workspace`，而 compose 实际使用的卷带项目前缀（`deploy_<slug>-workspace`），两者不是同一个卷。脚本会正常退出并打印 `capped at NN GiB`，容器却仍挂着不受约束的普通命名卷，**没有任何报错**。执行它唯一的效果是让你误以为配额已经生效。
+
+因此逻辑配额只统计走同步接口的文件，容器内直接写盘可以突破上限。**对外只能称「配额」，不得表述为「保证不超过」。**
+
+建议的替代防线（尚未实施）：
+
+1. Docker `data-root` 指向独立分区/盘——撑爆的是该盘，宿主机根分区与 SSH 救援能力不受影响
+2. Postgres 数据移出 data-root（`ccw-pg` 现在是普通命名卷，落在 data-root 上，会跟着一起挂）
 3. 磁盘水位告警——在撑爆之前收到通知
 
-在这三项完成之前，请定期人工检查 `df -h` 与 `docker system df`。
+这三项完成前，请定期人工检查 `df -h` 与 `docker system df`。**注意它们只把后果从「整机死亡且救不回来」降到「项目一起降级、机器能救」，不消除项目之间的互相影响。**
 
-## 12. 安全要点
+**其他未包含的：**备份恢复演练、反向代理路径合同的自动化测试、`tests/e2e` 的十条断言（全部是 `t.Skip`，没有任何一条真实 VPS 验收跑过）。
 
-- `.env`（含令牌密钥、数据库密码）不得提交版本库、不得进日志
-- worker-agent挂docker.sock等同宿主机root，务必只在内部网络、不映射公网端口（本compose已如此）
-- 项目容器非root运行、不挂docker.sock、卷互相隔离
-- CDK明文只在创建时显示一次；库中只存Argon2id哈希
-- 门户 `/usage` 仅供管理员经SSH隧道访问，不经公网（Caddy未暴露该路由）
+完整缺口清单与推进顺序见 `docs/STATUS.md`；与设计 spec 的偏离见 `docs/design-deviations.md`。
