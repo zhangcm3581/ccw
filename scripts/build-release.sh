@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# 发布流水线（console-fleet-design §3.2）：交叉编译六目标cclaude + 生成SHA256SUMS。
+# 交叉编译cclaude + 生成SHA256SUMS（console-fleet-design §3.2）。
+#
+# **正式发布不直接跑这个脚本**——按DEPLOY.md的B4，产物一律在Console主机上用
+# scripts/build-release-docker.sh 构建（它在容器里调用本脚本），
+# 这样不依赖本机装Go、产物直接落到发布目录、没有传输环节。
+# 本脚本保留给本地开发与容器内调用。
 #
 # 产物命名：cclaude_{version}_{os}_{arch}[.exe]——与ccw-console register-release
 # 的扫描约定一致（cmd/ccw-console/register.go的artifactFilename），改一处必须同步另一处。

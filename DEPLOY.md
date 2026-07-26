@@ -183,12 +183,17 @@ docker exec ccw-project-b claude auth status    # 期望 loggedIn: true（共用
 
 ## A8 客户端接入
 
-在开发机上编译，或从 Console 的下载页取（见 [B4](#b4-发布客户端)）：
+从 Console 的下载页取（见 [B4](#b4-发布客户端)），或直接给用户这个链接：
+
+```
+https://你的站点域名/download
+```
+
+没装 Console 时，在任意装了 Docker 的机器上就地构建一份发给用户：
 
 ```bash
-GOOS=linux   GOARCH=amd64 go build -o cclaude       ./cmd/cclaude
-GOOS=darwin  GOARCH=arm64 go build -o cclaude-macos ./cmd/cclaude
-GOOS=windows GOARCH=amd64 go build -o cclaude.exe   ./cmd/cclaude
+cd <仓库根目录>
+VERSION=v0.1.0 TARGETS="darwin/arm64 windows/amd64" ./scripts/build-release-docker.sh
 ```
 
 进入本地项目目录使用：
@@ -326,7 +331,7 @@ ls deploy/console/compose.yaml    # 确认存在，这就是 Console 栈的编�
 # 都在 Docker data-root 之外，避免磁盘被撑爆时连数据库一起挂
 sudo mkdir -p /var/lib/ccw-console/pgdata /var/lib/ccw-console/logs /srv/ccw-console/dist
 sudo chown 65532:65532 /var/lib/ccw-console/logs    # 容器内以 nonroot 运行，漏了日志写不进去
-sudo chown -R "$USER":"$USER" /srv/ccw-console/dist # 你要往这里 rsync/scp 产物，漏了传不上去
+sudo chown -R "$USER":"$USER" /srv/ccw-console/dist # B4 的构建产物直接写到这里，漏了会失败
 ```
 
 | 目录 | 存什么 |
@@ -334,7 +339,7 @@ sudo chown -R "$USER":"$USER" /srv/ccw-console/dist # 你要往这里 rsync/scp 
 | `/opt/ccw-console/` | 代码与编排文件（git clone 来的） |
 | `/var/lib/ccw-console/pgdata` | Console 数据库 |
 | `/var/lib/ccw-console/logs` | 纳管流水线的运行日志 |
-| `/srv/ccw-console/dist` | 客户端产物（B4 发布的二进制）。属主要给你自己，否则 B4 传不上去；容器只读挂载，不受影响 |
+| `/srv/ccw-console/dist` | 客户端产物（B4 就地构建的二进制）。属主要给你自己，否则构建写不进去；容器只读挂载，不受影响 |
 
 **③ 配置**——之后所有 compose 命令都在这个目录执行：
 
@@ -421,40 +426,24 @@ curl -s -o /dev/null -w '%{http_code}\n' https://my-ops-panel.net/download      
 
 ## B4 发布客户端
 
-产物可以在两个地方生成，选一个：
-
-### 方式一：在 Console 主机上直接编（推荐，没有 SSH 密钥时尤其省事）
-
-Console 主机已经有代码与 Docker，用容器里的 Go 交叉编译，**不需要本机装 Go，也不需要任何文件传输**：
+**客户端产物一律在 Console 主机上构建**——那台机器已经有代码与 Docker，用容器里的 Go 交叉编译即可。不需要本机装 Go，不需要任何文件传输，也不需要 SSH 密钥。
 
 ```bash
 # 发布目录必须归你所有——它是 sudo mkdir 建的，属主默认是 root
 sudo chown -R "$USER":"$USER" /srv/ccw-console/dist
 
 cd /opt/ccw-console
+git pull origin v2                 # 确保是要发布的那个版本的代码
+
 VERSION=v0.1.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64" \
   DIST_DIR=/srv/ccw-console/dist ./scripts/build-release-docker.sh
 
-ls -la /srv/ccw-console/dist/     # 产物直接落到发布目录
+ls -la /srv/ccw-console/dist/      # 产物直接落到发布目录，不用再搬
 ```
 
-> 目录不可写时脚本会**在拉镜像之前**就报错并给出修复命令，不会让你等完几百 MB 的下载才失败。
+首次会拉 `golang:1.22-bookworm` 镜像（几百 MB）并下载 Go 依赖，之后有缓存快很多。目录不可写时脚本会**在拉镜像之前**就报错并给出修复命令，不会让你等完下载才失败。
 
-首次会拉 `golang:1.22-bookworm` 镜像（几百 MB）并下载依赖，之后有缓存会快很多。
-
-### 方式二：在开发机上编再传过去
-
-「开发机」＝你本地装了 Go 的机器，不是 Console 主机。
-
-```bash
-make release VERSION=v0.1.0        # 默认六个平台，输出到 dist/，含 SHA256SUMS
-```
-
-**只需要部分平台就用 `TARGETS` 指定**（两种方式通用），没编的平台只会在登记时打印一行警告，不影响发布：
-
-```bash
-make release VERSION=v0.1.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64"
-```
+**`TARGETS` 决定编哪些平台**，没编的平台只会在登记时打印一行警告，不影响发布：
 
 | 目标 | 给谁 |
 |---|---|
@@ -463,18 +452,11 @@ make release VERSION=v0.1.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64"
 | `windows/amd64` | Windows（arm64 的 Windows 极少，通常可略） |
 | `linux/amd64`、`linux/arm64` | Linux 用户；没有就不用编 |
 
+省略 `TARGETS` 则编全部六个。
+
 > **Mac 是两个目标**，别只编一个——M 系列跑不了 amd64 的包（Rosetta 只对已签名的应用生效，命令行二进制会直接报架构不符）。
 
-传到 Console 主机：
-
-```bash
-# 开发机（EC2 记得带密钥；没装 rsync 就用 scp -i ... dist/* ...）
-rsync -av -e "ssh -i ~/你的密钥.pem" dist/ ubuntu@<Console的IP>:/srv/ccw-console/dist/
-```
-
-> 只用 EC2 Instance Connect、手上没有密钥时，走**方式一**，跳过这一步。
-
-### 登记与发布（两种方式都要做）
+### 登记与发布
 
 ```bash
 # Console 主机

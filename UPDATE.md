@@ -163,24 +163,25 @@ ccwadmin disable-cdk --public-id <id>               # 精确禁用某一张
 
 只有装了 Console 才需要——否则直接把编译好的二进制发给用户。
 
+**全部在 Console 主机上完成**，不需要本机装 Go，也没有文件传输这一步。
+
 ```bash
-# 方式一：在 Console 主机上直接编（不需要本机装 Go，也不用传输）
-cd /opt/ccw-console && git pull origin v2
+# 1. 构建（产物直接落到发布目录）
+cd /opt/ccw-console
+git pull origin v2                 # 确保是要发布的那个版本的代码
 VERSION=v0.2.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64" \
   DIST_DIR=/srv/ccw-console/dist ./scripts/build-release-docker.sh
 
-# 方式二：开发机编好再传
-make release VERSION=v0.2.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64"
-rsync -av dist/ ubuntu@<Console的IP>:/srv/ccw-console/dist/
-
-# 登记与发布（Console 主机）
+# 2. 登记与发布
 cd /opt/ccw-console/deploy/console
 alias console='docker compose run --rm --entrypoint /ccw-console ccw-console'
-console register-release --version v0.2.0 --notes "..."   # 先登记，核对清单
+console register-release --version v0.2.0 --notes "..."   # 先登记，核对清单与 sha256
 console register-release --version v0.2.0 --publish        # 确认后发布
 ```
 
-未 `--publish` 的版本对下载页完全不可见，`/dist/` 也不发。旧版本仍在库里，只是下载页只展示最近发布的那个。
+`TARGETS` 的取值见 `DEPLOY.md` 的 B4。旧版本仍在库里，只是下载页只展示最近发布的那个。
+
+未 `--publish` 的版本对下载页完全不可见，`/dist/` 也不发——往产物目录里放一半的文件不会被任何人下载到。
 
 ---
 
@@ -304,26 +305,15 @@ docker compose up -d
 
 排查顺序：`docker compose ps`（有没有 Restarting）→ `docker compose logs <崩溃的容器>` → `curl localhost:8090/healthz`（绕开 Caddy 看后端）→ 最后才是 DNS 与证书。
 
-### 产物传不到 /srv/ccw-console/dist
+### 构建客户端时 permission denied
 
-**没有 SSH 密钥**（只用 EC2 Instance Connect 之类连机器）就别传了——在 Console 主机上直接编：
-
-```bash
-cd /opt/ccw-console
-VERSION=v0.1.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64" \
-  DIST_DIR=/srv/ccw-console/dist ./scripts/build-release-docker.sh
-```
-
-要传的话，`Permission denied` 多半是目录属主还是 root（`sudo mkdir` 建的）：
+发布目录是 `sudo mkdir` 建的，属主默认是 root，而构建以当前用户身份写入：
 
 ```bash
-# Console 主机
 sudo chown -R "$USER":"$USER" /srv/ccw-console/dist
 ```
 
-容器是只读挂载这个目录、以 nonroot 运行，属主给你自己不影响它读。
-
-其余对号入座：`Permission denied (publickey)` ＝ 没带 `.pem`（`-e "ssh -i ~/key.pem"`）；`rsync: command not found` ＝ 远端没装 rsync，改用 `scp -i ~/key.pem dist/* ubuntu@IP:/srv/ccw-console/dist/`；`Connection timed out` ＝ 安全组没放行 22。
+容器是只读挂载这个目录、以 nonroot 运行，属主给你自己不影响它读。脚本会在拉镜像之前就做这项检查并打印修复命令。
 
 ### 访问后台域名却看到官网页面
 
