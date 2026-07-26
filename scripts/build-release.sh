@@ -9,7 +9,14 @@ set -euo pipefail
 
 : "${VERSION:?用法: VERSION=v0.1.0 ./scripts/build-release.sh}"
 DIST="${DIST_DIR:-dist}"
-mkdir -p "$DIST"
+mkdir -p "$DIST" 2>/dev/null || true
+[ -d "$DIST" ] || { echo "错误：输出目录 ${DIST} 不存在且无法创建"; exit 1; }
+if ! touch "$DIST/.ccw-write-test" 2>/dev/null; then
+  echo "错误：输出目录不可写 —— ${DIST}（属主可能是 root）"
+  echo "修复：sudo chown -R \"\$USER\":\"\$USER\" $DIST"
+  exit 1
+fi
+rm -f "$DIST/.ccw-write-test"
 
 # 默认编全六个目标；只需要部分平台时用 TARGETS 覆盖，例如：
 #   TARGETS="darwin/arm64 darwin/amd64 windows/amd64" VERSION=v0.1.0 ./scripts/build-release.sh

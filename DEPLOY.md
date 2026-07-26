@@ -428,12 +428,17 @@ curl -s -o /dev/null -w '%{http_code}\n' https://my-ops-panel.net/download      
 Console 主机已经有代码与 Docker，用容器里的 Go 交叉编译，**不需要本机装 Go，也不需要任何文件传输**：
 
 ```bash
+# 发布目录必须归你所有——它是 sudo mkdir 建的，属主默认是 root
+sudo chown -R "$USER":"$USER" /srv/ccw-console/dist
+
 cd /opt/ccw-console
 VERSION=v0.1.0 TARGETS="darwin/arm64 darwin/amd64 windows/amd64" \
   DIST_DIR=/srv/ccw-console/dist ./scripts/build-release-docker.sh
 
 ls -la /srv/ccw-console/dist/     # 产物直接落到发布目录
 ```
+
+> 目录不可写时脚本会**在拉镜像之前**就报错并给出修复命令，不会让你等完几百 MB 的下载才失败。
 
 首次会拉 `golang:1.22-bookworm` 镜像（几百 MB）并下载依赖，之后有缓存会快很多。
 
