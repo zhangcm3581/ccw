@@ -16,41 +16,43 @@
 </script>
 <style>
 :root{
-  --ground:#f3f5f8;--panel:#fff;--line:#dbe1e9;--ink:#111820;--ink-2:#525d6b;--ink-3:#7c8797;
-  --accent:#0d7d84;--accent-ink:#fff;--accent-wash:#dcefef;--bad:#a3352f;--bad-wash:#f8e3e1;
+  --ground:#faf9f7;--panel:#fff;--line:#e6e1d9;--ink:#1f1e1d;--ink-2:#5c5955;--ink-3:#8b8781;
+  --accent:#c96442;--accent-ink:#fff;--accent-wash:#f9e9e1;--bad:#b0453a;--bad-wash:#fbe6e1;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
 @media (prefers-color-scheme:dark){:root{
-  --ground:#0d1117;--panel:#151b23;--line:#232c37;--ink:#e8edf3;--ink-2:#98a4b4;--ink-3:#6d7887;
-  --accent:#3cbcc4;--accent-ink:#06181a;--accent-wash:#0e2f33;--bad:#e2726b;--bad-wash:#331c1a;}}
+  --ground:#1f1e1d;--panel:#282725;--line:#3a3835;--ink:#f5f3ee;--ink-2:#a8a29a;--ink-3:#7c7770;
+  --accent:#e08a6b;--accent-ink:#2a1610;--accent-wash:#3b2419;--bad:#e08278;--bad-wash:#37211d;}}
 :root[data-theme="dark"]{
-  --ground:#0d1117;--panel:#151b23;--line:#232c37;--ink:#e8edf3;--ink-2:#98a4b4;--ink-3:#6d7887;
-  --accent:#3cbcc4;--accent-ink:#06181a;--accent-wash:#0e2f33;--bad:#e2726b;--bad-wash:#331c1a;}
+  --ground:#1f1e1d;--panel:#282725;--line:#3a3835;--ink:#f5f3ee;--ink-2:#a8a29a;--ink-3:#7c7770;
+  --accent:#e08a6b;--accent-ink:#2a1610;--accent-wash:#3b2419;--bad:#e08278;--bad-wash:#37211d;}
 :root[data-theme="light"]{
-  --ground:#f3f5f8;--panel:#fff;--line:#dbe1e9;--ink:#111820;--ink-2:#525d6b;--ink-3:#7c8797;
-  --accent:#0d7d84;--accent-ink:#fff;--accent-wash:#dcefef;--bad:#a3352f;--bad-wash:#f8e3e1;}
+  --ground:#faf9f7;--panel:#fff;--line:#e6e1d9;--ink:#1f1e1d;--ink-2:#5c5955;--ink-3:#8b8781;
+  --accent:#c96442;--accent-ink:#fff;--accent-wash:#f9e9e1;--bad:#b0453a;--bad-wash:#fbe6e1;}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
   background:var(--ground);color:var(--ink);
   font-family:system-ui,-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
   font-size:14.5px;line-height:1.6;-webkit-font-smoothing:antialiased}
 .box{width:100%;max-width:380px}
-.brand{display:flex;align-items:baseline;gap:9px;margin-bottom:22px}
-.brand b{font-size:20px;letter-spacing:-.02em}
-.brand span{font-family:var(--mono);font-size:10.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-3)}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:26px 24px;
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.brand .mark{width:28px;height:28px;border-radius:9px;background:var(--accent);color:var(--accent-ink);
+  display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12.5px;font-weight:700}
+.brand b{font-size:20px;letter-spacing:-.025em;font-weight:700}
+.brand .sub{font-family:var(--mono);font-size:10.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-3)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px 26px;
   box-shadow:0 1px 2px rgba(17,24,32,.06),0 16px 40px -28px rgba(17,24,32,.5)}
 h1{font-size:17px;margin:0 0 20px;font-weight:650}
 label{display:block;margin-bottom:15px}
 .lb{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
   text-transform:uppercase;color:var(--ink-3);margin-bottom:5px}
-input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:5px;
+input{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;
   background:var(--ground);color:var(--ink);font-family:var(--mono);font-size:13.5px}
 input:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--accent-wash)}
-button{width:100%;padding:9px;border:none;border-radius:5px;background:var(--accent);
+button{width:100%;padding:10px;border:none;border-radius:8px;background:var(--accent);
   color:var(--accent-ink);font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;margin-top:4px}
 button:hover{filter:brightness(1.07)}
-.err{background:var(--bad-wash);color:var(--bad);border-radius:5px;padding:9px 12px;
+.err{background:var(--bad-wash);color:var(--bad);border-radius:8px;padding:10px 13px;
   font-size:13px;margin-bottom:18px}
 .foot{margin-top:16px;font-size:12.5px;color:var(--ink-3);line-height:1.55}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -58,7 +60,7 @@ button:hover{filter:brightness(1.07)}
 </head>
 <body>
 <div class="box">
-  <div class="brand"><b>ccw</b><span>控制台</span></div>
+  <div class="brand"><span class="mark">cc</span><b>ccw</b><span class="sub">控制台</span></div>
   <div class="card">
     <h1>登录</h1>
     {{if .Error}}<div class="err">{{.Error}}</div>{{end}}

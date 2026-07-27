@@ -17,57 +17,67 @@
 <style>
 /* ccw 控制台 —— 单管理员的运维操作台。
    设计取向：这是仪表盘不是文档。机器值一律等宽字体，状态用形状+颜色双编码，
-   信息密度优先于留白。零外部资源（CSP 禁止外链）。 */
+   信息密度优先于留白。零外部资源（CSP 禁止外链）。
+
+   配色沿用 Claude 那套暖调（2026-07-27定）：珊瑚橙做唯一强调色，
+   底色是偏暖的米白而不是冷灰，深色模式是暖炭色而不是蓝黑。
+   **公开站与后台共用同一组色值**，两边只在密度上不同——
+   同一个产品不该有两套色。 */
 :root{
-  --ground:#f3f5f8;   --panel:#ffffff;   --rail:#e9edf2;
-  --line:#dbe1e9;     --line-soft:#e7ecf2;
-  --ink:#111820;      --ink-2:#525d6b;   --ink-3:#7c8797;
-  --accent:#0d7d84;   --accent-ink:#ffffff; --accent-wash:#dcefef;
-  --ok:#2b7a54;       --ok-wash:#dff0e6;
-  --warn:#8f5d0c;     --warn-wash:#f7ecd7;
-  --bad:#a3352f;      --bad-wash:#f8e3e1;
-  --idle:#8b95a3;     --idle-wash:#e6e9ee;
-  --term-bg:#111820;  --term-ink:#d8dee7;
-  --shadow:0 1px 2px rgba(17,24,32,.06), 0 8px 24px -16px rgba(17,24,32,.28);
+  --ground:#faf9f7;   --panel:#ffffff;   --rail:#f4f2ee;
+  --line:#e6e1d9;     --line-soft:#efebe4;
+  --ink:#1f1e1d;      --ink-2:#5c5955;   --ink-3:#8b8781;
+  --accent:#c96442;   --accent-ink:#ffffff; --accent-wash:#f9e9e1;
+  --ok:#2f7a5b;       --ok-wash:#e2f0e8;
+  --warn:#96631a;     --warn-wash:#f9edd8;
+  --bad:#b0453a;      --bad-wash:#fbe6e1;
+  --idle:#8b8781;     --idle-wash:#eeeae3;
+  --run:#3f7a99;      --run-wash:#e2eef4;
+  --term-bg:#1f1e1d;  --term-ink:#e5e1d8;
+  --shadow:0 1px 2px rgba(31,30,29,.05), 0 10px 28px -18px rgba(31,30,29,.3);
+  --r-sm:8px; --r-md:12px; --r-lg:16px;
   --sans:system-ui,-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,"Cascadia Mono",Consolas,monospace;
 }
 @media (prefers-color-scheme:dark){
   :root{
-    --ground:#0d1117; --panel:#151b23; --rail:#10161d;
-    --line:#232c37;   --line-soft:#1b232c;
-    --ink:#e8edf3;    --ink-2:#98a4b4;  --ink-3:#6d7887;
-    --accent:#3cbcc4; --accent-ink:#06181a; --accent-wash:#0e2f33;
-    --ok:#4fb287;     --ok-wash:#122c21;
-    --warn:#d9a441;   --warn-wash:#302512;
-    --bad:#e2726b;    --bad-wash:#331c1a;
-    --idle:#5d6874;   --idle-wash:#1c232c;
-    --term-bg:#080c11; --term-ink:#c8d2de;
-    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.6);
+    --ground:#1f1e1d; --panel:#282725; --rail:#191817;
+    --line:#3a3835;   --line-soft:#302e2b;
+    --ink:#f5f3ee;    --ink-2:#a8a29a;  --ink-3:#7c7770;
+    --accent:#e08a6b; --accent-ink:#2a1610; --accent-wash:#3b2419;
+    --ok:#5fae8a;     --ok-wash:#1d2f26;
+    --warn:#d9a552;   --warn-wash:#332818;
+    --bad:#e08278;    --bad-wash:#37211d;
+    --idle:#6d6862;   --idle-wash:#2c2a27;
+    --run:#78b0cc;    --run-wash:#1b2c36;
+    --term-bg:#151413; --term-ink:#ddd8cd;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -18px rgba(0,0,0,.65);
   }
 }
 :root[data-theme="dark"]{
-  --ground:#0d1117; --panel:#151b23; --rail:#10161d;
-  --line:#232c37;   --line-soft:#1b232c;
-  --ink:#e8edf3;    --ink-2:#98a4b4;  --ink-3:#6d7887;
-  --accent:#3cbcc4; --accent-ink:#06181a; --accent-wash:#0e2f33;
-  --ok:#4fb287;     --ok-wash:#122c21;
-  --warn:#d9a441;   --warn-wash:#302512;
-  --bad:#e2726b;    --bad-wash:#331c1a;
-  --idle:#5d6874;   --idle-wash:#1c232c;
-  --term-bg:#080c11; --term-ink:#c8d2de;
-  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.6);
+  --ground:#1f1e1d; --panel:#282725; --rail:#191817;
+  --line:#3a3835;   --line-soft:#302e2b;
+  --ink:#f5f3ee;    --ink-2:#a8a29a;  --ink-3:#7c7770;
+  --accent:#e08a6b; --accent-ink:#2a1610; --accent-wash:#3b2419;
+  --ok:#5fae8a;     --ok-wash:#1d2f26;
+  --warn:#d9a552;   --warn-wash:#332818;
+  --bad:#e08278;    --bad-wash:#37211d;
+  --idle:#6d6862;   --idle-wash:#2c2a27;
+  --run:#78b0cc;    --run-wash:#1b2c36;
+  --term-bg:#151413; --term-ink:#ddd8cd;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -18px rgba(0,0,0,.65);
 }
 :root[data-theme="light"]{
-  --ground:#f3f5f8; --panel:#ffffff; --rail:#e9edf2;
-  --line:#dbe1e9;   --line-soft:#e7ecf2;
-  --ink:#111820;    --ink-2:#525d6b;  --ink-3:#7c8797;
-  --accent:#0d7d84; --accent-ink:#ffffff; --accent-wash:#dcefef;
-  --ok:#2b7a54;     --ok-wash:#dff0e6;
-  --warn:#8f5d0c;   --warn-wash:#f7ecd7;
-  --bad:#a3352f;    --bad-wash:#f8e3e1;
-  --idle:#8b95a3;   --idle-wash:#e6e9ee;
-  --term-bg:#111820; --term-ink:#d8dee7;
+  --ground:#faf9f7; --panel:#ffffff; --rail:#f4f2ee;
+  --line:#e6e1d9;   --line-soft:#efebe4;
+  --ink:#1f1e1d;    --ink-2:#5c5955;  --ink-3:#8b8781;
+  --accent:#c96442; --accent-ink:#ffffff; --accent-wash:#f9e9e1;
+  --ok:#2f7a5b;     --ok-wash:#e2f0e8;
+  --warn:#96631a;   --warn-wash:#f9edd8;
+  --bad:#b0453a;    --bad-wash:#fbe6e1;
+  --idle:#8b8781;   --idle-wash:#eeeae3;
+  --run:#3f7a99;    --run-wash:#e2eef4;
+  --term-bg:#1f1e1d; --term-ink:#e5e1d8;
 }
 
 *{box-sizing:border-box}
@@ -99,13 +109,15 @@ a:hover{text-decoration:underline}
   padding:18px 20px 16px;border-bottom:1px solid var(--line-soft);
 }
 .rail-brand .mark{
-  width:26px;height:26px;border-radius:6px;flex:none;
+  width:27px;height:27px;border-radius:9px;flex:none;
   background:var(--accent);color:var(--accent-ink);
   display:flex;align-items:center;justify-content:center;
   font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:-.03em;
 }
-.rail-brand b{font-size:15px;letter-spacing:-.01em;line-height:1.2}
-.rail-brand span{
+.rail-brand b{font-size:15.5px;letter-spacing:-.02em;line-height:1.2;font-weight:700}
+/* 只给「控制台」那行做等宽大写，不要写成 .rail-brand span——
+   那会把标识块里的 cc 和产品名 ccw 一起大写掉，而产品名是小写的。 */
+.rail-brand .sub{
   display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;
   text-transform:uppercase;color:var(--ink-3);
 }
@@ -115,7 +127,7 @@ a:hover{text-decoration:underline}
   color:var(--ink-3);padding:14px 8px 6px;
 }
 .nav-item{
-  display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:5px;
+  display:flex;align-items:center;gap:10px;padding:8px 11px;border-radius:var(--r-sm);
   color:var(--ink-2);font-size:14px;text-decoration:none;
   position:relative;
 }
@@ -138,7 +150,7 @@ a:hover{text-decoration:underline}
 .who{display:flex;align-items:center;gap:9px;margin-bottom:10px}
 /* 主题三态开关：跟随系统是默认值，所以它必须是可回到的一个档位，
    而不是只在浅/深之间来回切——切过一次就再也回不去系统偏好。 */
-.theme{display:flex;border:1px solid var(--line);border-radius:5px;overflow:hidden;margin-bottom:10px}
+.theme{display:flex;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;margin-bottom:10px}
 .theme button{
   flex:1;padding:4px 0;border:none;background:transparent;cursor:pointer;
   font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--ink-3);
@@ -148,13 +160,13 @@ a:hover{text-decoration:underline}
 .theme button:hover{color:var(--ink)}
 .theme button[aria-pressed="true"]{background:var(--accent-wash);color:var(--accent);font-weight:600}
 .who .av{
-  width:26px;height:26px;border-radius:5px;background:var(--accent);color:var(--accent-ink);
+  width:26px;height:26px;border-radius:var(--r-sm);background:var(--accent);color:var(--accent-ink);
   display:flex;align-items:center;justify-content:center;
   font-family:var(--mono);font-size:12px;font-weight:700;flex:none;
 }
 .who .nm{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis}
 .signout{
-  width:100%;padding:6px;border:1px solid var(--line);background:transparent;border-radius:5px;
+  width:100%;padding:7px;border:1px solid var(--line);background:transparent;border-radius:var(--r-sm);
   color:var(--ink-2);font-family:var(--sans);font-size:12.5px;cursor:pointer;
 }
 .signout:hover{border-color:var(--bad);color:var(--bad)}
@@ -165,7 +177,7 @@ a:hover{text-decoration:underline}
   padding:20px 30px;border-bottom:1px solid var(--line);background:var(--ground);
   position:sticky;top:0;z-index:5;
 }
-.topbar h1{font-size:20px;margin:0;letter-spacing:-.015em;font-weight:650}
+.topbar h1{font-size:21px;margin:0;letter-spacing:-.025em;font-weight:700}
 .topbar .sub{font-family:var(--mono);font-size:12px;color:var(--ink-3)}
 .topbar .spacer{margin-left:auto}
 /* 1560是表格的可读上限：再宽下去「节点—状态—地址」之间的横向跨度
@@ -174,7 +186,7 @@ a:hover{text-decoration:underline}
 
 /* ── 通用件 ─────────────────────────────────────── */
 .btn{
-  display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:5px;
+  display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:var(--r-sm);
   background:var(--accent);color:var(--accent-ink);border:1px solid transparent;
   font-family:var(--sans);font-size:13.5px;font-weight:600;cursor:pointer;text-decoration:none;
 }
@@ -187,18 +199,18 @@ a:hover{text-decoration:underline}
 .btn.danger:hover{background:var(--bad-wash);color:var(--bad);border-color:var(--bad);filter:none}
 .btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
 
-.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow)}
 .card-hd{
   display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid var(--line-soft);
 }
-.card-hd h2{font-size:14px;margin:0;font-weight:650;letter-spacing:-.005em}
+.card-hd h2{font-size:14.5px;margin:0;font-weight:680;letter-spacing:-.01em}
 .card-hd .spacer{margin-left:auto}
 .card-bd{padding:18px}
 /* 卡片底栏放动作。与表格之间要有一条分隔线，否则按钮看起来像最后一行数据。 */
 .card-ft{
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   padding:12px 18px;border-top:1px solid var(--line-soft);background:var(--ground);
-  border-radius:0 0 8px 8px;
+  border-radius:0 0 var(--r-lg) var(--r-lg);
 }
 .card-ft .spacer{margin-left:auto}
 .grid{display:grid;gap:16px}
@@ -231,7 +243,7 @@ a:hover{text-decoration:underline}
 .st::before{content:"";width:6px;height:6px;flex:none;background:currentColor}
 .st-ok{color:var(--ok);background:var(--ok-wash)}
 .st-ok::before{border-radius:50%}
-.st-run{color:var(--accent);background:var(--accent-wash)}
+.st-run{color:var(--run);background:var(--run-wash)}
 .st-run::before{border-radius:50%;animation:pulse 1.4s ease-in-out infinite}
 .st-warn{color:var(--warn);background:var(--warn-wash)}
 .st-warn::before{clip-path:polygon(50% 0,100% 100%,0 100%)}
@@ -254,7 +266,7 @@ td.nowrap{white-space:nowrap}
 
 .note{
   border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--accent-wash);
-  border-radius:0 6px 6px 0;padding:12px 16px;font-size:13.5px;
+  border-radius:0 var(--r-md) var(--r-md) 0;padding:13px 17px;font-size:13.5px;
 }
 .note.warn{border-left-color:var(--warn);background:var(--warn-wash)}
 .note.bad{border-left-color:var(--bad);background:var(--bad-wash)}
@@ -288,7 +300,7 @@ td.nowrap{white-space:nowrap}
 .onboard li.done b{color:var(--ink-3);font-weight:500}
 
 .empty{text-align:center;padding:44px 20px;color:var(--ink-3)}
-.empty h3{color:var(--ink);font-size:15px;margin:0 0 6px;font-weight:600}
+.empty h3{color:var(--ink);font-size:16px;margin:0 0 6px;font-weight:680;letter-spacing:-.01em}
 .empty p{margin:0 0 18px;font-size:13.5px}
 
 label.fld{display:block;margin-bottom:14px}
@@ -298,7 +310,7 @@ label.fld .lb{
 }
 label.fld .hint{display:block;font-size:12.5px;color:var(--ink-3);margin-top:5px;line-height:1.5}
 input[type=text],input[type=password],select{
-  width:100%;padding:8px 11px;border:1px solid var(--line);border-radius:5px;
+  width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:var(--r-sm);
   background:var(--panel);color:var(--ink);font-family:var(--mono);font-size:13px;
 }
 input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--accent-wash)}
@@ -314,7 +326,7 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 }
 .rail-steps .seg.done{background:var(--ok)}
 .rail-steps .seg.skip{background:transparent;border-color:var(--ok)}
-.rail-steps .seg.run{background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
+.rail-steps .seg.run{background:var(--run);animation:pulse 1.4s ease-in-out infinite}
 .rail-steps .seg.fail{background:var(--bad)}
 .rail-cap{
   display:flex;justify-content:space-between;gap:10px;margin-top:7px;
@@ -340,14 +352,14 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 .steplist.plan .s .step-note{font-size:12.5px;color:var(--ink-3)}
 .steplist .s.pending .nm{color:var(--ink-3)}
 .steplist .s.failed .nm{color:var(--bad);font-weight:600}
-.steplist .s.running .nm{color:var(--accent);font-weight:600}
+.steplist .s.running .nm{color:var(--run);font-weight:600}
 
 /* ── 一次性密钥面板 ───────────────────────────────
    这是全站唯一「看完就没了」的东西，所以它必须长得跟别的都不一样：
    借终端那套深色，明确它是要被复制走的机器值，而不是页面上的一段信息。
    刷新即消失，视觉上也要让人当场就想复制。 */
 .reveal{
-  background:var(--term-bg);border:1px solid var(--accent);border-radius:8px;
+  background:var(--term-bg);border:1px solid var(--accent);border-radius:var(--r-lg);
   overflow:hidden;margin-bottom:22px;box-shadow:0 0 0 3px var(--accent-wash);
 }
 .reveal-hd{padding:14px 18px 12px;border-bottom:1px solid rgba(255,255,255,.08)}
@@ -359,7 +371,7 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 .reveal-meta .muted{color:#7b8697}
 .reveal-cdk{
   display:block;background:rgba(255,255,255,.06);color:#e8edf3;
-  padding:11px 13px;border-radius:5px;font-family:var(--mono);font-size:13px;
+  padding:12px 14px;border-radius:var(--r-sm);font-family:var(--mono);font-size:13px;
   word-break:break-all;user-select:all;
 }
 .reveal-foot{margin:0;padding:12px 18px;font-size:12.5px;color:#8b96a5}
@@ -392,14 +404,14 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
 .runsplit{display:grid;grid-template-columns:274px minmax(0,1fr);gap:22px;align-items:start}
 .runsplit .side{position:sticky;top:96px}
 
-.term{background:var(--term-bg);border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+.term{background:var(--term-bg);border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--line)}
 .term-hd{
   display:flex;align-items:center;gap:10px;padding:9px 14px;
   border-bottom:1px solid rgba(255,255,255,.08);
   font-family:var(--mono);font-size:11px;color:#8b96a5;letter-spacing:.04em;
 }
 .term-hd .lamp{width:7px;height:7px;border-radius:50%;background:var(--ok)}
-.term-hd .lamp.live{background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
+.term-hd .lamp.live{background:var(--run);animation:pulse 1.4s ease-in-out infinite}
 .term-hd .spacer{margin-left:auto}
 .term-bd{
   margin:0;padding:14px 16px;overflow:auto;
@@ -422,7 +434,7 @@ input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 
   <aside class="rail">
     <div class="rail-brand">
       <span class="mark">cc</span>
-      <span><b>ccw</b><span>控制台</span></span>
+      <span><b>ccw</b><span class="sub">控制台</span></span>
     </div>
     <nav class="rail-nav">
       <div class="nav-label">运维</div>

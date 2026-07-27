@@ -5,65 +5,156 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{block "title" .}}ccw · 云端 Claude Code 工作空间{{end}}</title>
 <style>
-/* 自包含样式：不引用任何外部CDN（设计§3.3——下载页不应因第三方不可达而挂掉） */
+/* 公开站：落地页、下载、快速开始、查询接入地址。
+   自包含样式，不引用任何外部CDN（设计§3.3——下载页不应因第三方不可达而挂掉）。
+
+   配色与管理后台同源（2026-07-27定）：珊瑚橙做唯一强调色、暖米白底、暖炭深色模式。
+   两边共用一组色值，只在密度上不同——后台是操作台，这里是文档，
+   所以字更大、行更松、留白更多。 */
 :root{
-  --bg:#ffffff;--fg:#1a1a1a;--muted:#666;--line:#e3e3e3;--card:#f7f7f8;
-  --accent:#4f46e5;--accent-fg:#ffffff;--code-bg:#f0f0f2;--ok:#15803d;--warn:#b45309;
+  --ground:#faf9f7;  --panel:#ffffff;   --sunk:#f4f2ee;
+  --line:#e6e1d9;    --line-soft:#efebe4;
+  --ink:#1f1e1d;     --ink-2:#5c5955;   --ink-3:#8b8781;
+  --accent:#c96442;  --accent-ink:#ffffff; --accent-wash:#f9e9e1;
+  --ok:#2f7a5b;      --warn:#96631a;    --bad:#b0453a;
+  --warn-wash:#f9edd8;
+  --code-bg:#f4f2ee;
+  --shadow:0 1px 2px rgba(31,30,29,.05), 0 10px 28px -18px rgba(31,30,29,.3);
+  --sans:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,"Cascadia Mono",Consolas,monospace;
 }
-@media (prefers-color-scheme: dark){
-  :root{--bg:#101014;--fg:#ececf1;--muted:#9a9aa5;--line:#2a2a32;--card:#17171d;
-    --accent:#818cf8;--accent-fg:#101014;--code-bg:#1e1e26;--ok:#4ade80;--warn:#fbbf24;}
+@media (prefers-color-scheme:dark){
+  :root{
+    --ground:#1f1e1d; --panel:#282725;  --sunk:#191817;
+    --line:#3a3835;   --line-soft:#302e2b;
+    --ink:#f5f3ee;    --ink-2:#a8a29a;  --ink-3:#7c7770;
+    --accent:#e08a6b; --accent-ink:#2a1610; --accent-wash:#3b2419;
+    --ok:#5fae8a;     --warn:#d9a552;   --bad:#e08278;
+    --warn-wash:#332818;
+    --code-bg:#191817;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -18px rgba(0,0,0,.65);
+  }
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);
-  font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+body{
+  margin:0;background:var(--ground);color:var(--ink);
+  font-family:var(--sans);font-size:16px;line-height:1.75;
+  -webkit-font-smoothing:antialiased;
+}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
-.wrap{max-width:920px;margin:0 auto;padding:0 20px}
-header{border-bottom:1px solid var(--line)}
-header .wrap{display:flex;align-items:center;gap:24px;height:56px}
-header .brand{font-weight:700;font-size:18px;color:var(--fg)}
-header nav{display:flex;gap:18px;font-size:14px}
-main{padding:40px 0 64px}
-footer{border-top:1px solid var(--line);padding:20px 0;color:var(--muted);font-size:13px}
-h1{font-size:32px;line-height:1.3;margin:0 0 12px}
-h2{font-size:20px;margin:36px 0 12px}
-p.lead{font-size:18px;color:var(--muted);margin:0 0 24px}
-.btn{display:inline-block;padding:10px 18px;border-radius:8px;background:var(--accent);
-  color:var(--accent-fg);font-weight:600;border:none;cursor:pointer;font-size:15px}
-.btn:hover{opacity:.9;text-decoration:none}
-.btn.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin:24px 0}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px}
-.card h3{margin:0 0 8px;font-size:16px}
-.card p{margin:0;color:var(--muted);font-size:14px}
-code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px}
-code{background:var(--code-bg);padding:2px 6px;border-radius:5px}
-pre{background:var(--code-bg);padding:14px 16px;border-radius:8px;overflow-x:auto}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+.wrap{max-width:940px;margin:0 auto;padding:0 24px}
+
+header{
+  border-bottom:1px solid var(--line);background:var(--ground);
+  position:sticky;top:0;z-index:10;
+}
+header .wrap{display:flex;align-items:center;gap:26px;height:64px}
+header .brand{
+  display:flex;align-items:center;gap:10px;
+  font-weight:700;font-size:18px;letter-spacing:-.02em;color:var(--ink);
+}
+header .brand:hover{text-decoration:none}
+header .brand .mark{
+  width:28px;height:28px;border-radius:9px;flex:none;
+  background:var(--accent);color:var(--accent-ink);
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:12.5px;font-weight:700;letter-spacing:-.03em;
+}
+header nav{display:flex;gap:22px;font-size:14.5px}
+header nav a{color:var(--ink-2)}
+header nav a:hover{color:var(--ink);text-decoration:none}
+
+main{padding:56px 0 88px}
+footer{
+  border-top:1px solid var(--line);padding:28px 0;
+  color:var(--ink-3);font-size:13.5px;
+}
+
+/* 标题：参考里那种重而紧的排法。中文标题字重靠系统字体，
+   所以用字号与字距拉开层级，而不是指望更多字重档位。 */
+h1{font-size:40px;line-height:1.25;letter-spacing:-.03em;font-weight:750;margin:0 0 16px}
+h2{font-size:23px;line-height:1.4;letter-spacing:-.02em;font-weight:700;margin:52px 0 14px}
+h3{font-size:16.5px;letter-spacing:-.01em;font-weight:680;margin:0 0 8px}
+p.lead{font-size:18.5px;line-height:1.7;color:var(--ink-2);margin:0 0 28px;max-width:62ch}
+
+.btn{
+  display:inline-flex;align-items:center;gap:8px;padding:11px 20px;border-radius:10px;
+  background:var(--accent);color:var(--accent-ink);font-weight:600;font-size:15px;
+  border:1px solid transparent;cursor:pointer;font-family:inherit;
+}
+.btn:hover{filter:brightness(1.06);text-decoration:none}
+.btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+.btn.ghost:hover{border-color:var(--accent);color:var(--accent);filter:none}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px;margin:28px 0}
+.card{
+  background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  padding:22px;box-shadow:var(--shadow);
+}
+.card h3{margin:0 0 8px}
+.card p{margin:0;color:var(--ink-2);font-size:14.5px;line-height:1.7}
+
+code,pre{font-family:var(--mono);font-size:13.5px}
+code{background:var(--code-bg);padding:2.5px 7px;border-radius:6px}
+pre{
+  background:var(--code-bg);border:1px solid var(--line-soft);
+  padding:16px 18px;border-radius:12px;overflow-x:auto;line-height:1.65;
+}
 pre code{background:none;padding:0}
+
 .scroll{overflow-x:auto}
-table{border-collapse:collapse;width:100%;font-size:14px}
-th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
-th{color:var(--muted);font-weight:600}
-td.sha{font-family:ui-monospace,Menlo,monospace;font-size:12px;max-width:280px;overflow:hidden;text-overflow:ellipsis}
-.notice{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);
-  border-radius:8px;padding:12px 16px;font-size:14px;margin:16px 0}
-.muted{color:var(--muted)}
+table{border-collapse:collapse;width:100%;font-size:14.5px}
+th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line-soft);white-space:nowrap}
+th{
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:500;
+}
+tbody tr:last-child td{border-bottom:none}
+td.sha{font-family:var(--mono);font-size:12px;max-width:280px;overflow:hidden;text-overflow:ellipsis}
+
+.notice{
+  background:var(--accent-wash);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:0 12px 12px 0;padding:14px 18px;font-size:14.5px;margin:20px 0;
+}
+.notice.warn{border-left-color:var(--warn);background:var(--warn-wash)}
+.muted{color:var(--ink-3)}
 .ok{color:var(--ok)}
 .warn{color:var(--warn)}
-input[type=text]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;
-  background:var(--bg);color:var(--fg);font-family:ui-monospace,Menlo,monospace;font-size:14px}
-.steps{counter-reset:step;list-style:none;padding:0;margin:24px 0}
-.steps li{counter-increment:step;position:relative;padding:0 0 20px 44px}
-.steps li::before{content:counter(step);position:absolute;left:0;top:2px;width:28px;height:28px;
-  border-radius:50%;background:var(--accent);color:var(--accent-fg);font-weight:700;
-  display:flex;align-items:center;justify-content:center;font-size:14px}
+
+input[type=text]{
+  width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;
+  background:var(--panel);color:var(--ink);font-family:var(--mono);font-size:14px;
+}
+input[type=text]:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--accent-wash)}
+
+/* 步骤条：三步是真实的顺序，所以编号承载信息，不是装饰。 */
+.steps{counter-reset:step;list-style:none;padding:0;margin:28px 0}
+.steps li{counter-increment:step;position:relative;padding:0 0 24px 48px}
+.steps li::before{
+  content:counter(step,decimal-leading-zero);position:absolute;left:0;top:3px;
+  width:30px;height:30px;border-radius:10px;
+  background:var(--accent-wash);color:var(--accent);
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:12px;font-weight:700;
+}
+
+@media (max-width:640px){
+  h1{font-size:31px}
+  h2{font-size:20px;margin-top:40px}
+  main{padding:36px 0 64px}
+  header .wrap{gap:16px}
+  header nav{gap:14px;font-size:13.5px}
+}
 </style>
 </head>
 <body>
 <header>
   <div class="wrap">
-    <a class="brand" href="/">ccw</a>
+    <a class="brand" href="/"><span class="mark">cc</span>ccw</a>
     <nav>
       <a href="/download">下载</a>
       <a href="/quickstart">快速开始</a>
