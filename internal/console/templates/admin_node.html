@@ -19,11 +19,13 @@
     <b style="font-size:15px">等待 DNS 记录生效</b>
   </div>
   <div class="copybox">
-    <span>{{.DNSInstruction}}</span>
+    <span id="dnsrec">{{.DNSInstruction}}</span>
     <span class="spacer"></span>
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
-      <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
-    </svg>
+    <button class="copy" type="button" data-copy="dnsrec" aria-label="复制这条记录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
+      </svg><span class="done">已复制</span>
+    </button>
   </div>
   <span class="muted" style="font-size:13px">
     加完这条记录后，回到本页点右上角「继续 / 重新部署」——已完成的步骤会跳过，从 dns-allocate 继续。

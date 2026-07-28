@@ -27,7 +27,11 @@ import (
 // 比compose-up快得多；超过这个时间基本等于节点有问题。
 const AdminCmdTimeout = 45 * time.Second
 
-// RunAdmin在节点上执行一条ccwadmin子命令，返回其stdout。
+// RunAdmin在节点上执行一条ccwadmin子命令，返回其**未脱敏的**stdout。
+//
+// 返回原文是必须的：signCDK这类子命令的输出里就有要交付给管理员的CDK明文，
+// 脱敏发生在拿到值之前等于明文永远到不了人手里。**调用方只许解析它**，
+// 不得写进日志、错误信息或数据库。
 //
 // args里的每一项都会被shellQuote，调用方不必自己转义；但**调用方仍然要
 // 保证子命令名来自固定集合**——这里不做白名单，因为Console侧的handler
@@ -67,7 +71,11 @@ func (o *Orchestrator) RunAdmin(ctx context.Context, nodeID string, args ...stri
 
 	cctx, cancel := context.WithTimeout(ctx, AdminCmdTimeout)
 	defer cancel()
-	res, err := cli.Run(cctx, cmd)
+	// issue-cdk / rotate-cdk 会把新签发的CDK明文打在stdout上，而它有一条
+	// 合法去处：经内存中转在浏览器显示一次（§8.4）。Run会在源头把它抹成
+	// [REDACTED]，明文就永远到不了管理员手里——所以这里取原文。
+	// **raw只许交给解析器**；报错一律用脱敏后的res。
+	res, raw, err := cli.RunCapturingSecret(cctx, cmd)
 	if err != nil {
 		return "", err
 	}
@@ -76,7 +84,7 @@ func (o *Orchestrator) RunAdmin(ctx context.Context, nodeID string, args ...stri
 		// 把它整段抛给页面反而可能带出目标信息。只给退出码与一句人话。
 		return "", fmt.Errorf("节点上的 ccwadmin %s 执行失败（退出码%d）", args[0], res.ExitCode)
 	}
-	return res.Stdout, nil
+	return raw, nil
 }
 
 // IssuedCDK是一次签发的结果。CDK字段是**明文**，只应活到浏览器渲染完那一刻。

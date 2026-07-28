@@ -43,11 +43,13 @@
                 <div class="note warn inset" style="flex-direction:column;align-items:stretch;gap:12px">
                   <b>请在你的 DNS 服务商处添加如下 A 记录：</b>
                   <div class="copybox">
-                    <span>{{.Instruction}}</span>
+                    <span id="rec-{{.Seq}}">{{.Instruction}}</span>
                     <span class="spacer"></span>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
-                      <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
-                    </svg>
+                    <button class="copy" type="button" data-copy="rec-{{.Seq}}" aria-label="复制这条记录">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
+      </svg><span class="done">已复制</span>
+                    </button>
                   </div>
                   <span class="muted" style="font-size:13px">加完这条记录后，回到节点页继续 / 重新部署。</span>
                 </div>

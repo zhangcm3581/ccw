@@ -22,10 +22,13 @@
       <span class="k">项目名</span><span class="v">{{.Slug}}</span>
       <span class="k" style="margin-left:14px">public_id</span><span class="v">{{.PublicID}}</span>
     </div>
-    <code class="reveal-cdk">{{.CDK}}
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+    <code class="reveal-cdk">
+      <span id="cdk-{{.PublicID}}">{{.CDK}}</span>
+      <button class="copy" type="button" data-copy="cdk-{{.PublicID}}" aria-label="复制 CDK">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
         <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
-      </svg>
+      </svg><span class="done">已复制</span>
+      </button>
     </code>
   </div>
   {{end}}

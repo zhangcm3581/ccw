@@ -337,7 +337,15 @@ code{font-family:var(--mono);font-size:.9em;background:var(--idle-wash);padding:
   padding:13px 16px;font-family:var(--mono);font-size:14px;user-select:all;
 }
 .copybox .spacer{margin-left:auto}
-.copybox svg{width:17px;height:17px;color:var(--ink-3);flex:none}
+.copybox .copy{
+  flex:none;border:none;background:transparent;cursor:pointer;padding:4px;
+  color:var(--ink-3);border-radius:6px;line-height:0;
+}
+.copybox .copy:hover{color:var(--ink);background:var(--idle-wash)}
+.copybox .copy svg{width:17px;height:17px;display:block}
+.copybox .copy .done{display:none;font-size:12px;line-height:1.4;color:var(--ok)}
+.copybox .copy.ok svg{display:none}
+.copybox .copy.ok .done{display:block}
 
 .empty{text-align:center;padding:52px 20px;color:var(--ink-3)}
 .empty h3{color:var(--ink);font-size:17px;margin:0 0 8px;font-weight:700}
@@ -453,7 +461,15 @@ select{font-family:var(--sans)}
   border-radius:var(--r-md);padding:14px 18px;
   font-family:var(--mono);font-size:15px;color:#f5f3ef;word-break:break-all;user-select:all;
 }
-.reveal-cdk svg{width:18px;height:18px;color:var(--term-dim);flex:none;margin-left:auto}
+.reveal-cdk .copy{
+  flex:none;margin-left:auto;border:none;background:transparent;cursor:pointer;padding:4px;
+  color:var(--term-dim);border-radius:6px;line-height:0;
+}
+.reveal-cdk .copy:hover{color:#f5f3ef;background:rgba(255,255,255,.08)}
+.reveal-cdk .copy svg{width:18px;height:18px;display:block}
+.reveal-cdk .copy .done{display:none;font-size:12px;line-height:1.4;color:var(--ok)}
+.reveal-cdk .copy.ok svg{display:none}
+.reveal-cdk .copy.ok .done{display:block}
 .reveal-foot{margin:16px 0 0;font-size:13px;color:var(--term-dim)}
 
 /* ── 运行详情：步骤 + 终端 ──────────────────────── */
@@ -570,6 +586,34 @@ select{font-family:var(--sans)}
       else document.documentElement.setAttribute('data-theme', v);
       try { localStorage.setItem('ccw-theme', v); } catch (e) {}
       mark(v);
+    });
+  });
+
+  // 复制按钮：把 data-copy 指向的元素的文本写进剪贴板。
+  // 图标看着能点却什么都不做是最差的一种——要么接上，要么别画。
+  // clipboard API 需要安全上下文；后台一定在 HTTPS 后面，
+  // 万一不是（本地开发）就退回选中文本，让 Ctrl-C 仍然可用。
+  document.querySelectorAll('[data-copy]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var target = document.getElementById(btn.dataset.copy);
+      if (!target) return;
+      var text = (target.innerText || target.textContent || '').trim();
+      function flash() {
+        btn.classList.add('ok');
+        setTimeout(function () { btn.classList.remove('ok'); }, 1600);
+      }
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(flash, selectFallback);
+      } else {
+        selectFallback();
+      }
+      function selectFallback() {
+        var r = document.createRange();
+        r.selectNodeContents(target);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
     });
   });
 })();
