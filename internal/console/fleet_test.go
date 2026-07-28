@@ -294,6 +294,53 @@ func TestNodeCreateValidatesSlugs(t *testing.T) {
 	}
 }
 
+// 首登凭据密码与私钥二选一。
+//
+// 这条守的是一个真实事故：云厂商默认镜像多半是 PasswordAuthentication no，
+// 只收密码等于在最常见的 VPS 上开箱即挂。校验顺序是
+// 名称/IP/用户 → 凭据 → slug → zone，所以这里故意留空 zone，
+// 用「停在哪一道校验」来判断凭据那一关有没有放行。
+func TestNodeCreateAcceptsKeyOrPassword(t *testing.T) {
+	const key = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----"
+	base := func() url.Values {
+		return url.Values{
+			"name": {"n1"}, "host": {"203.0.113.7"}, "ssh_user": {"root"},
+			"slugs": {"project-a"}, "csrf_token": {""},
+		}
+	}
+	cases := []struct {
+		name       string
+		password   string
+		privateKey string
+		wantStop   string // 期望被拦在哪一道
+	}{
+		{"只给密码", "pw", "", "zone"},
+		{"只给私钥", "", key, "zone"},
+		{"两者都给", "pw", key, "zone"},
+		{"两者都不给", "", "", "私钥"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, fs, sess, csrf := newFleetServer(t)
+			form := base()
+			form.Set("csrf_token", csrf.Value)
+			form.Set("password", c.password)
+			form.Set("private_key", c.privateKey)
+
+			w := postForm(t, s, "/admin/nodes/new", form, []*http.Cookie{sess, csrf}, "203.0.113.5")
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("缺zone应400，got %d", w.Code)
+			}
+			if !strings.Contains(w.Body.String(), c.wantStop) {
+				t.Errorf("应被拦在%q那一关: %s", c.wantStop, w.Body.String())
+			}
+			if len(fs.created) != 0 {
+				t.Error("校验未过时不得创建节点")
+			}
+		})
+	}
+}
+
 func TestNodeCreateRequiresCSRF(t *testing.T) {
 	s, _, sess, _ := newFleetServer(t)
 	form := url.Values{"name": {"n1"}, "host": {"1.2.3.4"}, "ssh_user": {"root"}, "password": {"pw"}}
