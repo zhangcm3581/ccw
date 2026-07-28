@@ -25,6 +25,10 @@ import (
 // Runner是provision需要的SSH能力面（单测注入假实现，避免每个测试都起SSH server）。
 type Runner interface {
 	Run(ctx context.Context, cmd string) (sshexec.Result, error)
+	// RunCapturingSecret额外返回未脱敏的stdout。**只有init-projects用它**：
+	// 新签发的CDK明文要经内存中转在浏览器显示一次，脱敏发生在拿到值之前
+	// 就等于明文永远到不了管理员手里。raw只许解析，不许进日志与错误信息。
+	RunCapturingSecret(ctx context.Context, cmd string) (sshexec.Result, string, error)
 	// RunStdin把内容经stdin喂给远端命令（推送源码包用；命令行在节点上人人可见）。
 	RunStdin(ctx context.Context, cmd string, input io.Reader) (sshexec.Result, error)
 }

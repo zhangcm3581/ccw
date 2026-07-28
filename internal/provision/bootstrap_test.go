@@ -9,6 +9,7 @@ import (
 
 	"ccw/internal/dns"
 	"ccw/internal/pipeline"
+	"ccw/internal/redact"
 	"ccw/internal/sshexec"
 )
 
@@ -32,6 +33,17 @@ func (s *scriptRunner) Run(_ context.Context, cmd string) (sshexec.Result, error
 		}
 	}
 	return sshexec.Result{}, nil
+}
+
+// RunCapturingSecret模拟生产行为：Result里的Stdout**已脱敏**，raw是原文。
+// 这样如果init-projects退回去解析res.Stdout，CDK就会变成[REDACTED]，
+// 下面那条"明文只经回调一次"的测试会立刻红——这正是它要守的东西。
+func (s *scriptRunner) RunCapturingSecret(ctx context.Context, cmd string) (sshexec.Result, string, error) {
+	res, err := s.Run(ctx, cmd)
+	raw := res.Stdout
+	res.Stdout = redact.String(raw)
+	res.Stderr = redact.String(res.Stderr)
+	return res, raw, err
 }
 
 // RunStdin记录命令与stdin内容（推送源码包用）。

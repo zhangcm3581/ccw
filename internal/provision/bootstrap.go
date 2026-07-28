@@ -469,13 +469,22 @@ func stepInitProjects(d Deps) pipeline.Step {
 		Name: "init-projects",
 		Run: func(ctx context.Context, log pipeline.Logf) error {
 			for _, slug := range d.Slugs {
-				out, err := run(ctx, d, fmt.Sprintf(
+				// **这一步用RunCapturingSecret而不是run**：CDK明文就打在stdout上，
+				// 常规路径会在这里就把它抹成[REDACTED]，管理员再也拿不到。
+				// raw只喂给解析器；报错一律用脱敏过的res。
+				res, raw, err := d.Exec.RunCapturingSecret(ctx, fmt.Sprintf(
 					"cd %s && %sdocker compose -p %s run --rm --entrypoint /ccwadmin control-api init-project --slug %s --json",
 					shellQuote(d.deployDir()), d.Sudo, shellQuote(d.ComposeProjectName), shellQuote(slug)))
 				if err != nil {
 					return fmt.Errorf("建项目%s失败: %w", slug, err)
 				}
-				pr := parseInitProjectJSON(out)
+				if res.ExitCode != 0 {
+					return &pipeline.ExitError{
+						Code: res.ExitCode,
+						Err:  fmt.Errorf("建项目%s失败: %s", slug, firstLine(res.Stderr+res.Stdout)),
+					}
+				}
+				pr := parseInitProjectJSON(raw)
 				pr.Slug = slug // 以请求的slug为准，不信回显
 				created := pr.Created
 				if d.OnProject != nil {

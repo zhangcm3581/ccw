@@ -185,9 +185,28 @@ func (c *Client) RunStdin(ctx context.Context, cmd string, input io.Reader) (Res
 // 退出码非0**不算错误**：precheck步骤靠退出码判断"是否已满足"，
 // 把它当error会让每个调用点都要拆包。返回error只表示连接/通道层面的失败。
 func (c *Client) Run(ctx context.Context, cmd string) (Result, error) {
+	res, _, err := c.run(ctx, cmd)
+	return res, err
+}
+
+// RunCapturingSecret与Run执行相同，但**额外返回未脱敏的stdout原文**。
+//
+// 为什么需要它：`ccwadmin init-project`把新签发的CDK明文打在stdout上，
+// 而Run会在最靠近数据源处把它抹成[REDACTED]——那条规则对日志是对的，
+// 但这里的明文有一条合法去处：经内存中转在浏览器上显示一次（设计§8.4）。
+// 脱敏发生在拿到值之前，明文就永远到不了管理员手里。
+//
+// **调用方的义务**：raw只能用于解析，**绝不能进日志、错误信息或数据库**。
+// 返回的Result仍是脱敏过的，出错时请用它来拼错误信息。
+// 全仓只应有一个调用点（provision的init-projects步骤）。
+func (c *Client) RunCapturingSecret(ctx context.Context, cmd string) (res Result, raw string, err error) {
+	return c.run(ctx, cmd)
+}
+
+func (c *Client) run(ctx context.Context, cmd string) (Result, string, error) {
 	sess, err := c.conn.NewSession()
 	if err != nil {
-		return Result{}, fmt.Errorf("sshexec: new session: %w", err)
+		return Result{}, "", fmt.Errorf("sshexec: new session: %w", err)
 	}
 	defer sess.Close()
 
@@ -197,7 +216,7 @@ func (c *Client) Run(ctx context.Context, cmd string) (Result, error) {
 
 	done := make(chan error, 1)
 	if err := sess.Start(cmd); err != nil {
-		return Result{}, fmt.Errorf("sshexec: start: %w", err)
+		return Result{}, "", fmt.Errorf("sshexec: start: %w", err)
 	}
 	go func() { done <- sess.Wait() }()
 
@@ -205,18 +224,19 @@ func (c *Client) Run(ctx context.Context, cmd string) (Result, error) {
 	case <-ctx.Done():
 		sess.Signal(ssh.SIGKILL)
 		sess.Close()
-		return Result{}, ctx.Err()
+		return Result{}, "", ctx.Err()
 	case werr := <-done:
-		res := Result{Stdout: redact.String(out.String()), Stderr: redact.String(errOut.String())}
+		raw := out.String()
+		res := Result{Stdout: redact.String(raw), Stderr: redact.String(errOut.String())}
 		var ee *ssh.ExitError
 		switch {
 		case werr == nil:
-			return res, nil
+			return res, raw, nil
 		case errors.As(werr, &ee):
 			res.ExitCode = ee.ExitStatus() // 非0退出码是正常返回值，不是error
-			return res, nil
+			return res, raw, nil
 		default:
-			return res, fmt.Errorf("sshexec: wait: %w", werr)
+			return res, raw, fmt.Errorf("sshexec: wait: %w", werr)
 		}
 	}
 }

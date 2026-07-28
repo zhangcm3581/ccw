@@ -24,6 +24,12 @@ func (f *fakeRunner) RunStdin(_ context.Context, cmd string, in io.Reader) (sshe
 	return f.Run(context.Background(), cmd)
 }
 
+// Harden不需要原文，这里直接复用Run（脱敏与否对凭据交接没有影响）。
+func (f *fakeRunner) RunCapturingSecret(ctx context.Context, cmd string) (sshexec.Result, string, error) {
+	res, err := f.Run(ctx, cmd)
+	return res, res.Stdout, err
+}
+
 func (f *fakeRunner) Run(_ context.Context, cmd string) (sshexec.Result, error) {
 	f.cmds = append(f.cmds, cmd)
 	if f.err != nil {
