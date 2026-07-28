@@ -131,11 +131,13 @@ func (s *Server) adminNodeCreate(w http.ResponseWriter, r *http.Request, sess co
 	host := strings.TrimSpace(r.PostFormValue("host"))
 	user := strings.TrimSpace(r.PostFormValue("ssh_user"))
 	password := r.PostFormValue("password")
-	// 密码用完即弃（§8.4）：**永不落库、永不进日志**。
-	// 它会被复制进BootstrapInput交给纳管goroutine（凭据交接需要它），
+	privateKey := strings.TrimSpace(r.PostFormValue("private_key"))
+	// 首登凭据用完即弃（§8.4）：**永不落库、永不进日志**。
+	// 它们会被复制进BootstrapInput交给纳管goroutine（凭据交接需要），
 	// 那个结构体是瞬时的、随goroutine结束一起回收；下面的ZeroString只清本函数
 	// 这一份副本——Go的字符串不可变，无法真正擦除内存，这是尽力而为不是保证。
 	defer provision.ZeroString(&password)
+	defer provision.ZeroString(&privateKey)
 
 	port := 22
 	if v := strings.TrimSpace(r.PostFormValue("ssh_port")); v != "" {
@@ -146,8 +148,15 @@ func (s *Server) adminNodeCreate(w http.ResponseWriter, r *http.Request, sess co
 		}
 		port = n
 	}
-	if name == "" || host == "" || user == "" || password == "" {
-		renderErr("节点名称、IP、用户名与密码都必填")
+	if name == "" || host == "" || user == "" {
+		renderErr("节点名称、公网 IP 与 SSH 用户名都必填")
+		return
+	}
+	// 密码与私钥二选一即可。**云厂商默认镜像多半禁掉了密码登录**
+	// （DigitalOcean/AWS/GCP 出厂就是 PasswordAuthentication no），
+	// 那种机器只能走私钥——所以这里不能强制要密码。
+	if password == "" && privateKey == "" {
+		renderErr("请填写 SSH 密码，或粘贴一把能登录这台机器的私钥")
 		return
 	}
 
@@ -192,7 +201,8 @@ func (s *Server) adminNodeCreate(w http.ResponseWriter, r *http.Request, sess co
 	}
 
 	in := provision.BootstrapInput{
-		NodeID: nodeID, ZoneID: zoneID, Password: password,
+		NodeID: nodeID, ZoneID: zoneID,
+		Password: password, PrivateKey: privateKey,
 		Slugs: slugs, TriggeredBy: sess.UserID,
 	}
 	runID, err := s.Fleet.Orchestrator.Bootstrap(ctx, in)

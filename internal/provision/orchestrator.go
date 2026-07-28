@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -70,11 +71,18 @@ type Store interface {
 // nodeCredContext是托管私钥信封加密的AAD用途标签。
 const nodeCredContext = "node-cred"
 
-// BootstrapInput是一次纳管的输入。**Password只在本次调用中存在**。
+// BootstrapInput是一次纳管的输入。
+// **Password与PrivateKey都只在本次调用中存在**：用完即弃，永不落库（§8.4）。
 type BootstrapInput struct {
-	NodeID      string
-	ZoneID      string
-	Password    string // 首登密码；用完即弃，永不落库（§8.4）
+	NodeID string
+	ZoneID string
+	// Password是首登密码。主流云厂商的默认镜像（DigitalOcean/AWS/GCP）
+	// 出厂就是`PasswordAuthentication no`，那种机器上这一项填了也没用，
+	// 要走PrivateKey。
+	Password string
+	// PrivateKey是管理员已有的SSH私钥PEM，用于首次连接。
+	// 与Password二选一或同时提供（同时提供时先试密钥）。
+	PrivateKey  string
 	Slugs       []string
 	TriggeredBy string
 	// Kind区分首次纳管与断点续跑。两者走的是同一条流水线，但在页面上是
@@ -138,7 +146,7 @@ func (o *Orchestrator) runBootstrap(ctx context.Context, runID string, in Bootst
 	if node.HostKeyFP != nil {
 		target.KnownFingerprint = *node.HostKeyFP
 	}
-	cli, sudo, err := o.connect(ctx, node, target, in.Password, log)
+	cli, sudo, err := o.connect(ctx, node, target, in.PrivateKey, in.Password, log)
 	if err != nil {
 		if errors.Is(err, sshexec.ErrHostKeyChanged) {
 			// 指纹变了：可能是重装、也可能是中间人。中止并标记，需管理员显式确认（A25）。
@@ -241,9 +249,38 @@ func (o *Orchestrator) runBootstrap(ctx context.Context, runID string, in Bootst
 	return nil
 }
 
-// connect优先用托管密钥；没有时用首登密码。返回可用的client与sudo前缀。
+// firstConnectAuth按管理员提供的凭据组装首次连接的认证方式。
+//
+// 两种都给时**先试密钥**：密钥失败不消耗密码错误计数，顺序反过来更容易
+// 撞上fail2ban。返回的labels只用于日志，**不含任何凭据内容**。
+func firstConnectAuth(privateKey, password string) ([]ssh.AuthMethod, []string, error) {
+	var auth []ssh.AuthMethod
+	var labels []string
+	if privateKey != "" {
+		m, err := sshexec.AuthFromPrivateKey([]byte(privateKey))
+		if err != nil {
+			// AuthFromPrivateKey已经把细节挡掉了（错误可能带出密钥片段）。
+			// 这里补一句人话：最常见的原因是贴了公钥、或私钥带口令。
+			return nil, nil, errors.New("私钥无法解析：请粘贴完整的私钥（-----BEGIN ... PRIVATE KEY----- 那一段），" +
+				"且不能是带口令的加密私钥")
+		}
+		auth = append(auth, m)
+		labels = append(labels, "私钥")
+	}
+	if password != "" {
+		auth = append(auth, ssh.Password(password))
+		labels = append(labels, "密码")
+	}
+	if len(auth) == 0 {
+		return nil, nil, errors.New("既无托管密钥，也未提供密码或私钥")
+	}
+	return auth, labels, nil
+}
+
+// connect优先用托管密钥；没有时用管理员提供的私钥/密码。
+// 返回可用的client与sudo前缀。
 func (o *Orchestrator) connect(ctx context.Context, node consolestore.Node, target sshexec.Target,
-	password string, log func(string, ...any)) (*sshexec.Client, string, error) {
+	privateKey, password string, log func(string, ...any)) (*sshexec.Client, string, error) {
 	var auth []ssh.AuthMethod
 	if privEnc, nonce, _, err := o.Store.NodeCredential(ctx, node.ID); err == nil {
 		priv, derr := o.Box.Open(privEnc, nonce, nodeCredContext)
@@ -256,11 +293,13 @@ func (o *Orchestrator) connect(ctx context.Context, node consolestore.Node, targ
 		}
 		auth = append(auth, m)
 		log("用托管密钥连接 %s@%s", node.SSHUser, node.Host)
-	} else if password != "" {
-		auth = append(auth, ssh.Password(password))
-		log("用密码首次连接 %s@%s", node.SSHUser, node.Host)
 	} else {
-		return nil, "", errors.New("既无托管密钥也未提供密码")
+		a, labels, aerr := firstConnectAuth(privateKey, password)
+		if aerr != nil {
+			return nil, "", aerr
+		}
+		auth = a
+		log("首次连接 %s@%s（%s）", node.SSHUser, node.Host, strings.Join(labels, " / "))
 	}
 
 	cli, err := o.Dial(ctx, target, auth)

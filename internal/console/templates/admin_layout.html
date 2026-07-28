@@ -353,9 +353,22 @@ input[type=text],input[type=password],select{
   width:100%;padding:11px 14px;border:1px solid var(--line);border-radius:var(--r-md);
   background:var(--panel);color:var(--ink);font-family:var(--mono);font-size:14px;
 }
-input::placeholder{color:var(--ink-3)}
-input:focus,select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--accent-wash)}
+textarea{
+  width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:var(--r-md);
+  background:var(--panel);color:var(--ink);font-family:var(--mono);font-size:13px;
+  line-height:1.6;resize:vertical;
+}
+input::placeholder,textarea::placeholder{color:var(--ink-3)}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--accent-wash)}
 select{font-family:var(--sans)}
+/* 分段选择：与侧栏主题开关同款，用在「密码 / 私钥」二选一上 */
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--r-md);background:var(--sunk);padding:3px;gap:3px}
+.seg button{
+  padding:6px 18px;border:none;background:transparent;cursor:pointer;border-radius:7px;
+  font-family:var(--sans);font-size:13.5px;color:var(--ink-2);
+}
+.seg button:hover{color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--panel);color:var(--accent);font-weight:600;box-shadow:var(--shadow)}
 .row2{display:grid;grid-template-columns:1fr 140px;gap:14px}
 .filters{display:flex;gap:10px;align-items:center}
 .filters select{width:auto;min-width:150px;padding:9px 13px;font-size:14px}

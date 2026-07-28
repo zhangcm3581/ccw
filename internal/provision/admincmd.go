@@ -48,7 +48,7 @@ func (o *Orchestrator) RunAdmin(ctx context.Context, nodeID string, args ...stri
 	if node.HostKeyFP != nil {
 		target.KnownFingerprint = *node.HostKeyFP
 	}
-	cli, sudo, err := o.connect(ctx, node, target, "", func(string, ...any) {})
+	cli, sudo, err := o.connect(ctx, node, target, "", "", func(string, ...any) {})
 	if err != nil {
 		if errors.Is(err, sshexec.ErrHostKeyChanged) {
 			o.Store.SetNodeStatus(ctx, nodeID, "host_key_changed")

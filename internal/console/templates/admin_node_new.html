@@ -19,7 +19,7 @@
   </svg>
   <span>
     <b>开始前确认：</b>Ubuntu 22.04/24.04 或 Debian 12、有公网 IP、已放行 22/80/443、磁盘 ≥80 GB。<br>
-    填写的密码<b>只用于首次连接</b>——注入托管密钥并验证成功后立即丢弃，不落库、不进日志。
+    填写的密码或私钥<b>只用于首次连接</b>——注入托管密钥并验证成功后立即丢弃，不落库、不进日志。
   </span>
 </div>
 
@@ -48,11 +48,35 @@
             <input type="text" name="ssh_port" value="22" placeholder="22">
           </label>
         </div>
-        <label class="fld">
-          <span class="lb">SSH 密码</span>
-          <input type="password" name="password" placeholder="输入连接密码（仅用于首次连接）" required>
-          <span class="hint">用完即弃。非 root 用户需要 sudo 权限；不在 sudoers 里会在 harden 步骤明确失败，不做猜测性修复。</span>
-        </label>
+        <div class="fld">
+          <span class="lb">首次连接凭据</span>
+          <div class="seg" role="group" aria-label="首次连接凭据方式">
+            <button type="button" data-auth="password" aria-pressed="true">密码</button>
+            <button type="button" data-auth="key" aria-pressed="false">私钥</button>
+          </div>
+
+          <div data-auth-pane="password" style="margin-top:12px">
+            <input type="password" name="password" placeholder="输入连接密码（仅用于首次连接）">
+            <span class="hint">
+              云厂商的默认镜像常常关掉了密码登录（<code>PasswordAuthentication no</code>），
+              这时填密码会以 <code>attempted methods [none]</code> 失败——改用私钥。
+            </span>
+          </div>
+
+          <div data-auth-pane="key" style="margin-top:12px">
+            <textarea name="private_key" rows="6" spellcheck="false"
+              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;…&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
+            <span class="hint">
+              粘贴一把<b>已经能登录这台机器</b>的私钥（通常是本机 <code>~/.ssh/id_ed25519</code>，
+              即创建服务器时选的那个密钥对）。不能是 <code>.pub</code> 公钥，也不支持带口令的加密私钥。
+            </span>
+          </div>
+
+          <span class="hint" style="margin-top:10px">
+            两者都用完即弃：注入托管密钥并验证成功后立即丢弃，不落库、不进日志。
+            非 root 用户需要 sudo 权限；不在 sudoers 里会在 harden 步骤明确失败，不做猜测性修复。
+          </span>
+        </div>
       </div>
     </div>
 
@@ -101,5 +125,22 @@
     <span class="muted" style="font-size:13.5px">开始后可在节点详情查看实时日志，失败可从断点续跑。</span>
   </div>
 </form>
+
+<script>
+// 凭据方式二选一。**没有 JS 时两个输入框都显示**——后端本来就接受任一，
+// 所以降级后功能完整，只是界面不那么紧凑。
+(function () {
+  var panes = document.querySelectorAll('[data-auth-pane]');
+  var btns = document.querySelectorAll('[data-auth]');
+  function show(kind) {
+    panes.forEach(function (p) { p.hidden = p.dataset.authPane !== kind; });
+    btns.forEach(function (b) { b.setAttribute('aria-pressed', b.dataset.auth === kind ? 'true' : 'false'); });
+  }
+  btns.forEach(function (b) {
+    b.addEventListener('click', function () { show(b.dataset.auth); });
+  });
+  show('password');
+})();
+</script>
 
 {{end}}
