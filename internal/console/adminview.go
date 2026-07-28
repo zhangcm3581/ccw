@@ -89,9 +89,11 @@ func stepTone(status string) (text, tone, class string) {
 type runView struct {
 	ID, NodeID, NodeName string
 	Kind                 string
+	KindText             string // 中文类型：首次部署 / 补跑
 	StatusText, Tone     string
-	Started              string
+	Date, Time           string   // 开始时间拆两行显示，列宽不被撑开
 	Segments             []string // 每段的 CSS 类：done/skip/run/fail/（空＝未开始）
+	TrackClass           string   // 整条轨的色调：失败的运行整条是红的
 	StepLabel            string   // 当前（或失败）的步骤名
 	Progress             string   // "7/12"
 }
@@ -100,12 +102,34 @@ type runView struct {
 // 直接取自 provision.BootstrapStepNames，UI 与流水线不会各写一份而漂移。
 var stepNames = provision.BootstrapStepNames()
 
+// kindText把运行类型翻成中文。首次纳管与断点续跑在页面上是两件事，
+// 都显示成"bootstrap"等于没说。
+func kindText(kind string) string {
+	switch kind {
+	case "bootstrap":
+		return "首次部署"
+	case "resume":
+		return "补跑"
+	}
+	return kind
+}
+
 func makeRunView(run consolestore.RunSummary, nodeName string) runView {
 	text, tone := runTone(run.Status)
+	local := run.StartedAt.Local()
 	v := runView{
-		ID: run.ID, NodeID: run.NodeID, NodeName: nodeName, Kind: run.Kind,
+		ID: run.ID, NodeID: run.NodeID, NodeName: nodeName,
+		Kind: run.Kind, KindText: kindText(run.Kind),
 		StatusText: text, Tone: tone,
-		Started: run.StartedAt.Local().Format("01-02 15:04"),
+		Date: local.Format("2006-01-02"), Time: local.Format("15:04:05"),
+	}
+	// 失败/异常的运行整条轨染成状态色：不用再去对照右边的状态列，
+	// 扫一眼表格就知道哪几次跑挂了。
+	switch tone {
+	case "bad":
+		v.TrackClass = "track-t-bad"
+	case "warn":
+		v.TrackClass = "track-t-warn"
 	}
 
 	byName := map[string]string{}
@@ -204,7 +228,7 @@ func humanWhen(t *time.Time) string {
 	if t == nil {
 		return "—"
 	}
-	return t.Local().Format("01-02 15:04")
+	return t.Local().Format("2006-01-02 15:04:05")
 }
 
 // itoa避免为几个小整数引入strconv（本文件只做视图拼装）。

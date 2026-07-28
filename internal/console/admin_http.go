@@ -163,7 +163,10 @@ func (s *Server) adminHome(w http.ResponseWriter, r *http.Request, sess consoles
 				"Link":   "/admin/cdks", "LinkText": "去 CDK 页"},
 		}
 	}
-	sort.Slice(runs, func(i, j int) bool { return runs[i].Started > runs[j].Started })
+	// 最近的排前面。日期与时刻分开显示，排序要按两段拼起来比。
+	sort.Slice(runs, func(i, j int) bool {
+		return runs[i].Date+runs[i].Time > runs[j].Date+runs[j].Time
+	})
 	if len(runs) > 6 {
 		runs = runs[:6]
 	}

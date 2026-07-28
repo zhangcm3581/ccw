@@ -77,13 +77,21 @@ type BootstrapInput struct {
 	Password    string // 首登密码；用完即弃，永不落库（§8.4）
 	Slugs       []string
 	TriggeredBy string
+	// Kind区分首次纳管与断点续跑。两者走的是同一条流水线，但在页面上是
+	// 两件事——全都记成bootstrap的话，运行列表里就分不出"这次是重跑"。
+	// 留空按首次纳管处理。
+	Kind string
 }
 
 // Bootstrap执行完整纳管。返回runID供UI订阅日志。
 //
 // 返回后Password应由调用方清除（ZeroString）。本函数不把它写进任何持久化对象。
 func (o *Orchestrator) Bootstrap(ctx context.Context, in BootstrapInput) (runID string, err error) {
-	runID, err = o.Store.CreateRun(ctx, in.NodeID, "bootstrap", in.TriggeredBy)
+	kind := in.Kind
+	if kind == "" {
+		kind = "bootstrap"
+	}
+	runID, err = o.Store.CreateRun(ctx, in.NodeID, kind, in.TriggeredBy)
 	if err != nil {
 		return "", err
 	}

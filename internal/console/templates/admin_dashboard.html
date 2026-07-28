@@ -6,60 +6,85 @@
 
 <div class="workspace">
   <div class="stack">
+
     {{if .Attention}}
-    <section>
-      <p class="eyebrow">需要你动手</p>
-      <div class="grid">
+    <div class="card">
+      <div class="card-hd"><h2>需要你动手</h2></div>
+      <div class="card-bd" style="display:flex;flex-direction:column;gap:14px">
         {{range .Attention}}
-        <div class="note {{.Tone}}">
-          <b>{{.Title}}</b> — {{.Detail}}
-          {{if .Link}} <a href="{{.Link}}">{{.LinkText}}</a>{{end}}
-        </div>
+        <a class="alert alert-{{if .Tone}}{{.Tone}}{{else}}warn{{end}}" href="{{.Link}}">
+          <span class="ico">
+            {{if eq .Tone "bad"}}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9.2"/><path d="M12 7.5v5.5M12 16.4v.1"/>
+            </svg>
+            {{else}}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3.6 22 20.4H2z"/><path d="M12 10v4.2M12 17.5v.1"/>
+            </svg>
+            {{end}}
+          </span>
+          <span class="bd">
+            <b>{{.Title}}</b>
+            <p>{{.Detail}}</p>
+          </span>
+          <span class="chev">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m9 5 7 7-7 7"/>
+            </svg>
+          </span>
+        </a>
         {{end}}
       </div>
-    </section>
+    </div>
     {{end}}
 
     <div class="card">
       <div class="card-hd"><h2>{{if .Runs}}最近部署{{else}}从这里开始{{end}}</h2><span class="spacer"></span>
-        {{if .Runs}}<span class="mono muted" style="font-size:11.5px">每台节点取最近两次</span>{{end}}</div>
+        {{if .Runs}}<span class="meta">每台节点取最近两次</span>{{end}}</div>
+
       {{if .Runs}}
       <div class="tablewrap">
         <table>
-          <thead><tr><th>节点</th><th>类型</th><th>进度</th><th>状态</th><th>开始</th><th></th></tr></thead>
+          <thead><tr>
+            <th>节点</th><th>类型</th><th>进度</th><th>状态</th><th>开始</th><th>日志</th>
+          </tr></thead>
           <tbody>
             {{range .Runs}}
             <tr>
               <td class="mono nowrap">{{.NodeName}}</td>
-              <td class="mono muted nowrap">{{.Kind}}</td>
-              <td style="min-width:220px">
-                <div class="rail-steps">
+              <td class="nowrap">{{.KindText}}</td>
+              <td style="min-width:260px">
+                <div class="track {{.TrackClass}}">
                   {{range .Segments}}<span class="seg {{.}}"></span>{{end}}
                 </div>
-                <div class="rail-cap"><span>{{.StepLabel}}</span><span>{{.Progress}}</span></div>
+                <div class="track-cap"><span>{{.StepLabel}}</span><span>{{.Progress}}</span></div>
               </td>
               <td><span class="st st-{{.Tone}}">{{.StatusText}}</span></td>
-              <td class="mono muted nowrap">{{.Started}}</td>
-              <td class="nowrap"><a href="/admin/nodes/{{.NodeID}}/runs/{{.ID}}">日志</a></td>
+              <td><span class="ts"><span>{{.Date}}</span><span>{{.Time}}</span></span></td>
+              <td class="nowrap"><a href="/admin/nodes/{{.NodeID}}/runs/{{.ID}}">查看</a></td>
             </tr>
             {{end}}
           </tbody>
         </table>
       </div>
       {{else}}
-      <div class="card-bd" style="padding-top:6px;padding-bottom:6px">
+      <div class="card-bd">
         <ol class="onboard">
           {{range .Onboarding}}
           <li class="{{if .Done}}done{{end}}">
             <span class="tick" aria-hidden="true"></span>
-            <div>
+            <span class="bd">
               <b>{{.Title}}</b>
               <span>{{.Detail}}</span>
-            </div>
+            </span>
             {{if not .Done}}<a class="btn ghost" href="{{.Link}}">{{.LinkText}}</a>{{end}}
           </li>
           {{end}}
         </ol>
+        <p class="muted" style="margin:18px 0 0;font-size:13.5px">
+          完成以上三步后，即可开始为项目分配工作空间。
+        </p>
       </div>
       {{end}}
     </div>
@@ -68,52 +93,51 @@
   <div class="stack">
     <div class="card">
       <div class="card-hd"><h2>机队</h2><span class="spacer"></span>
-        <a class="mono muted" href="/admin/nodes">查看</a></div>
-      <div class="card-bd">
-        {{if .Nodes}}
-          <div style="display:flex;flex-direction:column;gap:10px">
-            {{range .Nodes}}
-            <div style="display:flex;align-items:center;gap:10px">
-              <a class="mono" href="/admin/nodes/{{.Node.ID}}" style="flex:1;overflow:hidden;text-overflow:ellipsis">{{.Node.Name}}</a>
-              <span class="st st-{{.Tone}}">{{.StatusText}}</span>
-            </div>
-            {{end}}
-          </div>
-        {{else}}
-          <p class="muted" style="margin:0;font-size:13.5px">还没有纳管任何节点。</p>
+        <a class="meta" href="/admin/nodes">查看</a></div>
+      {{if .Nodes}}
+      <div class="kv">
+        {{range .Nodes}}
+        <div class="r">
+          <a class="mono" href="/admin/nodes/{{.Node.ID}}" style="color:var(--ink)">{{.Node.Name}}</a>
+          <span class="st st-{{.Tone}}">{{.StatusText}}</span>
+        </div>
         {{end}}
       </div>
+      {{else}}
+      <div class="card-bd">
+        <div class="bignum">0</div>
+        <p class="muted" style="margin:6px 0 0">尚未纳管节点</p>
+      </div>
+      {{end}}
     </div>
 
     <div class="card">
       <div class="card-hd"><h2>客户端发布</h2></div>
       <div class="card-bd">
         {{if .Release}}
-          <p class="mono" style="margin:0 0 4px;font-size:15px">{{.Release.Version}}</p>
-          <p class="muted" style="margin:0;font-size:13px">{{.ArtifactCount}} 个平台已发布</p>
+          <div class="mono" style="font-size:26px;font-weight:700;letter-spacing:-.02em">{{.Release.Version}}</div>
+          <p class="muted" style="margin:6px 0 0">{{.ArtifactCount}} 个平台已发布</p>
         {{else}}
-          <p class="muted" style="margin:0 0 8px;font-size:13.5px">尚未发布任何版本。</p>
-          <p class="mono muted" style="margin:0;font-size:11.5px">在 Console 主机上构建后<br>register-release --publish</p>
+          <p class="muted" style="margin:0 0 8px">尚未发布任何版本</p>
+          <p class="mono muted" style="margin:0;font-size:12.5px">在 Console 主机上构建后<br>register-release --publish</p>
         {{end}}
       </div>
     </div>
 
     <div class="card">
       <div class="card-hd"><h2>域名</h2></div>
-      <div class="card-bd">
-        {{if .Zones}}
-          <div style="display:flex;flex-direction:column;gap:8px">
-            {{range .Zones}}
-            <div style="display:flex;align-items:baseline;gap:10px">
-              <span class="mono" style="flex:1">{{.Domain}}</span>
-              <span class="mono muted" style="font-size:11.5px">{{.Provider}}</span>
-            </div>
-            {{end}}
-          </div>
-        {{else}}
-          <p class="muted" style="margin:0;font-size:13.5px">新增节点时可以直接创建第一个 zone。</p>
+      {{if .Zones}}
+      <div class="kv">
+        {{range .Zones}}
+        <div class="r">
+          <span class="mono">{{.Domain}}</span>
+          <span class="muted mono" style="font-size:13px">{{.Provider}}</span>
+        </div>
         {{end}}
       </div>
+      {{else}}
+      <div class="card-bd"><p class="muted" style="margin:0">尚未创建 zone</p></div>
+      {{end}}
     </div>
   </div>
 </div>

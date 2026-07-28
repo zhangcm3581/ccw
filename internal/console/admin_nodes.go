@@ -281,6 +281,7 @@ func (s *Server) adminNodeResume(w http.ResponseWriter, r *http.Request, sess co
 		return
 	}
 	in.TriggeredBy = sess.UserID
+	in.Kind = "resume" // 续跑与首次纳管在运行列表里是两件事
 	runID, err := s.Fleet.Orchestrator.Bootstrap(r.Context(), in)
 	if err != nil {
 		http.Error(w, "启动失败："+err.Error(), http.StatusInternalServerError)
@@ -306,6 +307,7 @@ func (s *Server) adminRunDetail(w http.ResponseWriter, r *http.Request, sess con
 	s.renderAdmin(w, "admin_run.html", "nodes", sess, s.Auth.issueCSRF(w, r), len(nodes),
 		map[string]any{
 			"Run": run, "NodeID": node.ID, "NodeName": node.Name,
+			"Started": run.StartedAt.Local().Format("2006-01-02 15:04:05"),
 			"History": s.Fleet.Logs.History(run.ID),
 			"Steps":   steps, "Progress": progress,
 			"StatusText": statusText, "Tone": tone,

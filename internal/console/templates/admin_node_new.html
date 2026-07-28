@@ -1,44 +1,56 @@
 {{define "title"}}新增节点 · ccw 控制台{{end}}
 {{define "pagetitle"}}新增节点{{end}}
-{{define "pageactions"}}<a class="btn ghost" href="/admin/nodes">取消</a>{{end}}
+{{define "pagesub"}}<span class="sub">纳管一台新的 Linux 服务器</span>{{end}}
+{{define "pageactions"}}<a class="btn plain" href="/admin/nodes">取消</a>{{end}}
 {{define "content"}}
-<div class="narrow">
 
-{{if .Error}}<div class="note bad" style="margin-bottom:20px">{{.Error}}</div>{{end}}
+{{if .Error}}
+<div class="note bad" style="margin-bottom:20px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="9.2"/><path d="M12 7.5v5.5M12 16.4v.1"/>
+  </svg>
+  <span>{{.Error}}</span>
+</div>
+{{end}}
 
-<div class="note" style="margin-bottom:22px">
-  <b>开始前确认：</b>目标机器是 Ubuntu 22.04/24.04 或 Debian 12、有公网 IP、已放行 22/80/443、磁盘 ≥80 GB。
-  填写的密码<b>只用于首次连接</b>——注入托管密钥并验证成功后立即丢弃，不落库、不进日志。
+<div class="note" style="margin-bottom:20px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="9.2"/><path d="M12 11v5.5M12 7.6v.1"/>
+  </svg>
+  <span>
+    <b>开始前确认：</b>Ubuntu 22.04/24.04 或 Debian 12、有公网 IP、已放行 22/80/443、磁盘 ≥80 GB。<br>
+    填写的密码<b>只用于首次连接</b>——注入托管密钥并验证成功后立即丢弃，不落库、不进日志。
+  </span>
 </div>
 
 <form method="POST" action="/admin/nodes/new" autocomplete="off">
   <input type="hidden" name="csrf_token" value="{{.CSRF}}">
 
-  <div class="grid g2" style="margin-bottom:22px">
+  <div class="split" style="margin-bottom:20px">
     <div class="card">
       <div class="card-hd"><h2>连接</h2></div>
       <div class="card-bd">
         <label class="fld">
           <span class="lb">节点名称</span>
-          <input type="text" name="name" placeholder="node-hk-1" required>
+          <input type="text" name="name" placeholder="例如：node-hk-1" required>
         </label>
         <label class="fld">
           <span class="lb">公网 IP</span>
-          <input type="text" name="host" placeholder="203.0.113.7" required>
+          <input type="text" name="host" placeholder="例如：203.0.113.10" required>
         </label>
         <div class="row2">
           <label class="fld">
             <span class="lb">SSH 用户名</span>
-            <input type="text" name="ssh_user" value="root" required>
+            <input type="text" name="ssh_user" value="root" placeholder="例如：root" required>
           </label>
           <label class="fld">
             <span class="lb">端口</span>
-            <input type="text" name="ssh_port" value="22">
+            <input type="text" name="ssh_port" value="22" placeholder="22">
           </label>
         </div>
-        <label class="fld" style="margin-bottom:0">
+        <label class="fld">
           <span class="lb">SSH 密码</span>
-          <input type="password" name="password" required>
+          <input type="password" name="password" placeholder="输入连接密码（仅用于首次连接）" required>
           <span class="hint">用完即弃。非 root 用户需要 sudo 权限；不在 sudoers 里会在 harden 步骤明确失败，不做猜测性修复。</span>
         </label>
       </div>
@@ -51,19 +63,19 @@
         <label class="fld">
           <span class="lb">选择 zone</span>
           <select name="zone_id">
-            {{range .Zones}}<option value="{{.ID}}">{{.Domain}}（{{.Provider}}，{{.SubdomainPrefix}}-NN）</option>{{end}}
+            {{range .Zones}}<option value="{{.ID}}">{{.Domain}}（{{.SubdomainPrefix}}-{n}）</option>{{end}}
           </select>
-          <span class="hint">Console 自动分配下一个序号，退役后不复用。</span>
+          <span class="hint">从已接入的 zone 中选择，用于分配接入域名与证书。Console 自动取下一个序号，退役后不复用。</span>
         </label>
         {{end}}
         <label class="fld">
           <span class="lb">{{if .Zones}}或新建 zone{{else}}创建第一个 zone{{end}}</span>
-          <input type="text" name="new_zone_domain" placeholder="example.com"{{if not .Zones}} required{{end}}>
-          <span class="hint">DNS 当前是手动模式：部署过程会告诉你要添加哪条 A 记录。</span>
+          <input type="text" name="new_zone_domain" placeholder="例如：example.com"{{if not .Zones}} required{{end}}>
+          <span class="hint">填写域名并新建 zone（需你能够完成域名解析）。</span>
         </label>
-        <label class="fld" style="margin-bottom:0">
+        <label class="fld">
           <span class="lb">初始项目 slug</span>
-          <input type="text" name="slugs" placeholder="project-a,project-b" required>
+          <input type="text" name="slugs" placeholder="例如：analytics-hub,docs-bot" required>
           <span class="hint">逗号分隔，最多 3 个。小写字母、数字、连字符，2–32 字符。每个项目一个容器，磁盘配额 15 GiB。</span>
         </label>
       </div>
@@ -72,25 +84,22 @@
 
   <div class="card">
     <div class="card-hd"><h2>将要执行的步骤</h2><span class="spacer"></span>
-      <span class="mono muted" style="font-size:11.5px">全过程日志实时可见，失败可从断点续跑</span></div>
-    <div class="card-bd">
-      <div class="steplist plan">
-        {{range .Steps}}
-        <div class="s pending">
-          <span class="idx">{{.Seq}}</span>
-          <span class="nm">{{.Name}}</span>
-          <span class="step-note">{{.Note}}</span>
-        </div>
-        {{end}}
+      <span class="meta">全过程日志实时可见，失败可从断点续跑</span></div>
+    <div class="steplist plan" style="padding-bottom:8px">
+      {{range .Steps}}
+      <div class="s pending">
+        <span class="idx">{{if lt .Seq 10}}0{{end}}{{.Seq}}</span>
+        <span class="nm">{{.Name}}</span>
+        <span class="step-note">{{.Note}}</span>
       </div>
+      {{end}}
     </div>
   </div>
 
-  <div style="margin-top:22px;display:flex;align-items:center;gap:14px">
+  <div style="margin-top:22px;display:flex;align-items:center;gap:18px">
     <button class="btn" type="submit">开始部署</button>
-    <span class="muted" style="font-size:13px">部署会停在 dns-allocate 等你添加 A 记录，加完回来点「继续」。</span>
+    <span class="muted" style="font-size:13.5px">开始后可在节点详情查看实时日志，失败可从断点续跑。</span>
   </div>
 </form>
 
-</div>
 {{end}}

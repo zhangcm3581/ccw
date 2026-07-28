@@ -1,43 +1,50 @@
 {{define "title"}}部署日志 · ccw 控制台{{end}}
 {{define "pagetitle"}}部署日志{{end}}
-{{define "pagesub"}}<span class="st st-{{.Tone}}">{{.StatusText}}</span>
-  <span class="sub"><a href="/admin/nodes/{{.NodeID}}">{{.NodeName}}</a> · {{.Run.Kind}}</span>{{end}}
-{{define "pageactions"}}<a class="btn ghost" href="/admin/nodes/{{.NodeID}}">返回节点</a>{{end}}
+{{define "pagesub"}}<span class="sub">{{.NodeName}} · {{.Started}}</span>
+  <span class="st st-{{.Tone}}">{{.StatusText}}</span>{{end}}
+{{define "pageactions"}}<a class="btn ghost" href="/admin/nodes/{{.NodeID}}">← 返回节点详情</a>{{end}}
 {{define "content"}}
 
 {{if .Issued}}
 <div class="reveal">
   <div class="reveal-hd">
-    <b>本次纳管签发的 CDK — 只显示这一次</b>
-    <span>刷新或离开本页后无法再取回。CDK 明文不进 Console 数据库、不进日志。忘了保存就到「项目与 CDK」页轮换一张新的。</span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="7.5" cy="16.5" r="3.6"/><path d="m10.2 14 8.4-8.4M16.4 7.8l2.1 2.1M13.9 10.3l2.1 2.1"/>
+    </svg>
+    <span>
+      <b>本次纳管签发的 CDK — 只显示这一次</b>
+      <span>刷新或离开本页后无法再取回。CDK 明文不进数据库、不进日志。忘了保存就到「项目与 CDK」页轮换一张新的。</span>
+    </span>
   </div>
   {{range .Issued}}
   <div class="reveal-row">
     <div class="reveal-meta">
-      <span class="mono">{{.Slug}}</span>
-      <span class="mono muted">public_id {{.PublicID}}</span>
+      <span class="k">项目名</span><span class="v">{{.Slug}}</span>
+      <span class="k" style="margin-left:14px">public_id</span><span class="v">{{.PublicID}}</span>
     </div>
-    <code class="reveal-cdk">{{.CDK}}</code>
+    <code class="reveal-cdk">{{.CDK}}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
+      </svg>
+    </code>
   </div>
   {{end}}
-  <p class="reveal-foot">把它交给使用这个项目的人；对方在 <code>cclaude login</code> 时粘贴。</p>
+  <p class="reveal-foot">把它交给使用这个项目的人；对方在 cclaude 首次登录时粘贴。</p>
 </div>
 {{end}}
 
 <div class="runsplit">
   <div class="card side">
     <div class="card-hd"><h2>步骤</h2><span class="spacer"></span>
-      <span class="mono muted" style="font-size:11px">{{.Progress}}</span></div>
-    <div class="card-bd" style="padding:8px 18px">
-      <div class="steplist">
-        {{range .Steps}}
-        <div class="s {{.Class}}">
-          <span class="idx">{{.Seq}}</span>
-          <span class="nm">{{.Name}}</span>
-          <span class="st st-{{.Tone}}">{{.Label}}</span>
-        </div>
-        {{end}}
+      <span class="meta">{{.Progress}}</span></div>
+    <div class="steplist">
+      {{range .Steps}}
+      <div class="s {{.Class}}">
+        <span class="idx">{{if lt .Seq 10}}0{{end}}{{.Seq}}</span>
+        <span class="nm">{{.Name}}</span>
+        <span class="st st-{{.Tone}}">{{.Label}}</span>
       </div>
+      {{end}}
     </div>
   </div>
 
@@ -46,7 +53,7 @@
       <span class="lamp {{if .Live}}live{{end}}"></span>
       <span>{{if .Live}}实时输出{{else}}运行已结束{{end}}</span>
       <span class="spacer"></span>
-      <span>密码 · 私钥 · CDK 明文 · 令牌已脱敏</span>
+      <span class="redact">密码 · 私钥 · CDK 明文 · 令牌已脱敏</span>
     </div>
     <pre class="term-bd" id="log">{{range .History}}{{.}}
 {{end}}</pre>

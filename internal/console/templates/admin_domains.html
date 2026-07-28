@@ -1,16 +1,29 @@
 {{define "title"}}域名 · ccw 控制台{{end}}
 {{define "pagetitle"}}域名{{end}}
 {{define "pagesub"}}{{if .Pending}}<span class="st st-warn">{{.Pending}} 条记录待添加</span>{{end}}{{end}}
+{{define "pageactions"}}<a class="btn" href="/admin/nodes/new">新增节点</a>{{end}}
 {{define "content"}}
 
-{{if .Error}}<div class="note bad" style="margin-bottom:20px">{{.Error}}</div>{{end}}
-{{if .Notice}}<div class="note ok" style="margin-bottom:20px">{{.Notice}}</div>{{end}}
+{{if .Error}}
+<div class="note bad" style="margin-bottom:20px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="9.2"/><path d="M12 7.5v5.5M12 16.4v.1"/>
+  </svg><span>{{.Error}}</span>
+</div>
+{{end}}
+{{if .Notice}}
+<div class="note ok" style="margin-bottom:20px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="m4.5 12.5 5 5 10-11"/>
+  </svg><span>{{.Notice}}</span>
+</div>
+{{end}}
 
-<div class="workspace">
+<div class="split">
   <div class="stack">
     <div class="card">
       <div class="card-hd"><h2>子域名分配</h2><span class="spacer"></span>
-        <span class="mono muted" style="font-size:11.5px">序号单调递增，退役后不复用</span></div>
+        <span class="meta">序号单调递增，退役后不复用</span></div>
       {{if .Domains}}
       <div class="tablewrap">
         <table>
@@ -19,18 +32,24 @@
             {{range .Domains}}
             <tr>
               <td class="mono">{{.FQDN}}</td>
-              <td class="mono muted nowrap">{{if .NodeID}}<a href="/admin/nodes/{{.NodeID}}">{{.NodeName}}</a>{{else}}{{.NodeName}}{{end}}</td>
-              <td class="mono muted nowrap">{{.TargetIP}}</td>
+              <td class="mono nowrap">{{if .NodeID}}<a href="/admin/nodes/{{.NodeID}}">{{.NodeName}}</a>{{else}}<span class="muted">{{.NodeName}}</span>{{end}}</td>
+              <td class="mono nowrap">{{.TargetIP}}</td>
               <td><span class="st st-{{.Tone}}">{{.StateText}}</span></td>
-              <td class="mono muted nowrap">{{.Verified}}</td>
+              <td><span class="ts">{{.Verified}}</span></td>
             </tr>
             {{if .Instruction}}
             <tr>
-              <td colspan="5" style="padding-top:0">
-                <div class="dnsrec">
-                  <span class="eyebrow" style="margin:0">在你的 DNS 服务商添加</span>
-                  <code>{{.Instruction}}</code>
-                  <span class="muted" style="font-size:12px">加完回到节点页点「继续 / 重新部署」，从 dns-allocate 续跑。</span>
+              <td colspan="5" style="padding:0 16px 16px">
+                <div class="note warn inset" style="flex-direction:column;align-items:stretch;gap:12px">
+                  <b>请在你的 DNS 服务商处添加如下 A 记录：</b>
+                  <div class="copybox">
+                    <span>{{.Instruction}}</span>
+                    <span class="spacer"></span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
+                    </svg>
+                  </div>
+                  <span class="muted" style="font-size:13px">加完这条记录后，回到节点页继续 / 重新部署。</span>
                 </div>
               </td>
             </tr>
@@ -48,28 +67,28 @@
     </div>
 
     <div class="note">
-      <b>证书由节点自己签。</b>每台节点上的 Caddy 用 Let's Encrypt 自动申请与续期，
-      Console 不代管证书，也还没有到期告警与签发预算水位（C10 未实施）——
-      现在要看证书状态得登机 <code>docker logs</code> 看 Caddy。
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9.2"/><path d="M12 11v5.5M12 7.6v.1"/>
+      </svg>
+      <span>证书由节点上的 Caddy 用 Let's Encrypt 自动申请与续期，Console 不代管证书，
+        也还没有到期告警与签发预算水位（C10 未实施）——现在要看证书状态得登机
+        <code>docker logs</code> 看 Caddy。</span>
     </div>
   </div>
 
   <div class="stack">
+    {{if .Zones}}
+    {{range .Zones}}
     <div class="card">
       <div class="card-hd"><h2>zone</h2></div>
-      {{if .Zones}}
-      <div class="card-bd" style="display:flex;flex-direction:column;gap:12px">
-        {{range .Zones}}
-        <div>
-          <div class="mono">{{.Domain}}</div>
-          <div class="mono muted" style="font-size:11.5px">{{.SubdomainPrefix}}-NN.{{.Domain}} · {{.Provider}}</div>
-        </div>
-        {{end}}
+      <div class="kv">
+        <div class="r"><span class="k">域名</span><span class="v">{{.Domain}}</span></div>
+        <div class="r"><span class="k">子域名格式</span><span class="v">{{.SubdomainPrefix}}-{n}.{{.Domain}}</span></div>
+        <div class="r"><span class="k">模式</span><span class="v">{{.Provider}}</span></div>
       </div>
-      {{else}}
-      <div class="card-bd"><p class="muted" style="margin:0;font-size:13.5px">还没有 zone。</p></div>
-      {{end}}
     </div>
+    {{end}}
+    {{end}}
 
     <div class="card">
       <div class="card-hd"><h2>新建 zone</h2></div>
@@ -78,17 +97,16 @@
           <input type="hidden" name="csrf_token" value="{{.CSRF}}">
           <label class="fld">
             <span class="lb">域名</span>
-            <input type="text" name="domain" placeholder="example.com" required>
+            <input type="text" name="domain" placeholder="例如：example.com" required>
           </label>
           <label class="fld">
             <span class="lb">子域名前缀</span>
-            <input type="text" name="prefix" value="api">
-            <span class="hint">节点会拿到 <code>前缀-01</code>、<code>前缀-02</code>……</span>
+            <input type="text" name="prefix" value="api" placeholder="例如：api">
           </label>
-          <button class="btn" type="submit">创建</button>
-          <p class="muted" style="font-size:12.5px;margin:12px 0 0">
-            DNS 是手动模式：Console 告诉你要加哪条 A 记录，加记录这一步由你完成。
-            Route 53 自动化（C9）未实施，因此这里没有 provider 可选。
+          <button class="btn" type="submit" style="width:100%;justify-content:center;margin-top:4px">创建</button>
+          <p class="muted" style="font-size:13px;margin:14px 0 0;line-height:1.7">
+            当前为手动模式（manual），需要你在 DNS 服务商处手动添加记录。
+            Console 不会自动创建或修改 DNS 记录（Route 53 自动化 C9 未实施）。
           </p>
         </form>
       </div>

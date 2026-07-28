@@ -11,84 +11,100 @@
 {{define "content"}}
 
 {{if .DomainPending}}
-<div class="note warn" style="margin-bottom:22px">
-  <b>等待 DNS 记录生效。</b>到你的 DNS 服务商添加这条记录，然后点右上角「继续 / 重新部署」——
-  已完成的步骤会跳过，从 dns-allocate 继续。
-  <div class="mono" style="margin-top:9px;padding:9px 12px;background:var(--panel);border-radius:5px;border:1px solid var(--line)">{{.DNSInstruction}}</div>
-  <div class="mono muted" style="margin-top:7px;font-size:11.5px">校验会交叉查询 1.1.1.1 与 8.8.8.8，两个都指向本节点 IP 才算生效。</div>
+<div class="note warn" style="margin-bottom:20px;flex-direction:column;align-items:stretch;gap:14px">
+  <div style="display:flex;align-items:center;gap:12px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 3.6 22 20.4H2z"/><path d="M12 10v4.2M12 17.5v.1"/>
+    </svg>
+    <b style="font-size:15px">等待 DNS 记录生效</b>
+  </div>
+  <div class="copybox">
+    <span>{{.DNSInstruction}}</span>
+    <span class="spacer"></span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
+    </svg>
+  </div>
+  <span class="muted" style="font-size:13px">
+    加完这条记录后，回到本页点右上角「继续 / 重新部署」——已完成的步骤会跳过，从 dns-allocate 继续。
+    校验会交叉查询 1.1.1.1 与 8.8.8.8，两个都指向本节点 IP 才算生效。
+  </span>
 </div>
 {{end}}
 
-<div class="workspace">
+<div class="split">
   <div class="stack">
-
-<div class="card">
-  <div class="card-hd"><h2>部署历史</h2><span class="spacer"></span>
-    <span class="mono muted" style="font-size:11.5px">同一次运行可反复续跑，已完成的步骤会跳过</span></div>
-  {{if .Runs}}
-  <div class="tablewrap">
-    <table>
-      <thead><tr><th>类型</th><th>进度</th><th>状态</th><th>开始</th><th></th></tr></thead>
-      <tbody>
-        {{range .Runs}}
-        <tr>
-          <td class="mono muted nowrap">{{.Kind}}</td>
-          <td style="min-width:220px">
-            <div class="rail-steps">{{range .Segments}}<span class="seg {{.}}"></span>{{end}}</div>
-            <div class="rail-cap"><span>{{.StepLabel}}</span><span>{{.Progress}}</span></div>
-          </td>
-          <td><span class="st st-{{.Tone}}">{{.StatusText}}</span></td>
-          <td class="mono muted nowrap">{{.Started}}</td>
-          <td class="nowrap"><a href="/admin/nodes/{{$.Node.ID}}/runs/{{.ID}}">日志</a></td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-  {{else}}
-  <div class="empty"><h3>还没有运行记录</h3><p>点右上角「继续 / 重新部署」开始。</p></div>
-  {{end}}
-</div>
-
-<div class="note">
-  <b>这些操作还没做进后台。</b>更换域名、轮换托管密钥、签发与轮换 CDK、收集诊断、解除纳管——
-  目前用 SSH + <code>ccwadmin</code>，见 <code>DEPLOY.md</code> 的 A6。
-</div>
-
-  </div>
-
-  <div class="stack">
-  <div class="card">
-    <div class="card-hd"><h2>接入</h2></div>
-    <div class="card-bd" style="display:flex;flex-direction:column;gap:12px">
-      <div>
-        <div class="eyebrow" style="margin-bottom:4px">客户端连接地址</div>
-        <div class="mono">{{if .FQDN}}https://{{.FQDN}}{{else}}<span class="muted">尚未分配</span>{{end}}</div>
+    <div class="card">
+      <div class="card-hd"><h2>部署历史</h2><span class="spacer"></span>
+        <span class="meta">同一次运行可反复续跑，已完成的步骤会跳过</span></div>
+      {{if .Runs}}
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>类型</th><th>进度</th><th>状态</th><th>开始</th><th>日志</th></tr></thead>
+          <tbody>
+            {{range .Runs}}
+            <tr>
+              <td class="nowrap">{{.KindText}}</td>
+              <td style="min-width:260px">
+                <div class="track {{.TrackClass}}">{{range .Segments}}<span class="seg {{.}}"></span>{{end}}</div>
+                <div class="track-cap"><span>{{.StepLabel}}</span><span>{{.Progress}}</span></div>
+              </td>
+              <td><span class="st st-{{.Tone}}">{{.StatusText}}</span></td>
+              <td><span class="ts"><span>{{.Date}}</span><span>{{.Time}}</span></span></td>
+              <td class="nowrap"><a href="/admin/nodes/{{$.Node.ID}}/runs/{{.ID}}">查看</a></td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
       </div>
-      <div>
-        <div class="eyebrow" style="margin-bottom:4px">系统</div>
-        <div class="mono">{{if .Node.OSRelease}}{{.Node.OSRelease}}{{if .Node.Arch}} · {{.Node.Arch}}{{end}}{{else}}<span class="muted">尚未探测</span>{{end}}</div>
-      </div>
-      <div>
-        <div class="eyebrow" style="margin-bottom:4px">最近连通</div>
-        <div class="mono">{{.LastSeen}}</div>
+      {{else}}
+      <div class="empty"><h3>还没有运行记录</h3><p>点右上角「继续 / 重新部署」开始。</p></div>
+      {{end}}
+      <div class="card-ft" style="border-top:1px solid var(--line-soft)">
+        <div class="note" style="width:100%">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.2"/><path d="M12 11v5.5M12 7.6v.1"/>
+          </svg>
+          <span>目前仅纳管部署与接入。更换域名、轮换托管密钥、收集诊断、解除纳管还未做进后台，
+            用 SSH + <code>ccwadmin</code>，见 <code>DEPLOY.md</code> 的 A6。</span>
+        </div>
       </div>
     </div>
   </div>
 
-  <div class="card">
-    <div class="card-hd"><h2>凭据</h2></div>
-    <div class="card-bd" style="display:flex;flex-direction:column;gap:12px">
-      <div>
-        <div class="eyebrow" style="margin-bottom:4px">托管 SSH 密钥</div>
-        <div>{{if .HasCredential}}<span class="st st-ok">已保存（加密）</span>{{else}}<span class="st st-warn">未建立</span>{{end}}</div>
-      </div>
-      <div>
-        <div class="eyebrow" style="margin-bottom:4px">host key 指纹 · 请带外核对</div>
-        <div class="mono" style="font-size:11.5px;word-break:break-all">{{if .Node.HostKeyFP}}{{.Node.HostKeyFP}}{{else}}<span class="muted">未记录</span>{{end}}</div>
+  <div class="stack">
+    <div class="card">
+      <div class="card-hd"><h2>接入</h2></div>
+      <div class="kv">
+        <div class="r">
+          <span class="k">客户端连接地址</span>
+          <span class="v">{{if .FQDN}}https://{{.FQDN}}{{else}}<span class="muted">尚未分配</span>{{end}}</span>
+        </div>
+        <div class="r">
+          <span class="k">系统</span>
+          <span class="v">{{if .Node.OSRelease}}{{.Node.OSRelease}}{{if .Node.Arch}} · {{.Node.Arch}}{{end}}{{else}}<span class="muted">尚未探测</span>{{end}}</span>
+        </div>
+        <div class="r">
+          <span class="k">最近连通</span>
+          <span class="v">{{.LastSeen}}</span>
+        </div>
       </div>
     </div>
-  </div>
+
+    <div class="card">
+      <div class="card-hd"><h2>凭据</h2></div>
+      <div class="kv">
+        <div class="r">
+          <span class="k">托管 SSH 密钥</span>
+          <span class="v">{{if .HasCredential}}<span class="st st-ok">已保存（加密）</span>{{else}}<span class="st st-warn">未建立</span>{{end}}</span>
+        </div>
+        <div class="r stackv">
+          <span class="k">host key 指纹</span>
+          <span class="v">{{if .Node.HostKeyFP}}{{.Node.HostKeyFP}}{{else}}<span class="muted">未记录</span>{{end}}</span>
+          <span class="muted" style="display:block;font-size:12.5px;margin-top:6px">请带外核对</span>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
