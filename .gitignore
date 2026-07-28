@@ -14,3 +14,7 @@ deploy/.env
 /ccwadmin
 /cclaude.exe
 dist/
+
+# 管理后台的设计稿。是实现的对照基准，但体积大且不参与构建，
+# 只留在本地：internal/console/templates/admin_layout.html 顶部的注释指向它。
+ui/
