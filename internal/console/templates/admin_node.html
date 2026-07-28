@@ -72,6 +72,81 @@
         </div>
       </div>
     </div>
+
+    <div class="card">
+      <div class="card-hd"><h2>授权 Claude 账号</h2><span class="spacer"></span>
+        <span class="meta">整台节点只做一次</span></div>
+      <div class="card-bd">
+        <p class="muted" style="margin:0 0 16px;line-height:1.7">
+          纳管只把栈起起来，Claude Code 还没有上游账号的凭据，需要你上机登录一次。
+          本节点全部项目共用一个 <code>claude-shared</code> 卷，<b>在任意一个项目容器里登录，其余项目自动共用</b>
+          同一份凭据与同一个额度池。这一步后台还代劳不了。
+        </p>
+
+        {{if .AuthProjects}}
+        {{$p := index .AuthProjects 0}}
+        <p class="eyebrow">先检查是否已登录</p>
+        <div class="copybox" style="margin-bottom:18px">
+          <span id="auth-check">docker exec {{$p.Container}} claude auth status</span>
+          <span class="spacer"></span>
+          <button class="copy" type="button" data-copy="auth-check" aria-label="复制命令">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
+            </svg><span class="done">已复制</span>
+          </button>
+        </div>
+        <p class="muted" style="margin:-10px 0 18px;font-size:13px">
+          输出 <code>loggedIn: true</code> 就已经好了，下面的不用做。
+        </p>
+
+        <p class="eyebrow">没登录就执行这段（tmux socket 名已按本节点的 project id 填好）</p>
+        <div class="cmdbox">
+          <pre id="auth-cmd">ssh {{.SSHTarget}}
+
+docker exec {{$p.Container}} tmux -L {{$p.RemoteID}} new-session -d -s main -c /workspace claude
+docker exec -it {{$p.Container}} tmux -L {{$p.RemoteID}} attach-session -t main</pre>
+          <button class="copy" type="button" data-copy="auth-cmd" aria-label="复制命令">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
+            </svg><span class="done">已复制</span>
+          </button>
+        </div>
+        <p class="muted" style="margin:14px 0 0;line-height:1.7">
+          在附着的终端里跟着提示走完登录，然后按 <b>Ctrl-b</b> 松开再按 <b>d</b> 脱离。
+          <b>不要按 Ctrl-c</b>——那会把会话里的 claude 杀掉。
+        </p>
+
+        {{if gt (len .AuthProjects) 1}}
+        <p class="eyebrow" style="margin-top:18px">验证其余项目也已共用凭据</p>
+        <div class="cmdbox">
+          <pre id="auth-verify">{{range .AuthProjects}}docker exec {{.Container}} claude auth status
+{{end}}</pre>
+          <button class="copy" type="button" data-copy="auth-verify" aria-label="复制命令">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
+            </svg><span class="done">已复制</span>
+          </button>
+        </div>
+        <p class="muted" style="margin:10px 0 0;font-size:13px">全部输出 <code>loggedIn: true</code> 即完成。</p>
+        {{end}}
+
+        <p class="muted" style="margin:18px 0 0;font-size:13px;line-height:1.7">
+          登录后 <code>auth status</code> 仍是 <code>false</code>、或反复要求重新登录：多半是卷权限
+          （容器以 <code>claude</code> UID 1001 运行，卷归 root 就写不进凭据）。
+          排查见 <code>docs/admin-login-runbook.md</code>。
+        </p>
+        {{else}}
+        <div class="note warn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3.6 22 20.4H2z"/><path d="M12 10v4.2M12 17.5v.1"/>
+          </svg>
+          <span>本节点还没有项目记录，命令要用的 project id 取不到。
+            等 <code>init-projects</code> 那一步跑完再回来；已经纳管过但这里是空的，
+            到「项目与 CDK」页点「从节点同步」。</span>
+        </div>
+        {{end}}
+      </div>
+    </div>
   </div>
 
   <div class="stack">

@@ -254,11 +254,27 @@ func (s *Server) adminNodeDetail(w http.ResponseWriter, r *http.Request, sess co
 	d, derr := s.Fleet.Store.DomainByNode(ctx, node.ID)
 	nodes, _ := s.Fleet.Store.ListNodes(ctx)
 
+	// 授权Claude账号是纳管之后必须手动做的一步（DEPLOY.md的A7），后台还没法代劳。
+	// 但Console库里有项目的remote_project_id——那正是tmux的socket名——
+	// 所以命令可以填好了给出来，省掉"上机查id再粘回来"这一趟。
+	var authProjects []map[string]string
+	if all, err := s.Fleet.Store.ListNodeProjects(ctx); err == nil {
+		for _, p := range all {
+			if p.NodeID == node.ID {
+				authProjects = append(authProjects, map[string]string{
+					"Slug": p.Slug, "Container": "ccw-" + p.Slug, "RemoteID": p.RemoteProjectID,
+				})
+			}
+		}
+	}
+
 	data := map[string]any{
 		"Node": node, "StatusText": row.StatusText, "Tone": row.Tone,
 		"FQDN": row.FQDN, "LastSeen": row.LastSeen, "Runs": rvs,
 		"HasCredential": cerr == nil,
 		"CanResume":     node.Status != "provisioning",
+		"AuthProjects":  authProjects,
+		"SSHTarget":     node.SSHUser + "@" + node.Host,
 	}
 	if derr == nil && d.RecordState == "pending" {
 		data["DomainPending"] = true
