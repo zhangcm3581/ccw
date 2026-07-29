@@ -32,6 +32,17 @@ import (
 // 管理员手动登录会话（main）都不同名，互不打扰。
 const authSession = "ccw-auth"
 
+// capturePane构造抓取画面的命令。
+//
+// **-J 不能省**：登录 URL 实测 407 字符，在 200 列的 pane 里必然折行，
+// 而 capture-pane 默认按显示行返回——管理员复制到的会是**断成两截的链接**。
+// -J 把折行合并回一行。（2026-07-30 在 ubuntu:24.04 + tmux 3.4 上实测：
+// 不加 -J 时 URL 落在 2 行里，加了之后是完整的 1 行。）
+func capturePane(sudo, container string) string {
+	return fmt.Sprintf("%sdocker exec %s tmux -L %s capture-pane -p -J -t %s",
+		sudo, shellQuote(container), authSession, authSession)
+}
+
 // ClaudeAuthStart在节点上起一个跑claude的tmux会话，并返回当前画面。
 //
 // 已存在同名会话时**先杀掉重开**：授权流程卡在半路时，让管理员点一次"重新开始"
@@ -46,8 +57,8 @@ func (o *Orchestrator) ClaudeAuthStart(ctx context.Context, nodeID, container st
 	script := fmt.Sprintf(`%[1]sdocker exec %[2]s tmux -L %[3]s kill-session -t %[3]s 2>/dev/null
 %[1]sdocker exec -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8 %[2]s tmux -L %[3]s new-session -d -s %[3]s -x 200 -y 50 claude
 sleep 3
-%[1]sdocker exec %[2]s tmux -L %[3]s capture-pane -p -t %[3]s`,
-		sudo, shellQuote(container), authSession)
+%[4]s`,
+		sudo, shellQuote(container), authSession, capturePane(sudo, container))
 
 	res, err := cli.Run(ctx, script)
 	if err != nil {
@@ -67,8 +78,7 @@ func (o *Orchestrator) ClaudeAuthCapture(ctx context.Context, nodeID, container 
 	}
 	defer cli.Close()
 
-	res, err := cli.Run(ctx, fmt.Sprintf("%sdocker exec %s tmux -L %s capture-pane -p -t %s",
-		sudo, shellQuote(container), authSession, authSession))
+	res, err := cli.Run(ctx, capturePane(sudo, container))
 	if err != nil {
 		return "", err
 	}
@@ -105,8 +115,8 @@ func (o *Orchestrator) ClaudeAuthSendCode(ctx context.Context, nodeID, container
 	paste := fmt.Sprintf(`%[1]sdocker exec %[2]s tmux -L %[3]s paste-buffer -t %[3]s
 %[1]sdocker exec %[2]s tmux -L %[3]s send-keys -t %[3]s Enter
 sleep 3
-%[1]sdocker exec %[2]s tmux -L %[3]s capture-pane -p -t %[3]s`,
-		sudo, shellQuote(container), authSession)
+%[4]s`,
+		sudo, shellQuote(container), authSession, capturePane(sudo, container))
 	res, err := cli.Run(ctx, paste)
 	if err != nil {
 		return "", err

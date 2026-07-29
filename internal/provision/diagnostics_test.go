@@ -77,3 +77,21 @@ func TestAuthCodeCharset(t *testing.T) {
 		}
 	}
 }
+
+// capture-pane 必须带 -J。
+//
+// 这条守的是一个实测过的坑：登录 URL 有 407 字符，在 200 列的 pane 里必然折行，
+// capture-pane 默认按**显示行**返回，管理员从后台复制到的会是断成两截的链接。
+// 2026-07-30 在 ubuntu:24.04 + tmux 3.4 上验过：不加 -J 时 URL 落在 2 行，
+// 加了之后是完整的 1 行。
+//
+// 单测无法验证 tmux 的真实行为（CI 里没有 tmux），但能守住这个决定不被顺手删掉。
+func TestCapturePaneJoinsWrappedLines(t *testing.T) {
+	cmd := capturePane("sudo -n ", "ccw-project-a")
+	if !contains(cmd, " -J ") {
+		t.Errorf("capture-pane 必须带 -J，否则长 URL 会被按显示行截断：%s", cmd)
+	}
+	if !contains(cmd, "capture-pane") || !contains(cmd, "ccw-project-a") {
+		t.Errorf("命令形状不对：%s", cmd)
+	}
+}
