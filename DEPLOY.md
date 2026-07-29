@@ -183,11 +183,17 @@ docker exec ccw-project-b claude auth status    # 期望 loggedIn: true（共用
 
 ## A8 客户端接入
 
-从 Console 的下载页取（见 [B4](#b4-发布客户端)），或直接给用户这个链接：
+发给用户一条命令即可（脚本由 Console 按当前已发布版本渲染，**校验和内嵌在脚本里**）：
 
+```bash
+# macOS / Linux
+curl -fsSL https://你的站点域名/install.sh | sh
+
+# Windows（PowerShell）
+irm https://你的站点域名/install.ps1 | iex
 ```
-https://你的站点域名/download
-```
+
+装完 `cclaude` 是全局命令。手动下载仍在 `https://你的站点域名/download`。
 
 没装 Console 时，在任意装了 Docker 的机器上就地构建一份发给用户：
 
@@ -200,9 +206,13 @@ VERSION=v0.1.0 TARGETS="darwin/arm64 windows/amd64" ./scripts/build-release-dock
 
 ```bash
 cd ~/my-project-a
-./cclaude --api https://你的域名.example.com   # 首次指定地址，自动补 /api 前缀并记住
-# 提示输入 CDK（不回显）；之后直接 ./cclaude 即可
+cclaude --api https://你的域名.example.com   # 首次指定地址，自动补 /api 前缀并记住
+# 提示输入 CDK（不回显）；之后直接 cclaude 即可
 ```
+
+**每个本地目录是一个独立的工作区**（2026-07-29起）：客户端按当前目录的绝对路径
+算出工作区键，云端按键分开存放。在 `~/code` 与 `~/work` 下各跑一次，两边的文件
+互不可见，云端目录是 `<workspace-root>/<slug>/<工作区键>/`，终端也落在同一个目录里。
 
 寻址优先级：`--api` > `CCW_API` 环境变量 > `~/.ccw/config.json`（0600）> 交互提示。旧版 `~/.ccw/cdk` 单行文件会自动迁移。`cclaude logout` 清除本地配置。**CDK 不接受命令行参数**（会进 shell history 与 `ps` 输出），只走交互输入或 `CCW_CDK`。
 

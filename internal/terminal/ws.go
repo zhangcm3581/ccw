@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	syncpkg "ccw/internal/sync"
 	"context"
 	"encoding/json"
 	"io"
@@ -36,7 +37,7 @@ type ctrlMsg struct {
 // 断开只关闭PTY附着进程与WebSocket，绝不kill tmux会话。
 // 调用方在调用本函数前必须已实时复查项目额度（审查§3.1：令牌不豁免其后发生的超额）。
 func Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, key []byte,
-	start func(projectID string) (io.ReadWriteCloser, error)) {
+	start func(projectID, ws string) (io.ReadWriteCloser, error)) {
 	// 令牌只从Authorization头读取（2分钟短期令牌，可重连）；
 	// URL查询参数会进代理日志，禁止使用。
 	raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -57,7 +58,14 @@ func Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, key []by
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
-	pty, err := start(claims.ProjectID)
+	// 工作区键从请求头取。**不放URL查询参数**（会进反代日志，与令牌同款约束），
+	// 也不放令牌——签发令牌的control-api根本不知道客户端在哪个本地目录。
+	// 非法值一律当成空：退回legacy的/workspace，而不是让客户端指定任意路径。
+	ws := r.Header.Get("X-CCW-Workspace")
+	if !syncpkg.ValidWorkspace(ws) {
+		ws = ""
+	}
+	pty, err := start(claims.ProjectID, ws)
 	if err != nil {
 		conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "pty start failed"),

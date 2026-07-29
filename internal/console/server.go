@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strings"
 	stdsync "sync"
+	texttemplate "text/template"
 	"time"
 
 	"ccw/internal/consolestore"
@@ -53,6 +54,9 @@ type Server struct {
 	attempts map[string][]time.Time
 
 	tmpl map[string]*template.Template
+	// text是纯文本模板（一键安装脚本）。**不能用html/template**：
+	// 它会把引号转义成&#34;，脚本直接跑不起来。
+	text map[string]*texttemplate.Template
 }
 
 func New(store SiteStore, distDir string, logf func(string, ...any)) *Server {
@@ -60,7 +64,8 @@ func New(store SiteStore, distDir string, logf func(string, ...any)) *Server {
 		logf = func(string, ...any) {}
 	}
 	s := &Server{Store: store, DistDir: distDir, Logf: logf,
-		attempts: map[string][]time.Time{}, tmpl: map[string]*template.Template{}}
+		attempts: map[string][]time.Time{}, tmpl: map[string]*template.Template{},
+		text: map[string]*texttemplate.Template{}}
 	// 公开站点与管理后台是两套外壳：站点是可读的文档页，后台是操作台。
 	// 用不同的 layout 而不是同一个套两种样式——它们的信息密度与导航模型不同。
 	for _, page := range []string{"home.html", "download.html", "quickstart.html", "connect.html"} {
@@ -73,16 +78,29 @@ func New(store SiteStore, distDir string, logf func(string, ...any)) *Server {
 	}
 	// 登录页没有侧边栏（此时还没登录），自带完整文档结构。
 	s.tmpl["admin_login.html"] = template.Must(template.ParseFS(tmplFS, "templates/admin_login.html"))
+	// 一键安装脚本：纯文本，不套任何layout。用text/template而不是html/template——
+	// 目标是shell与PowerShell，HTML转义会把引号变成&#34;，脚本直接跑不起来。
+	for _, name := range []string{"install.sh", "install.ps1"} {
+		b, err := tmplFS.ReadFile("templates/" + name)
+		if err != nil {
+			panic(err)
+		}
+		s.text[name] = texttemplate.Must(texttemplate.New(name).Parse(string(b)))
+	}
 	return s
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page("home.html", func(*http.Request) (any, error) { return nil, nil }))
-	mux.HandleFunc("GET /quickstart", s.page("quickstart.html", func(*http.Request) (any, error) { return nil, nil }))
+	mux.HandleFunc("GET /quickstart", s.page("quickstart.html", func(r *http.Request) (any, error) {
+		return map[string]any{"Site": siteURL(r)}, nil
+	}))
 	mux.HandleFunc("GET /connect", s.page("connect.html", func(*http.Request) (any, error) { return nil, nil }))
 	mux.HandleFunc("GET /download", s.download)
 	mux.HandleFunc("GET /download/{os}/{arch}", s.downloadRedirect)
+	mux.HandleFunc("GET /install.sh", s.installScript("install.sh", "text/x-shellscript"))
+	mux.HandleFunc("GET /install.ps1", s.installScript("install.ps1", "text/plain"))
 	mux.HandleFunc("GET /dist/SHA256SUMS", s.sums) // 字面量路由优先于{filename}通配
 	mux.HandleFunc("GET /dist/{filename}", s.dist)
 	mux.HandleFunc("POST /v1/resolve", s.resolve)
@@ -172,6 +190,7 @@ type downloadData struct {
 	Release consolestore.Release
 	Arts    []artifactView
 	Rec     *artifactView
+	Site    string // 用于拼一键安装命令；跟随用户正在访问的域名，不写死
 }
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
@@ -180,7 +199,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	d := downloadData{Has: err == nil, Release: rel}
+	d := downloadData{Has: err == nil, Release: rel, Site: siteURL(r)}
 	for _, a := range arts {
 		d.Arts = append(d.Arts, artifactView{Artifact: a, SizeHuman: sizeHuman(a.SizeBytes)})
 	}
@@ -201,6 +220,50 @@ func pick(arts []artifactView, osName, arch string) *artifactView {
 		}
 	}
 	return nil
+}
+
+// siteURL从请求还原出用户正在访问的站点地址。
+// 一键安装命令与脚本里的下载地址都要指回这里，写死域名会在换域名/本地开发时失效。
+func siteURL(r *http.Request) string {
+	scheme := "https"
+	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+		scheme = p
+	} else if r.TLS == nil {
+		scheme = "http" // 本地开发
+	}
+	return scheme + "://" + r.Host
+}
+
+// installScript渲染一键安装脚本。
+//
+// **校验和内嵌在脚本里**：脚本与产物来自同一个站点，再让脚本去同一个站点取一份
+// SHA256SUMS，校验不了任何东西——能改产物的人也能改那个文件。内嵌之后，
+// 用户在浏览器里读一遍脚本，看到的就是他将要安装的那份二进制的指纹。
+//
+// 站点地址从请求的Host推出：这个脚本要被`curl | sh`执行，里面的下载地址
+// 必须指回用户正在访问的这个站点，不能写死。
+func (s *Server) installScript(name, contentType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rel, arts, err := s.Store.LatestPublished(r.Context())
+		if err != nil {
+			// 没有已发布版本时给出可读的提示而不是空脚本——
+			// `curl | sh` 执行一个空文件会静默成功，那更难排查。
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintln(w, "echo 'cclaude: 本站尚未发布任何客户端版本，请联系管理员' >&2; exit 1")
+			return
+		}
+		data := map[string]any{
+			"Site":    siteURL(r),
+			"Version": rel.Version,
+			"Arts":    arts,
+		}
+		w.Header().Set("Content-Type", contentType+"; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store") // 版本变了要立刻拿到新的
+		if err := s.text[name].Execute(w, data); err != nil {
+			s.Logf("console: render %s: %v", name, err)
+		}
+	}
 }
 
 func (s *Server) downloadRedirect(w http.ResponseWriter, r *http.Request) {

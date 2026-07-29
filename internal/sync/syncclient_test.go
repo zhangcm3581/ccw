@@ -20,7 +20,7 @@ type fakeTransport struct {
 	nextRev   int64
 }
 
-func (f *fakeTransport) Hello(string) (string, error) { return f.mode, nil }
+func (f *fakeTransport) Hello(string, string) (string, error) { return f.mode, nil }
 func (f *fakeTransport) Manifest() ([]FileEntry, error) {
 	return f.manifest, nil
 }

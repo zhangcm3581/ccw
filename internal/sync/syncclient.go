@@ -12,7 +12,7 @@ import (
 // SyncTransport抽象一次同步会话的消息往来，便于用假传输单测执行逻辑。
 // reject为空表示成功；非空是服务端拒绝原因（conflict|disk_full|...）。
 type SyncTransport interface {
-	Hello(device string) (mode string, err error)
+	Hello(device, ws string) (mode string, err error)
 	Manifest() ([]FileEntry, error)
 	Put(entry LocalEntry, content io.Reader) (newRev int64, reject string, err error)
 	Get(path string) (entry FileEntry, content io.ReadCloser, err error)
@@ -23,6 +23,9 @@ type SyncTransport interface {
 type SyncClient struct {
 	Root   string
 	Device string
+	// WS是工作区键，由Root算出（见WorkspaceKey）。云端按它把不同本地目录
+	// 分开存放——空值会被服务端拒绝，不再退回到"全项目一个平铺目录"。
+	WS     string
 	Notify func(string) // 提示用户（冲突等）；可为 nil
 }
 
@@ -34,7 +37,7 @@ func (c *SyncClient) note(msg string) {
 
 // SyncOnce用给定传输执行一轮同步，返回更新后的本地基线（调用方负责持久化到LocalIndex）。
 func (c *SyncClient) SyncOnce(ctx context.Context, t SyncTransport) ([]LocalEntry, error) {
-	mode, err := t.Hello(c.Device)
+	mode, err := t.Hello(c.Device, c.WS)
 	if err != nil {
 		return nil, err
 	}

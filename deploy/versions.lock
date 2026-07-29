@@ -35,10 +35,10 @@ debian                      bookworm-slim # deploy/Dockerfile.worker-agent 运�
 distroless                  gcr.io/distroless/static-debian12:nonroot   # deploy/Dockerfile.control-api 运行层
 
 ## 容器内软件
-nodejs                      20            # deploy/Dockerfile.claude 的 ARG NODE_MAJOR（NodeSource setup_20.x）
 docker-cli                  debian bookworm 的 docker.io 包版本   # worker-agent 运行层，未单独固定
 tmux                        ubuntu 24.04 的 tmux 包版本            # 项目镜像，未单独固定
-@anthropic-ai/claude-code    未固定 ⚠                              # deploy/.env.example 的 CLAUDE_CODE_VERSION 默认为空＝装最新
+claude-code（官方安装脚本）  未固定 ⚠                              # deploy/.env.example 的 CLAUDE_CODE_VERSION 默认为空＝装最新
+                                                                  # 2026-07-29改用 claude.ai/install.sh 装原生二进制，不再经npm
 
 ## 未固定项（已知欠账，见 docs/STATUS.md 的 P2）
 #
@@ -48,7 +48,7 @@ tmux                        ubuntu 24.04 的 tmux 包版本            # 项目�
 #    生产部署必须在 .env 里填具体版本号；升级前先用脱敏 JSONL 样例
 #    （internal/usage/testdata/session-sample.jsonl）跑解析兼容测试，
 #    再跑 tmux 断连恢复验证（Design Spec §16）。
-# 3. apt 安装的 tmux / git / docker.io / nodejs 具体包版本随基础镜像浮动，
+# 3. apt 安装的 tmux / git / docker.io 具体包版本随基础镜像浮动，
 #    未做 apt pinning。
 # 4. Console 的 bootstrap 流水线用 https://get.docker.com 便捷脚本装 Docker，
 #    装的是上游 stable 最新版，未固定。固定版本需按发行版拼 apt 版本串，

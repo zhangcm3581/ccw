@@ -1,24 +1,41 @@
 # 项目容器镜像：官方Claude Code + git + tmux，非root用户claude，PID 1为sleep infinity。
-# 版本按deploy/versions.lock固定（审查§3.2）；升级前先用脱敏JSONL样例与tmux恢复测试验证。
+#
+# Claude Code 用**官方安装脚本**装（2026-07-29定），不再走npm：
+# 官方脚本装的是自带运行时的原生二进制，不需要Node，也就不用为了它拖一整套
+# nodesource源与nodejs包。镜像更小、层更少，升级路径也与官方文档一致。
 ARG UBUNTU_TAG=24.04
 FROM ubuntu:${UBUNTU_TAG}
 # UTF-8 locale：否则 Claude Code 的 Unicode 界面显示成占位符、且无法输入中文
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
-ARG NODE_MAJOR=20
 ARG CLAUDE_CODE_VERSION
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git tmux curl ca-certificates gnupg \
+ && apt-get install -y --no-install-recommends git tmux curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
- && apt-get install -y nodejs \
- && rm -rf /var/lib/apt/lists/*
-RUN if [ -n "${CLAUDE_CODE_VERSION}" ]; then \
-      npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}; \
-    else \
-      npm install -g @anthropic-ai/claude-code; \
-    fi
+
 RUN useradd -m -u 1001 -s /bin/bash claude
+
+# 以claude身份安装：官方脚本装进 $HOME/.local/bin，装成root的话
+# 运行时用户根本看不到它。
+#
+# **版本固定的现状**：CLAUDE_CODE_VERSION非空时传给脚本，否则装latest。
+# 后者与CLAUDE.md「禁止未固定版本」有张力，与install-docker那一步同款取舍，
+# 已在versions.lock如实记为未固定项——不在这里写一句"已固定"了事。
+USER claude
+RUN if [ -n "${CLAUDE_CODE_VERSION}" ]; then \
+      curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}"; \
+    else \
+      curl -fsSL https://claude.ai/install.sh | bash; \
+    fi \
+ && /home/claude/.local/bin/claude --version
+
+# PATH对**全部入口**都要生效，缺一不可：
+#   - ENV：docker exec 的非交互命令（worker-agent 起 tmux 用的就是这条路）
+#   - .bashrc：交互式 shell（管理员 docker exec -it bash 进来手敲）
+# 只设其一的表现是"我能跑 claude、worker-agent 却报 command not found"。
+ENV PATH=/home/claude/.local/bin:$PATH
+RUN echo 'export PATH=/home/claude/.local/bin:$PATH' >> /home/claude/.bashrc
+
 # 预建挂载目录并归 claude(1001) 所有。关键：空命名卷首次挂载到容器路径时，
 # Docker 会用镜像内该路径的内容与所有权初始化卷——因此这里 chown 后，
 # workspace/claude-home/sync 卷都会是 claude 所有，避免默认 root:root
@@ -28,6 +45,7 @@ RUN useradd -m -u 1001 -s /bin/bash claude
 # <slug>-claude-projects），同样受上述卷初始化规则约束，漏建会以 root:root
 # 初始化，导致会话 JSONL 写不进去。凭据文件 .claude/.credentials.json 是它的
 # 兄弟节点，不在遮蔽范围内——因此账号仍然全机只授权一次（设计 §7.3）。
+USER root
 RUN mkdir -p /home/claude/.claude/projects /workspace /var/lib/cclaude-sync \
  && chown -R claude:claude /home/claude /workspace /var/lib/cclaude-sync
 USER claude

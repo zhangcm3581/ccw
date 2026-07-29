@@ -1,22 +1,75 @@
 package terminal
 
-// Names：同一project ID永远得到同一tmux socket与会话名，保证重连回到原会话。
-func Names(projectID string) (socket, session string) {
-	return projectID, "main"
+// 终端会话按**工作区**而不是按项目区分（2026-07-29）。
+//
+// 原来一个项目只有一个名为main的会话、固定跑在/workspace。同步改成按本地目录
+// 分层之后，若终端还停在/workspace，Claude 看到的是全部工作区的父目录，
+// 与客户端正在同步的那个目录对不上——用户在 ~/code 里跑，Claude 却在
+// 一个装着 code/ 与 work/ 两个子目录的地方工作。
+//
+// 现在：socket 仍是 project id（同项目共用一个 tmux server），
+// **会话名与工作目录都取工作区键**，于是每个本地目录各有一个互不打扰的会话，
+// 断线重连仍回到自己那个。
+//
+// 保留 legacy 形态（ws 为空 → 会话 main、工作目录 /workspace）只为一件事：
+// 管理员授权 Claude 账号时用的就是 `-t main`（见 DEPLOY.md 的 A7 与
+// docs/claude-auth-quickref.md）。那条路不带工作区，不该被这次改动打断。
+
+const legacySession = "main"
+
+// Names：同一 project + 工作区永远得到同一 tmux socket 与会话名，保证重连回到原会话。
+func Names(projectID, ws string) (socket, session string) {
+	if ws == "" {
+		return projectID, legacySession
+	}
+	return projectID, ws
+}
+
+// workdir返回容器内的工作目录。与同步的落盘位置必须一致：
+// worker 把工作区写在 <workspace-root>/<slug>/<ws>，容器里挂成 /workspace/<ws>。
+func workdir(ws string) string {
+	if ws == "" {
+		return "/workspace"
+	}
+	return "/workspace/" + ws
 }
 
 // EnsureSessionCmds：附着前必须依次尝试的命令（第一条失败时才执行第二条）。
 // 不使用new-session -A的前台形式：容器PID 1不是tmux，会话一律detached创建。
-func EnsureSessionCmds(containerName, projectID string) [][]string {
+func EnsureSessionCmds(containerName, projectID, ws string) [][]string {
+	socket, session := Names(projectID, ws)
 	return [][]string{
-		{"docker", "exec", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8", containerName, "tmux", "-L", projectID, "has-session", "-t", "main"},
-		{"docker", "exec", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8", containerName, "tmux", "-L", projectID, "new-session", "-d", "-s", "main", "-c", "/workspace", "claude"},
+		{"docker", "exec", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8", containerName,
+			"tmux", "-L", socket, "has-session", "-t", session},
+		// -c 指定的目录必须先存在，否则 tmux 会在 $HOME 起会话而不报错——
+		// 表现是"终端里看不到任何同步过来的文件"。mkdir -p 是幂等的。
+		{"docker", "exec", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8", containerName,
+			"sh", "-c", "mkdir -p " + shellQuote(workdir(ws))},
+		{"docker", "exec", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8", containerName,
+			"tmux", "-L", socket, "new-session", "-d", "-s", session, "-c", workdir(ws), "claude"},
 	}
 }
 
 // AttachCmd必须带-t（审查§2.1）：容器内不分配TTY时tmux attach会直接失败；
 // 宿主机侧的TTY由creack/pty提供给docker CLI进程，两者缺一不可。
-func AttachCmd(containerName, projectID string) []string {
+func AttachCmd(containerName, projectID, ws string) []string {
+	socket, session := Names(projectID, ws)
 	return []string{"docker", "exec", "-it", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8", containerName,
-		"tmux", "-L", projectID, "attach-session", "-t", "main"}
+		"tmux", "-L", socket, "attach-session", "-t", session}
+}
+
+// shellQuote用单引号包裹参数。工作区键已经过ValidWorkspace校验（只有小写字母、
+// 数字与连字符），这里再包一层是纵深防御，不是唯一防线。
+func shellQuote(s string) string {
+	out := make([]byte, 0, len(s)+2)
+	out = append(out, '\'')
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\'' {
+			out = append(out, '\'', '\\', '\'', '\'')
+			continue
+		}
+		out = append(out, s[i])
+	}
+	out = append(out, '\'')
+	return string(out)
 }

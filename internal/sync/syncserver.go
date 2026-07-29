@@ -6,6 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	stdsync "sync"
 )
 
@@ -34,16 +37,59 @@ type PutResult struct {
 // SyncSession承载一条同步连接的服务端逻辑，与WebSocket传输层解耦以便单元测试。
 // AllowQuota由worker注入（storage.Gate.Allow），返回非nil即视为超额。
 type SyncSession struct {
-	ProjectID  string
-	Device     string
-	Mode       string // "rw" | "cleanup"
-	Store      RevisionStore
+	ProjectID string
+	Device    string
+	// WS是工作区键（见workspace.go）。**索引路径与磁盘目录都按它分层**，
+	// 这是"不同本地目录互不污染"的实现点。空值只在单元测试里出现，
+	// 生产路径由ws.go的hello强制要求。
+	WS    string
+	Mode  string // "rw" | "cleanup"
+	Store RevisionStore
+	// Root是本项目的workspace根；SetWorkspace会在它下面按工作区建子目录。
+	// 直接给Dir而不给Root的用法只保留给单元测试。
+	Root       string
 	Dir        *DirStore
 	MaxBytes   int64
 	AllowQuota func(used, oldSize, newSize int64) error
 	// Lock：项目级锁，串行化同一项目的写，防并发上传各读旧revision/用量后同时通过（审查§15.2）。
 	// 可为 nil（单元测试）；worker 为每个 project 注入同一把锁。
 	Lock *stdsync.Mutex
+}
+
+// key把工作区内的相对路径转成索引里的全局路径。
+// file_index的主键是(project_id, path)，用前缀分层就不必改表结构——
+// 不同工作区的同名文件天然是两行。
+func (s *SyncSession) key(rel string) string {
+	if s.WS == "" {
+		return rel
+	}
+	return s.WS + "/" + rel
+}
+
+// unkey把索引路径还原成工作区内的相对路径；不属于本工作区的返回false。
+func (s *SyncSession) unkey(path string) (string, bool) {
+	if s.WS == "" {
+		return path, true
+	}
+	rest, ok := strings.CutPrefix(path, s.WS+"/")
+	return rest, ok
+}
+
+// SetWorkspace绑定工作区：索引前缀与磁盘目录都随它走。
+// Root为空表示调用方直接给了Dir（单元测试），此时只设键、不动目录。
+func (s *SyncSession) SetWorkspace(ws string) error {
+	if !ValidWorkspace(ws) {
+		return errors.New("sync: 非法的工作区键")
+	}
+	s.WS = ws
+	if s.Root != "" {
+		dir := filepath.Join(s.Root, ws)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		s.Dir = NewDirStore(dir)
+	}
+	return nil
 }
 
 func (s *SyncSession) lock() {
@@ -67,7 +113,7 @@ func (s *SyncSession) HandlePut(ctx context.Context, path string, baseRev int64,
 	}
 	s.lock() // 从读当前revision到提交，全程串行，防并发TOCTOU
 	defer s.unlock()
-	curRev, oldSize, exists, err := s.Store.Current(ctx, s.ProjectID, rel)
+	curRev, oldSize, exists, err := s.Store.Current(ctx, s.ProjectID, s.key(rel))
 	if err != nil {
 		return PutResult{Reason: "internal"}
 	}
@@ -107,7 +153,7 @@ func (s *SyncSession) HandlePut(ctx context.Context, path string, baseRev int64,
 		s.Dir.Discard(tmpID)
 		return PutResult{Reason: "internal"}
 	}
-	e := FileEntry{Path: rel, Size: size, SHA256: gotSHA, Revision: newRev}
+	e := FileEntry{Path: s.key(rel), Size: size, SHA256: gotSHA, Revision: newRev}
 	if err := s.Store.Commit(ctx, s.ProjectID, e, s.Device); err != nil {
 		return PutResult{Reason: "internal"}
 	}
@@ -122,7 +168,7 @@ func (s *SyncSession) HandleDelete(ctx context.Context, path string, baseRev int
 	}
 	s.lock()
 	defer s.unlock()
-	curRev, _, exists, err := s.Store.Current(ctx, s.ProjectID, rel)
+	curRev, _, exists, err := s.Store.Current(ctx, s.ProjectID, s.key(rel))
 	if err != nil {
 		return PutResult{Reason: "internal"}
 	}
@@ -136,7 +182,7 @@ func (s *SyncSession) HandleDelete(ctx context.Context, path string, baseRev int
 	if err := s.Dir.Delete(rel, newRev); err != nil {
 		return PutResult{Reason: "internal"}
 	}
-	e := FileEntry{Path: rel, Revision: newRev, Deleted: true}
+	e := FileEntry{Path: s.key(rel), Revision: newRev, Deleted: true}
 	if err := s.Store.Commit(ctx, s.ProjectID, e, s.Device); err != nil {
 		return PutResult{Reason: "internal"}
 	}
@@ -147,7 +193,22 @@ func (s *SyncSession) HandleDelete(ctx context.Context, path string, baseRev int
 // 入账到file_index，这样客户端拉到的清单包含云端最新状态（云端→本地方向）。
 func (s *SyncSession) HandleManifest(ctx context.Context) ([]FileEntry, error) {
 	s.reconcileCloud(ctx)
-	return s.Store.Manifest(ctx, s.ProjectID)
+	all, err := s.Store.Manifest(ctx, s.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	// **只把本工作区的条目给客户端**。这一句是"不同本地目录互不污染"的
+	// 最后一道闸：漏掉它，客户端会把别的工作区的文件当成自己该有的下下来。
+	out := make([]FileEntry, 0, len(all))
+	for _, e := range all {
+		rel, ok := s.unkey(e.Path)
+		if !ok {
+			continue
+		}
+		e.Path = rel
+		out = append(out, e)
+	}
+	return out, nil
 }
 
 // reconcileCloud扫描workspace，把与file_index不一致的文件入账为新revision，
@@ -160,13 +221,22 @@ func (s *SyncSession) reconcileCloud(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	remote, err := s.Store.Manifest(ctx, s.ProjectID)
+	all, err := s.Store.Manifest(ctx, s.ProjectID)
 	if err != nil {
 		return
 	}
-	idx := make(map[string]FileEntry, len(remote))
-	for _, r := range remote {
-		idx[r.Path] = r
+	// 只对账本工作区：ScanDir扫的是本工作区目录，拿全项目的索引去比，
+	// 别的工作区的文件会因"扫不到"而被全部写成tombstone。
+	idx := make(map[string]FileEntry, len(all))
+	var remote []FileEntry
+	for _, r := range all {
+		rel, ok := s.unkey(r.Path)
+		if !ok {
+			continue
+		}
+		r.Path = rel
+		idx[rel] = r
+		remote = append(remote, r)
 	}
 	seen := make(map[string]bool, len(scanned))
 	for _, f := range scanned {
@@ -176,12 +246,12 @@ func (s *SyncSession) reconcileCloud(ctx context.Context) {
 			continue // 未变（含客户端刚put的）
 		}
 		_ = s.Store.Commit(ctx, s.ProjectID,
-			FileEntry{Path: f.Path, Size: f.Size, SHA256: f.SHA256, Revision: cur.Revision + 1}, "cloud")
+			FileEntry{Path: s.key(f.Path), Size: f.Size, SHA256: f.SHA256, Revision: cur.Revision + 1}, "cloud")
 	}
 	for _, r := range remote {
 		if !r.Deleted && !seen[r.Path] {
 			_ = s.Store.Commit(ctx, s.ProjectID,
-				FileEntry{Path: r.Path, Revision: r.Revision + 1, Deleted: true}, "cloud")
+				FileEntry{Path: s.key(r.Path), Revision: r.Revision + 1, Deleted: true}, "cloud")
 		}
 	}
 }
@@ -192,7 +262,7 @@ func (s *SyncSession) HandleGet(ctx context.Context, path string) (FileEntry, io
 	if err != nil {
 		return FileEntry{}, nil, err
 	}
-	rev, size, exists, err := s.Store.Current(ctx, s.ProjectID, rel)
+	rev, size, exists, err := s.Store.Current(ctx, s.ProjectID, s.key(rel))
 	if err != nil {
 		return FileEntry{}, nil, err
 	}

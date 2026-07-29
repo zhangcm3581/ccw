@@ -69,7 +69,7 @@ CCW_TEST_DATABASE_URL=postgres://... go test ./internal/store -v
 
 **终端：**CLI用连接令牌连`/ws/terminal` → worker `docker exec` 到项目容器：先`tmux has-session`，不存在才`new-session -d`，再`attach-session`附着；宿主机侧TTY由`creack/pty`提供，容器侧TTY靠`docker exec -it`的`-t`，**两者缺一不可**。断开只关PTY与WebSocket，绝不`kill-session`。
 
-**同步：**客户端每2秒连一次`/ws/sync`，拉服务端manifest → 与本地`.cclaude/index.json`基线做**三方判断**（`base_revision` + `base_sha256` + `current_sha256` + 本地状态）→ 上传走CAS（`base_revision`不匹配即conflict，绝不静默覆盖，冲突时生成`.conflict-remote-<UTC>`副本）。服务端在`HandleManifest`时顺带`reconcileCloud`，把容器内Claude直接改的文件扫进`file_index`并分配新revision。
+**同步：**客户端每2秒连一次`/ws/sync`，**先在`hello`里报工作区键**（按本地绝对路径算，见`internal/sync/workspace.go`；云端据此把不同本地目录分开存放，文件落`<root>/<slug>/<ws>/`、索引路径加`<ws>/`前缀），再拉服务端manifest → 与本地`.cclaude/index.json`基线做**三方判断**（`base_revision` + `base_sha256` + `current_sha256` + 本地状态）→ 上传走CAS（`base_revision`不匹配即conflict，绝不静默覆盖，冲突时生成`.conflict-remote-<UTC>`副本）。服务端在`HandleManifest`时顺带`reconcileCloud`，把容器内Claude直接改的文件扫进`file_index`并分配新revision。
 
 **额度：**`internal/usage`解析Claude HOME里的会话JSONL → `usage_events`（唯一键`(project_id, source_event_id)`去重）→ `quota.Service`同时算项目5h/7d与账号级池的双窗口安全余量 → 超额时worker的30秒循环关闭该项目全部终端连接，同步降级为cleanup（只许下载/删除/缩小）。
 

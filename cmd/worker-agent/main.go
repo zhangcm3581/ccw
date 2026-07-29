@@ -87,16 +87,19 @@ func main() {
 		return "ccw-" + projectID
 	}
 
-	startPTY := func(projectID string) (io.ReadWriteCloser, error) {
+	startPTY := func(projectID, ws string) (io.ReadWriteCloser, error) {
 		container := containerFor(projectID)
-		// 附着前先准备会话：has-session失败才new-session -d（审计§4.1）
-		cmds := terminal.EnsureSessionCmds(container, projectID)
+		// 附着前先准备会话：has-session失败才建目录并new-session -d（审计§4.1）。
+		// 会话名与工作目录都跟着工作区走，与同步的落盘位置保持一致。
+		cmds := terminal.EnsureSessionCmds(container, projectID, ws)
 		if err := exec.Command(cmds[0][0], cmds[0][1:]...).Run(); err != nil {
-			if err := exec.Command(cmds[1][0], cmds[1][1:]...).Run(); err != nil {
-				return nil, err
+			for _, c := range cmds[1:] {
+				if err := exec.Command(c[0], c[1:]...).Run(); err != nil {
+					return nil, err
+				}
 			}
 		}
-		args := terminal.AttachCmd(container, projectID)
+		args := terminal.AttachCmd(container, projectID, ws)
 		cmd := exec.Command(args[0], args[1:]...)
 		f, err := pty.Start(cmd)
 		if err != nil {
@@ -113,6 +116,8 @@ func main() {
 	}
 	// 同步会话工厂：绑定 PG 存储、项目 workspace 目录、磁盘配额门、项目锁。
 	sessionFactory := func(projectID, device, mode string) *syncpkg.SyncSession {
+		// Root是项目根；工作区子目录由SyncSession.SetWorkspace在hello时建，
+		// 因为工作区键要等客户端报上来才知道。
 		root := filepath.Join(cfg.WorkspaceRoot, projectSlug(ctx, st, projectID))
 		os.MkdirAll(root, 0o755)
 		var limit int64 = 1 << 40
@@ -122,7 +127,7 @@ func main() {
 		gate := storage.Gate{Limit: limit}
 		return &syncpkg.SyncSession{
 			ProjectID: projectID, Device: device, Mode: mode,
-			Store: st, Dir: syncpkg.NewDirStore(root),
+			Store: st, Root: root,
 			MaxBytes: 1 << 30, AllowQuota: gate.Allow, Lock: lockFor(projectID),
 		}
 	}

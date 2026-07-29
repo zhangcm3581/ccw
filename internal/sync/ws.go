@@ -20,8 +20,11 @@ const (
 )
 
 type wsReq struct {
-	Op           string    `json:"op"`
-	Device       string    `json:"device,omitempty"`
+	Op     string `json:"op"`
+	Device string `json:"device,omitempty"`
+	// WS是工作区键：按本地目录隔离云端workspace（见workspace.go）。
+	// hello之外的帧不看它——工作区在会话建立时定死，中途不允许换。
+	WS           string    `json:"ws,omitempty"`
 	Path         string    `json:"path,omitempty"`
 	Entry        FileEntry `json:"entry,omitempty"`
 	BaseRevision int64     `json:"base_revision,omitempty"`
@@ -65,6 +68,10 @@ func ServeSync(w http.ResponseWriter, r *http.Request, key []byte, maxMessage in
 	mode := modeFor(claims.ProjectID)
 	sess := factory(claims.ProjectID, "", mode)
 	writeSyncJSON(conn, wsResp{Op: "auth_ok", Mode: mode})
+	// 工作区在hello里确定。**hello之前不接受任何读写帧**：
+	// 没有工作区就落盘等于回到"全项目一个平铺目录"，
+	// 那正是不同本地目录互相污染的成因。
+	ready := false
 
 	for {
 		mt, data, err := conn.ReadMessage()
@@ -78,9 +85,24 @@ func ServeSync(w http.ResponseWriter, r *http.Request, key []byte, maxMessage in
 		if json.Unmarshal(data, &req) != nil {
 			continue
 		}
+		if req.Op != "hello" && !ready {
+			writeSyncJSON(conn, wsResp{Op: "reject", Reason: "hello_required"})
+			continue
+		}
 		switch req.Op {
 		case "hello":
 			sess.Device = req.Device
+			// 老客户端不发ws：拒绝而不是退回平铺目录。静默兼容会让升级后的
+			// 服务端继续制造污染，且没人会发现。
+			if !ValidWorkspace(req.WS) {
+				writeSyncJSON(conn, wsResp{Op: "reject", Reason: "workspace_required"})
+				return
+			}
+			if err := sess.SetWorkspace(req.WS); err != nil {
+				writeSyncJSON(conn, wsResp{Op: "reject", Reason: "workspace_required"})
+				return
+			}
+			ready = true
 
 		case "manifest":
 			entries, err := sess.HandleManifest(r.Context())

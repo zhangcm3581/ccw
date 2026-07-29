@@ -33,8 +33,8 @@ func DialSync(ctx context.Context, url, token string) (*wsTransport, error) {
 
 func (t *wsTransport) Close() error { return t.conn.Close() }
 
-func (t *wsTransport) Hello(device string) (string, error) {
-	if err := t.conn.WriteJSON(wsReq{Op: "hello", Device: device}); err != nil {
+func (t *wsTransport) Hello(device, ws string) (string, error) {
+	if err := t.conn.WriteJSON(wsReq{Op: "hello", Device: device, WS: ws}); err != nil {
 		return "", err
 	}
 	return t.mode, nil

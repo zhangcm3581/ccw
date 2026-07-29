@@ -105,7 +105,7 @@ func main() {
 		// 正常：后台同步 + 前台终端。任一返回（断开）后回到循环重连。
 		syncDone := make(chan struct{})
 		go func() { defer close(syncDone); runSync(ctx, cwd, c, cdk, sessionToken, conn) }()
-		if err := runTerminal(ctx, conn); err != nil {
+		if err := runTerminal(ctx, conn, syncpkg.WorkspaceKey(cwd)); err != nil {
 			fmt.Fprintln(os.Stderr, "terminal:", err)
 		}
 		<-syncDone
@@ -129,8 +129,13 @@ func printStatus(conn control.ConnectionResponse) {
 
 // runTerminal附着云端PTY：令牌放Authorization头（无?token=），raw mode双向转发，
 // GetSize轮询发resize。断开即返回，由外层循环重连。
-func runTerminal(ctx context.Context, conn control.ConnectionResponse) error {
-	header := http.Header{"Authorization": {"Bearer " + conn.TerminalToken}}
+func runTerminal(ctx context.Context, conn control.ConnectionResponse, wsKey string) error {
+	// 工作区键随连接一起报上去：云端据此决定 tmux 会话名与工作目录，
+	// 与同步的落盘位置保持一致。不放URL参数——那会进反代日志。
+	header := http.Header{
+		"Authorization":   {"Bearer " + conn.TerminalToken},
+		"X-CCW-Workspace": {wsKey},
+	}
 	ws, _, err := websocket.DefaultDialer.DialContext(ctx, conn.TerminalURL, header)
 	if err != nil {
 		return err
@@ -199,6 +204,9 @@ func runSync(ctx context.Context, root string, c control.Client, cdk, sessionTok
 	client := &syncpkg.SyncClient{
 		Root:   root,
 		Device: deviceName(),
+		// 工作区键按本地目录算：换个目录跑就是另一个云端工作区，
+		// 两边的文件互不可见（2026-07-29修的那个跨目录污染）。
+		WS:     syncpkg.WorkspaceKey(root),
 		Notify: func(m string) { fmt.Fprintln(os.Stderr, "[sync]", m) },
 	}
 	t := time.NewTicker(2 * time.Second)

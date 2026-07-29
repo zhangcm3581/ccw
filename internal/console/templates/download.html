@@ -1,10 +1,26 @@
-{{define "title"}}下载 cclaude · ccw{{end}}
+{{define "title"}}安装 cclaude · ccw{{end}}
 {{define "content"}}
-<h1>下载 cclaude 客户端</h1>
+<h1>安装 cclaude 客户端</h1>
 {{if not .Has}}
 <div class="notice">暂无发布版本。请联系管理员完成首次发布。</div>
 {{else}}
 <p class="lead">当前版本 <code>{{.Release.Version}}</code>{{if .Release.Notes}} · {{.Release.Notes}}{{end}}</p>
+
+<h2>一条命令装好</h2>
+<p>装完 <code>cclaude</code> 即为全局命令，任意目录直接用。</p>
+
+<p><b>macOS / Linux</b></p>
+<pre><code>curl -fsSL {{.Site}}/install.sh | sh</code></pre>
+
+<p><b>Windows</b>（PowerShell）</p>
+<pre><code>irm {{.Site}}/install.ps1 | iex</code></pre>
+
+<div class="notice">脚本会按你的系统与架构取对应产物，<b>校验 SHA256 后</b>才装进 PATH；
+校验和直接写在脚本里，你可以先在浏览器打开
+<a href="/install.sh">install.sh</a> / <a href="/install.ps1">install.ps1</a> 读一遍再执行。</div>
+
+<h2>手动下载</h2>
+<p class="muted">不想用脚本、或需要装到指定位置时用这里。</p>
 
 {{if .Rec}}
 <div class="card" style="margin:16px 0">
@@ -16,7 +32,7 @@
 </div>
 {{end}}
 
-<h2>全部平台</h2>
+<h3>全部平台</h3>
 <div class="scroll">
 <table>
   <tr><th>系统</th><th>架构</th><th>文件</th><th>大小</th><th>SHA256</th></tr>
@@ -31,9 +47,9 @@
 </table>
 </div>
 
-<h2>校验完整性</h2>
+<h3>校验完整性</h3>
 <p>下载 <a href="/dist/SHA256SUMS">SHA256SUMS</a> 到产物同一目录，然后：</p>
 <pre><code>shasum -a 256 -c SHA256SUMS --ignore-missing   # Linux 用 sha256sum -c --ignore-missing</code></pre>
-<p class="muted">下载后 macOS/Linux 需 <code>chmod +x</code>；使用步骤见<a href="/quickstart">快速开始</a>。</p>
+<p class="muted">手动下载后 macOS/Linux 需 <code>chmod +x</code> 并自行放进 PATH；使用步骤见<a href="/quickstart">快速开始</a>。</p>
 {{end}}
 {{end}}

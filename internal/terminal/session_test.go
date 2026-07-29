@@ -8,15 +8,23 @@ import (
 )
 
 func TestNamesDeterministic(t *testing.T) {
-	s1, n1 := Names("pid-1")
-	s2, n2 := Names("pid-1")
-	if s1 != s2 || n1 != n2 || n1 != "main" || s1 != "pid-1" {
+	s1, n1 := Names("pid-1", "code-3f9a1b7c")
+	s2, n2 := Names("pid-1", "code-3f9a1b7c")
+	if s1 != s2 || n1 != n2 || s1 != "pid-1" || n1 != "code-3f9a1b7c" {
 		t.Fatalf("names must be stable: %s/%s vs %s/%s", s1, n1, s2, n2)
+	}
+	// 不同工作区必须是不同会话，否则两个本地目录会附着到同一个终端
+	if _, other := Names("pid-1", "work-a1b2c3d4"); other == n1 {
+		t.Error("不同工作区应得到不同会话名")
+	}
+	// 空工作区退回legacy：管理员授权那条路用的就是 -t main
+	if _, legacy := Names("pid-1", ""); legacy != "main" {
+		t.Errorf("空工作区应退回main，got %s", legacy)
 	}
 }
 
 func TestAttachCmdNeverKills(t *testing.T) {
-	cmd := AttachCmd("ccw-project-a", "pid-1")
+	cmd := AttachCmd("ccw-project-a", "pid-1", "code-3f9a1b7c")
 	joined := strings.Join(cmd, " ")
 	if strings.Contains(joined, "kill") {
 		t.Fatalf("attach must never contain kill: %q", joined)
@@ -31,16 +39,25 @@ func TestAttachCmdNeverKills(t *testing.T) {
 }
 
 func TestEnsureSessionCmdsOrder(t *testing.T) {
-	cmds := EnsureSessionCmds("ccw-project-a", "pid-1")
-	if len(cmds) != 2 {
-		t.Fatalf("want has-session then new-session, got %d cmds", len(cmds))
+	cmds := EnsureSessionCmds("ccw-project-a", "pid-1", "code-3f9a1b7c")
+	if len(cmds) != 3 {
+		t.Fatalf("want has-session / mkdir / new-session, got %d cmds", len(cmds))
 	}
 	if !strings.Contains(strings.Join(cmds[0], " "), "has-session") {
 		t.Fatalf("first cmd must probe session: %v", cmds[0])
 	}
-	joined := strings.Join(cmds[1], " ")
+	// 建目录必须排在new-session之前：-c指向不存在的目录时tmux会静默退到$HOME，
+	// 表现是"终端里看不到任何同步过来的文件"。
+	if !strings.Contains(strings.Join(cmds[1], " "), "mkdir -p") {
+		t.Fatalf("second cmd must create the workdir: %v", cmds[1])
+	}
+	joined := strings.Join(cmds[2], " ")
 	if !strings.Contains(joined, "new-session -d") || strings.Contains(joined, " -A") {
-		t.Fatalf("second cmd must create detached session without -A: %v", cmds[1])
+		t.Fatalf("third cmd must create detached session without -A: %v", cmds[2])
+	}
+	// 工作目录必须是工作区子目录，与同步落盘位置一致
+	if !strings.Contains(joined, "-c /workspace/code-3f9a1b7c") {
+		t.Fatalf("workdir must follow the workspace: %v", cmds[2])
 	}
 }
 
