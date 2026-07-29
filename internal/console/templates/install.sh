@@ -14,8 +14,9 @@ BASE='{{.Site}}'
 case "$(uname -s)" in
   Darwin) OS=darwin ;;
   Linux)  OS=linux ;;
-  *) echo "cclaude: 不支持的系统 $(uname -s)；Windows 请用 PowerShell 装：" >&2
-     echo "  irm {{.Site}}/install.ps1 | iex" >&2
+  *) echo "cclaude: 不支持的系统 $(uname -s)。Windows 请用：" >&2
+     echo "  PowerShell:  irm {{.Site}}/install.ps1 | iex" >&2
+     echo "  cmd.exe:     powershell -c \"irm {{.Site}}/install.ps1 | iex\"" >&2
      exit 1 ;;
 esac
 case "$(uname -m)" in

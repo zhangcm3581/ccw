@@ -12,8 +12,14 @@
 <p><b>macOS / Linux</b></p>
 <pre><code>curl -fsSL {{.Site}}/install.sh | sh</code></pre>
 
-<p><b>Windows</b>（PowerShell）</p>
-<pre><code>irm {{.Site}}/install.ps1 | iex</code></pre>
+<p><b>Windows</b></p>
+<pre><code># PowerShell
+irm {{.Site}}/install.ps1 | iex
+
+# 或 cmd.exe
+powershell -c "irm {{.Site}}/install.ps1 | iex"</code></pre>
+<p class="muted">Windows 走 PowerShell 而不是 <code>curl | sh</code>：系统里没有 <code>sh</code>；
+而且 <code>irm | iex</code> 是求值字符串、不受 ExecutionPolicy 限制，先下载成 .ps1 再执行反而会被默认策略拦下。</p>
 
 <div class="notice">脚本会按你的系统与架构取对应产物，<b>校验 SHA256 后</b>才装进 PATH；
 校验和直接写在脚本里，你可以先在浏览器打开

@@ -191,7 +191,13 @@ curl -fsSL https://你的站点域名/install.sh | sh
 
 # Windows（PowerShell）
 irm https://你的站点域名/install.ps1 | iex
+
+# Windows（cmd.exe）
+powershell -c "irm https://你的站点域名/install.ps1 | iex"
 ```
+
+> Windows 不用 `curl | sh`：系统里没有 `sh`。也不建议先下载成 `.ps1` 再执行——
+> 默认 ExecutionPolicy 会拦下脚本文件，而 `irm | iex` 是求值字符串，不受该策略限制。
 
 装完 `cclaude` 是全局命令。手动下载仍在 `https://你的站点域名/download`。
 

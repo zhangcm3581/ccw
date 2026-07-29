@@ -10,7 +10,10 @@
 curl -fsSL {{.Site}}/install.sh | sh
 
 # Windows（PowerShell）
-irm {{.Site}}/install.ps1 | iex</code></pre>
+irm {{.Site}}/install.ps1 | iex
+
+# Windows（cmd.exe）
+powershell -c "irm {{.Site}}/install.ps1 | iex"</code></pre>
     <p class="muted">装完 <code>cclaude</code> 即为全局命令。手动下载的方式见<a href="/download">下载页</a>。</p>
   </li>
   <li>
