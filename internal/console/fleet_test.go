@@ -26,6 +26,7 @@ type fakeFleetStore struct {
 	projects map[string]consolestore.NodeProject
 	issues   []consolestore.CDKIssue
 	created  []string
+	retired  []string
 }
 
 func newFleetStore() *fakeFleetStore {
@@ -139,6 +140,23 @@ func (f *fakeFleetStore) RecordCDKIssue(_ context.Context, projectID, publicID, 
 		ID: "ci-" + publicID, ProjectID: projectID, PublicID: publicID,
 		Slug: f.projects[projectID].Slug, IssuedAt: time.Now(),
 	})
+	return nil
+}
+
+// RetireNode：退役域名 + 删节点，与生产同形（域名行保留，seq不回收）。
+func (f *fakeFleetStore) RetireNode(_ context.Context, nodeID string) error {
+	if _, ok := f.nodes[nodeID]; !ok {
+		return consolestore.ErrNotFound
+	}
+	delete(f.nodes, nodeID)
+	delete(f.domains, nodeID) // 生产里是置NULL保留行；测试只关心"不再属于该节点"
+	delete(f.creds, nodeID)
+	for id, p := range f.projects {
+		if p.NodeID == nodeID {
+			delete(f.projects, id)
+		}
+	}
+	f.retired = append(f.retired, nodeID)
 	return nil
 }
 

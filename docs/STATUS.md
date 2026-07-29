@@ -121,7 +121,17 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   - 域名页：zone创建、子域名分配总览、**待添加的A记录直接给出原文**；证书状态明确标注未实施（不假装）
   - 审计页：按动作与结果过滤、分页。审计此前只有写没有读
 
-**未实施**：C9（Route 53自动化）、C10（证书预算记账与到期告警）、C19剩余（节点巡检）、C22（真实VPS纳管验收）、C21剩余（备份恢复演练）、解除纳管流水线。
+- **解除纳管 / 禁用CDK / 后台授权Claude**（2026-07-30）：
+  - 解除纳管：**只清Console的账，不碰远端机器**（容器与数据都还在那台服务器上跑）。
+    域名行保留、置released_at，序号不回收；其余从表由外键CASCADE。
+    要求把节点名原样打一遍才执行，**审计先于删除**（删完就没有节点行可归属了）
+  - 禁用CDK：远程调节点上的`ccwadmin disable-cdk`，镜像随之标撤销
+  - **后台直接授权Claude**：Console在容器里起一个跑`claude`的tmux会话，
+    把终端画面原样取回来显示，管理员粘贴授权码，Console经stdin送进会话
+    （**不走命令行**，那在节点上人人可见）。**不解析Claude的输出**——
+    登录提示与URL形态会随版本变，写死解析等于把后台绑死在某个客户端版本上
+
+**未实施**：C9（Route 53自动化）、C10（证书预算记账与到期告警）、C19剩余（节点巡检）、C22（真实VPS纳管验收）、C21剩余（备份恢复演练）。
 
 **2026-07-26代码审查修掉的两个阻断项**：①此前只推4个编排文件到扁平目录，而compose用`context: ..`+`dockerfile: deploy/X`且Dockerfile从Go源码构建——compose-up必然失败；现改为推完整源码包（`push-source`步骤+`scripts/build-node-src.sh`+Console镜像内置），缺源码包时机队管理直接不启用。②`LogHub`的cancel会close通道，与Append并发时`panic: send on closed channel`（已复现），触发路径是部署中关掉日志页；现改为只注销不close，并给运行详情页加只读的`History()`。同批还修了：Console日志目录未挂卷（重建即丢）、install-docker注释声称配了data-root实际没有、凭据交接不进provision_steps、CSRF每次渲染换token导致多标签403、CAA查询固定query ID、日志缓冲map无上限。
 

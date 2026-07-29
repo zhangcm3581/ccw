@@ -39,6 +39,8 @@ type FleetStore interface {
 	ListCDKIssues(ctx context.Context) ([]consolestore.CDKIssue, error)
 	RecordCDKIssue(ctx context.Context, projectID, publicID, issuedBy string) error
 	RevokeCDKIssue(ctx context.Context, publicID string) error
+	// RetireNode解除纳管：退役域名并删节点行。**不碰远端机器**。
+	RetireNode(ctx context.Context, nodeID string) error
 }
 
 // Fleet持有机队页的依赖。
@@ -63,11 +65,13 @@ func (f *Fleet) StashCDK(runID, slug, publicID, cdk string) {
 func (s *Server) registerFleet(mux *http.ServeMux) {
 	s.registerDomains(mux)
 	s.registerCDKs(mux)
+	s.registerClaudeAuth(mux)
 	mux.HandleFunc("GET /admin/nodes", s.Auth.requireAdmin(s.adminNodes))
 	mux.HandleFunc("GET /admin/nodes/new", s.Auth.requireAdmin(s.adminNodeNew))
 	mux.HandleFunc("POST /admin/nodes/new", s.Auth.requireAdmin(s.adminNodeCreate))
 	mux.HandleFunc("GET /admin/nodes/{id}", s.Auth.requireAdmin(s.adminNodeDetail))
 	mux.HandleFunc("POST /admin/nodes/{id}/resume", s.Auth.requireAdmin(s.adminNodeResume))
+	mux.HandleFunc("POST /admin/nodes/{id}/delete", s.Auth.requireAdmin(s.adminNodeDelete))
 	mux.HandleFunc("GET /admin/nodes/{id}/runs/{run}", s.Auth.requireAdmin(s.adminRunDetail))
 	mux.HandleFunc("GET /admin/nodes/{id}/runs/{run}/stream", s.Auth.requireAdmin(s.adminRunStream))
 }
@@ -275,6 +279,9 @@ func (s *Server) adminNodeDetail(w http.ResponseWriter, r *http.Request, sess co
 		"CanResume":     node.Status != "provisioning",
 		"AuthProjects":  authProjects,
 		"SSHTarget":     node.SSHUser + "@" + node.Host,
+		"Screen":        r.URL.Query().Get("screen"),
+		"Error":         r.URL.Query().Get("err"),
+		"Notice":        r.URL.Query().Get("ok"),
 	}
 	if derr == nil && d.RecordState == "pending" {
 		data["DomainPending"] = true
@@ -314,6 +321,47 @@ func (s *Server) adminNodeResume(w http.ResponseWriter, r *http.Request, sess co
 		return
 	}
 	http.Redirect(w, r, fmt.Sprintf("/admin/nodes/%s/runs/%s", nodeID, runID), http.StatusFound)
+}
+
+// adminNodeDelete解除纳管。
+//
+// **只清Console这边的账，绝不碰远端机器**：容器、数据卷、Claude凭据都还在
+// 那台服务器上跑，要真正下线得自己登机处理。让后台去销毁一台还在服务的机器，
+// 是无法撤销且后果不成比例的操作——这条边界在页面上也写明了。
+//
+// 要求把节点名原样打一遍才执行：删除不可撤销，而误点一个红按钮太容易。
+func (s *Server) adminNodeDelete(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	if !s.Auth.checkCSRF(r) {
+		http.Error(w, "csrf", http.StatusForbidden)
+		return
+	}
+	ctx := r.Context()
+	nodeID := r.PathValue("id")
+	node, err := s.Fleet.Store.GetNode(ctx, nodeID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if strings.TrimSpace(r.PostFormValue("confirm")) != node.Name {
+		s.redirectNode(w, r, nodeID, "", "确认文本与节点名不一致，未执行删除")
+		return
+	}
+	// 审计**先于**动作：删完就没有节点行了，事后再记会记不上是谁删的哪台。
+	if aerr := s.Auth.audit(ctx, consolestore.AuditEntry{
+		Actor: sess.UserID, Action: "node.retire", Target: node.Name, Result: "ok",
+		Detail: map[string]any{"host": node.Host}, ClientIP: clientIP(r),
+	}); aerr != nil {
+		s.Logf("console: 审计写入失败，删除中止: %v", aerr)
+		s.redirectNode(w, r, nodeID, "", "服务暂时不可用，请稍后再试")
+		return
+	}
+	if err := s.Fleet.Store.RetireNode(ctx, nodeID); err != nil {
+		s.Logf("console: 解除纳管失败: %v", err)
+		s.redirectNode(w, r, nodeID, "", "解除纳管失败："+err.Error())
+		return
+	}
+	http.Redirect(w, r, "/admin/nodes?ok="+urlQueryEscape("已解除纳管 "+node.Name+"（远端机器未改动）"),
+		http.StatusFound)
 }
 
 func (s *Server) adminRunDetail(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {

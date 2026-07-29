@@ -161,3 +161,12 @@ func parseIssued(out, slug string) (IssuedCDK, error) {
 	got.Slug = slug
 	return got, nil
 }
+
+// DisableCDK立即禁用一张CDK。
+//
+// 与轮换的区别：轮换会签发新的，这里只是让旧的失效、不产生替代品。
+// 判定与统一错误仍在节点侧的ccwadmin里（§11.1.1），Console不自己实现。
+func (o *Orchestrator) DisableCDK(ctx context.Context, nodeID, publicID string) error {
+	_, err := o.RunAdmin(ctx, nodeID, "disable-cdk", "--public-id", publicID)
+	return err
+}

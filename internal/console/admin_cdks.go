@@ -2,8 +2,10 @@ package console
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
+	"strings"
 	stdsync "sync"
 	"time"
 
@@ -78,6 +80,7 @@ func (s *Server) registerCDKs(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/cdks/issue", s.Auth.requireAdmin(s.adminCDKIssue))
 	mux.HandleFunc("POST /admin/cdks/rotate", s.Auth.requireAdmin(s.adminCDKRotate))
 	mux.HandleFunc("POST /admin/cdks/sync", s.Auth.requireAdmin(s.adminCDKSync))
+	mux.HandleFunc("POST /admin/cdks/disable", s.Auth.requireAdmin(s.adminCDKDisable))
 }
 
 // projectRow是CDK页的一行：一个项目 + 它名下的CDK。
@@ -228,6 +231,27 @@ func (s *Server) adminCDKRotate(w http.ResponseWriter, r *http.Request, sess con
 			return "已轮换 " + p.Slug + "，旧 CDK 立即失效", nil
 		}
 		return "已轮换 " + p.Slug + "，旧 CDK 在宽限期后失效", nil
+	})
+}
+
+// adminCDKDisable禁用一张CDK。
+//
+// 与轮换的区别：轮换会签发替代品，这里只让这一张失效。用在
+// "某个人不再需要访问"或"这张泄露了但项目还有别的可用CDK"。
+func (s *Server) adminCDKDisable(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	publicID := strings.TrimSpace(r.PostFormValue("public_id"))
+	s.cdkAction(w, r, sess, "cdk.disable", func(ctx context.Context, p consolestore.NodeProject) (string, error) {
+		if publicID == "" {
+			return "", errors.New("缺少 public_id")
+		}
+		if err := s.Fleet.Orchestrator.DisableCDK(ctx, p.NodeID, publicID); err != nil {
+			return "", err
+		}
+		// 节点是权威，镜像跟着标撤销；漏了这步 /connect 还会把它解析成可用域名。
+		if err := s.Fleet.Store.RevokeCDKIssue(ctx, publicID); err != nil {
+			s.Logf("console: CDK禁用后镜像未标撤销: %v", err)
+		}
+		return "已禁用 " + publicID, nil
 	})
 }
 

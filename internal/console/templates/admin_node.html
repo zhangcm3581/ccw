@@ -10,6 +10,14 @@
 {{end}}
 {{define "content"}}
 
+{{if .Error}}
+<div class="note bad" style="margin-bottom:20px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="9.2"/><path d="M12 7.5v5.5M12 16.4v.1"/>
+  </svg><span>{{.Error}}</span>
+</div>
+{{end}}
+
 {{if .DomainPending}}
 <div class="note warn" style="margin-bottom:20px;flex-direction:column;align-items:stretch;gap:14px">
   <div style="display:flex;align-items:center;gap:12px">
@@ -67,8 +75,8 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
             <circle cx="12" cy="12" r="9.2"/><path d="M12 11v5.5M12 7.6v.1"/>
           </svg>
-          <span>目前仅纳管部署与接入。更换域名、轮换托管密钥、收集诊断、解除纳管还未做进后台，
-            用 SSH + <code>ccwadmin</code>，见 <code>DEPLOY.md</code> 的 A6。</span>
+          <span>更换域名、轮换托管密钥、收集诊断还未做进后台，用 SSH + <code>ccwadmin</code>，
+            见 <code>DEPLOY.md</code> 的 A6。</span>
         </div>
       </div>
     </div>
@@ -78,73 +86,88 @@
         <span class="meta">整台节点只做一次</span></div>
       <div class="card-bd">
         <p class="muted" style="margin:0 0 16px;line-height:1.7">
-          纳管只把栈起起来，Claude Code 还没有上游账号的凭据，需要你上机登录一次。
-          本节点全部项目共用一个 <code>claude-shared</code> 卷，<b>在任意一个项目容器里登录，其余项目自动共用</b>
-          同一份凭据与同一个额度池。这一步后台还代劳不了。
+          纳管只把栈起起来，Claude Code 还没有上游账号的凭据。本节点全部项目共用一个
+          <code>claude-shared</code> 卷，<b>授权一次，其余项目自动共用</b>同一份凭据与同一个额度池。
         </p>
 
         {{if .AuthProjects}}
-        {{$p := index .AuthProjects 0}}
-        <p class="eyebrow">先检查是否已登录</p>
-        <div class="copybox" style="margin-bottom:18px">
-          <span id="auth-check">docker exec {{$p.Container}} claude auth status</span>
+        <div class="card-ft" style="border:none;padding:0 0 16px">
+          <form method="POST" action="/admin/nodes/{{.Node.ID}}/claude/start" style="display:contents">
+            <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+            <button class="btn" type="submit">开始授权</button>
+          </form>
+          <form method="POST" action="/admin/nodes/{{.Node.ID}}/claude/refresh" style="display:contents">
+            <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+            <button class="btn plain" type="submit">刷新画面</button>
+          </form>
           <span class="spacer"></span>
-          <button class="copy" type="button" data-copy="auth-check" aria-label="复制命令">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
-              <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
-            </svg><span class="done">已复制</span>
-          </button>
+          <form method="POST" action="/admin/nodes/{{.Node.ID}}/claude/cancel" style="display:contents">
+            <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+            <button class="btn link" type="submit">结束会话</button>
+          </form>
         </div>
-        <p class="muted" style="margin:-10px 0 18px;font-size:13px">
-          输出 <code>loggedIn: true</code> 就已经好了，下面的不用做。
+
+        {{if .Screen}}
+        <p class="eyebrow">容器里的终端画面</p>
+        <div class="term" style="margin-bottom:16px">
+          <pre class="term-bd" style="height:auto;max-height:340px;min-height:0">{{.Screen}}</pre>
+        </div>
+        <form method="POST" action="/admin/nodes/{{.Node.ID}}/claude/code">
+          <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+          <label class="fld">
+            <span class="lb">授权码</span>
+            <input type="text" name="code" placeholder="把上面提示的链接在浏览器打开，登录后把拿到的码粘在这里"
+                   autocomplete="off" spellcheck="false" required>
+            <span class="hint">码只送往节点，不回显、不入审计详情、不进日志。</span>
+          </label>
+          <button class="btn" type="submit">提交授权码</button>
+        </form>
+        {{else}}
+        <p class="muted" style="margin:0;font-size:13.5px">
+          点「开始授权」：Console 会在容器里起一个跑 <code>claude</code> 的会话，
+          把终端画面取回来显示在这里。按画面上的提示在浏览器完成登录，再把授权码粘回来。
         </p>
-
-        <p class="eyebrow">没登录就执行这段（tmux socket 名已按本节点的 project id 填好）</p>
-        <div class="cmdbox">
-          <pre id="auth-cmd">ssh {{.SSHTarget}}
-
-docker exec {{$p.Container}} tmux -L {{$p.RemoteID}} new-session -d -s main -c /workspace claude
-docker exec -it {{$p.Container}} tmux -L {{$p.RemoteID}} attach-session -t main</pre>
-          <button class="copy" type="button" data-copy="auth-cmd" aria-label="复制命令">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
-              <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
-            </svg><span class="done">已复制</span>
-          </button>
-        </div>
-        <p class="muted" style="margin:14px 0 0;line-height:1.7">
-          在附着的终端里跟着提示走完登录，然后按 <b>Ctrl-b</b> 松开再按 <b>d</b> 脱离。
-          <b>不要按 Ctrl-c</b>——那会把会话里的 claude 杀掉。
-        </p>
-
-        {{if gt (len .AuthProjects) 1}}
-        <p class="eyebrow" style="margin-top:18px">验证其余项目也已共用凭据</p>
-        <div class="cmdbox">
-          <pre id="auth-verify">{{range .AuthProjects}}docker exec {{.Container}} claude auth status
-{{end}}</pre>
-          <button class="copy" type="button" data-copy="auth-verify" aria-label="复制命令">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
-              <rect x="9" y="9" width="12" height="12" rx="2.4"/><path d="M15 5.5H5.5v12"/>
-            </svg><span class="done">已复制</span>
-          </button>
-        </div>
-        <p class="muted" style="margin:10px 0 0;font-size:13px">全部输出 <code>loggedIn: true</code> 即完成。</p>
         {{end}}
 
         <p class="muted" style="margin:18px 0 0;font-size:13px;line-height:1.7">
-          登录后 <code>auth status</code> 仍是 <code>false</code>、或反复要求重新登录：多半是卷权限
+          授权后仍显示未登录、或反复要求重新登录：多半是卷权限
           （容器以 <code>claude</code> UID 1001 运行，卷归 root 就写不进凭据）。
-          排查见 <code>docs/admin-login-runbook.md</code>。
+          排查见 <code>docs/admin-login-runbook.md</code>。也可以照
+          <code>docs/claude-auth-quickref.md</code> 用 SSH 手动做。
         </p>
         {{else}}
         <div class="note warn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 3.6 22 20.4H2z"/><path d="M12 10v4.2M12 17.5v.1"/>
           </svg>
-          <span>本节点还没有项目记录，命令要用的 project id 取不到。
-            等 <code>init-projects</code> 那一步跑完再回来；已经纳管过但这里是空的，
-            到「项目与 CDK」页点「从节点同步」。</span>
+          <span>本节点还没有项目容器，无法授权。等 <code>init-projects</code> 那一步跑完再来；
+            已经纳管过但这里是空的，到「项目与 CDK」页点「从节点同步」。</span>
         </div>
         {{end}}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h2>解除纳管</h2><span class="spacer"></span>
+        <span class="meta">不可撤销</span></div>
+      <div class="card-bd">
+        <div class="note bad" style="margin-bottom:16px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.2"/><path d="M12 7.5v5.5M12 16.4v.1"/>
+          </svg>
+          <span><b>只清 Console 这边的账，不碰那台机器。</b>容器、数据卷、已授权的 Claude 凭据
+            都还在服务器上跑着，要真正下线得自己登机处理。删除后本节点的项目与 CDK 记录一并消失，
+            <code>/connect</code> 也就查不到它们了；已分配的子域名会标记退役，
+            <b>序号不回收</b>，下一台机器不会拿到同一个。</span>
+        </div>
+        <form method="POST" action="/admin/nodes/{{.Node.ID}}/delete">
+          <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+          <label class="fld">
+            <span class="lb">输入节点名 <code>{{.Node.Name}}</code> 以确认</span>
+            <input type="text" name="confirm" placeholder="{{.Node.Name}}" autocomplete="off" required>
+          </label>
+          <button class="btn danger" type="submit">解除纳管</button>
+        </form>
       </div>
     </div>
   </div>

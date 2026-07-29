@@ -286,3 +286,35 @@ func (s *Store) DomainTaken(ctx context.Context, fqdn string) (bool, error) {
 		`SELECT EXISTS(SELECT 1 FROM node_domains WHERE fqdn=$1)`, fqdn).Scan(&exists)
 	return exists, err
 }
+
+// RetireNode解除纳管：退役该节点的域名，然后删除节点行。
+//
+// **只清Console这边的账**，绝不碰远端机器：容器、数据卷、Claude凭据都还在
+// 那台服务器上跑。要真正下线机器得自己登机处理——由后台替管理员销毁一台
+// 还在服务的机器，是无法撤销且后果不成比例的操作。
+//
+// 域名行**保留**（node_id置NULL、记released_at）：子域名序号永不回收（设计§6.2），
+// 删掉行就等于让下一台节点拿到同一个序号，撞上仍在DNS里的旧记录。
+// 其余从表（凭据、项目、CDK签发、运行与步骤）由外键CASCADE一并删除。
+func (s *Store) RetireNode(ctx context.Context, nodeID string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE node_domains
+		SET released_at = now(), record_state = 'removed'
+		WHERE node_id = $1 AND released_at IS NULL`, nodeID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM nodes WHERE id = $1`, nodeID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit(ctx)
+}
