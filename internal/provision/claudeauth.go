@@ -134,21 +134,6 @@ func (o *Orchestrator) ClaudeAuthCancel(ctx context.Context, nodeID, container s
 	return err
 }
 
-// ClaudeAuthStatus查一个容器的登录状态。
-// 返回的是原文输出，由页面直接展示——同样不解析。
-func (o *Orchestrator) ClaudeAuthStatus(ctx context.Context, nodeID, container string) (string, error) {
-	cli, sudo, err := o.dialNode(ctx, nodeID)
-	if err != nil {
-		return "", err
-	}
-	defer cli.Close()
-	res, err := cli.Run(ctx, fmt.Sprintf("%sdocker exec %s claude auth status 2>&1", sudo, shellQuote(container)))
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(res.Stdout + res.Stderr), nil
-}
-
 // dialNode是这几个操作共用的连接过程：只用托管密钥，不接受密码。
 func (o *Orchestrator) dialNode(ctx context.Context, nodeID string) (*sshexec.Client, string, error) {
 	node, err := o.Store.GetNode(ctx, nodeID)
