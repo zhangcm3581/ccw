@@ -60,17 +60,11 @@ type SyncSession struct {
 // file_index的主键是(project_id, path)，用前缀分层就不必改表结构——
 // 不同工作区的同名文件天然是两行。
 func (s *SyncSession) key(rel string) string {
-	if s.WS == "" {
-		return rel
-	}
 	return s.WS + "/" + rel
 }
 
 // unkey把索引路径还原成工作区内的相对路径；不属于本工作区的返回false。
 func (s *SyncSession) unkey(path string) (string, bool) {
-	if s.WS == "" {
-		return path, true
-	}
 	rest, ok := strings.CutPrefix(path, s.WS+"/")
 	return rest, ok
 }

@@ -63,16 +63,28 @@ func newSession(t *testing.T, mode string, limit int64) (*SyncSession, *memRevSt
 	t.Helper()
 	store := newMemRevStore()
 	s := &SyncSession{
-		ProjectID:  "pa",
-		Device:     "laptop",
-		Mode:       mode,
-		Store:      store,
-		Dir:        NewDirStore(t.TempDir()),
+		ProjectID: "pa",
+		Device:    "laptop",
+		Mode:      mode,
+		Store:     store,
+		// 工作区是必填项：生产路径由ws.go的hello强制，测试里也照同样的形状构造，
+		// 免得测试覆盖到一条生产中不存在的分支。
+		Root:       t.TempDir(),
 		MaxBytes:   1 << 20,
 		AllowQuota: gateAllow(limit),
 	}
+	if err := s.SetWorkspace("test-00000001"); err != nil {
+		t.Fatal(err)
+	}
 	return s, store
 }
+
+// testWS是newSession给会话绑定的工作区键。索引里的路径都带这个前缀
+// （生产同理），测试直接按裸路径读写 store 会全部落空。
+const testWS = "test-00000001"
+
+// wsPath把工作区内的相对路径转成索引里的键。
+func wsPath(rel string) string { return testWS + "/" + rel }
 
 func sha(content string) string {
 	// 复用WriteTemp的哈希：直接写一次拿sha
@@ -85,14 +97,14 @@ func TestPutNewFileGetsRevision1(t *testing.T) {
 	if !r.OK || r.Revision != 1 {
 		t.Fatalf("new file must ack revision 1, got %+v", r)
 	}
-	if store.files["src/a.go"].SHA256 != sha("hello") {
+	if store.files[wsPath("src/a.go")].SHA256 != sha("hello") {
 		t.Fatalf("file not committed: %+v", store.files)
 	}
 }
 
 func TestPutConflictOnStaleBaseRevision(t *testing.T) {
 	s, store := newSession(t, "rw", 1<<30)
-	store.files["a.go"] = FileEntry{Path: "a.go", Size: 3, SHA256: "old", Revision: 5}
+	store.files[wsPath("a.go")] = FileEntry{Path: wsPath("a.go"), Size: 3, SHA256: "old", Revision: 5}
 	// 客户端以为基线是 rev 2，但服务端已到 5 → conflict
 	r := s.HandlePut(context.Background(), "a.go", 2, sha("new"), strings.NewReader("new"))
 	if r.OK || r.Reason != "conflict" {
@@ -127,7 +139,7 @@ func TestPutDiskFull(t *testing.T) {
 
 func TestCleanupModeRejectsGrowAllowsShrink(t *testing.T) {
 	s, store := newSession(t, "cleanup", 1<<30)
-	store.files["a"] = FileEntry{Path: "a", Size: 10, SHA256: "x", Revision: 1}
+	store.files[wsPath("a")] = FileEntry{Path: wsPath("a"), Size: 10, SHA256: "x", Revision: 1}
 	// cleanup 模式：写入更大内容（扩大）→ readonly_mode
 	grow := s.HandlePut(context.Background(), "a", 1, sha("0123456789ABC"), strings.NewReader("0123456789ABC"))
 	if grow.OK || grow.Reason != "readonly_mode" {
@@ -142,19 +154,19 @@ func TestCleanupModeRejectsGrowAllowsShrink(t *testing.T) {
 
 func TestDeleteWritesTombstone(t *testing.T) {
 	s, store := newSession(t, "rw", 1<<30)
-	store.files["a"] = FileEntry{Path: "a", Size: 3, SHA256: "x", Revision: 2}
+	store.files[wsPath("a")] = FileEntry{Path: wsPath("a"), Size: 3, SHA256: "x", Revision: 2}
 	r := s.HandleDelete(context.Background(), "a", 2)
 	if !r.OK || r.Revision != 3 {
 		t.Fatalf("delete must ack next revision, got %+v", r)
 	}
-	if !store.files["a"].Deleted {
-		t.Fatalf("delete must mark tombstone: %+v", store.files["a"])
+	if !store.files[wsPath("a")].Deleted {
+		t.Fatalf("delete must mark tombstone: %+v", store.files[wsPath("a")])
 	}
 }
 
 func TestDeleteConflict(t *testing.T) {
 	s, store := newSession(t, "rw", 1<<30)
-	store.files["a"] = FileEntry{Path: "a", Size: 3, SHA256: "x", Revision: 9}
+	store.files[wsPath("a")] = FileEntry{Path: wsPath("a"), Size: 3, SHA256: "x", Revision: 9}
 	r := s.HandleDelete(context.Background(), "a", 2) // 基线过时
 	if r.OK || r.Reason != "conflict" {
 		t.Fatalf("stale delete must conflict, got %+v", r)
@@ -163,8 +175,8 @@ func TestDeleteConflict(t *testing.T) {
 
 func TestManifestFromStore(t *testing.T) {
 	s, store := newSession(t, "rw", 1<<30)
-	store.files["a"] = FileEntry{Path: "a", Revision: 1}
-	store.files["b"] = FileEntry{Path: "b", Revision: 1, Deleted: true}
+	store.files[wsPath("a")] = FileEntry{Path: wsPath("a"), Revision: 1}
+	store.files[wsPath("b")] = FileEntry{Path: wsPath("b"), Revision: 1, Deleted: true}
 	m, err := s.HandleManifest(context.Background())
 	if err != nil || len(m) != 2 {
 		t.Fatalf("manifest must return all entries incl tombstones, got %d %v", len(m), err)
@@ -179,7 +191,7 @@ func TestManifestReconcilesCloudEdit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.files["cloud.go"].SHA256 != sha256hex("by claude") {
+	if store.files[wsPath("cloud.go")].SHA256 != sha256hex("by claude") {
 		t.Fatalf("cloud edit must be reconciled into index: %+v", store.files)
 	}
 	found := false
@@ -195,13 +207,13 @@ func TestManifestReconcilesCloudEdit(t *testing.T) {
 
 func TestManifestReconcilesCloudDelete(t *testing.T) {
 	s, store := newSession(t, "rw", 1<<30)
-	store.files["gone.go"] = FileEntry{Path: "gone.go", Size: 5, SHA256: "x", Revision: 2}
+	store.files[wsPath("gone.go")] = FileEntry{Path: wsPath("gone.go"), Size: 5, SHA256: "x", Revision: 2}
 	// workspace 里没有 gone.go（Claude 在云端删了）
 	if _, err := s.HandleManifest(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !store.files["gone.go"].Deleted {
-		t.Fatalf("cloud delete must write tombstone, got %+v", store.files["gone.go"])
+	if !store.files[wsPath("gone.go")].Deleted {
+		t.Fatalf("cloud delete must write tombstone, got %+v", store.files[wsPath("gone.go")])
 	}
 }
 

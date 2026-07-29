@@ -17,10 +17,6 @@ func TestNamesDeterministic(t *testing.T) {
 	if _, other := Names("pid-1", "work-a1b2c3d4"); other == n1 {
 		t.Error("不同工作区应得到不同会话名")
 	}
-	// 空工作区退回legacy：管理员授权那条路用的就是 -t main
-	if _, legacy := Names("pid-1", ""); legacy != "main" {
-		t.Errorf("空工作区应退回main，got %s", legacy)
-	}
 }
 
 func TestAttachCmdNeverKills(t *testing.T) {

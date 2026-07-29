@@ -11,26 +11,21 @@ package terminal
 // **会话名与工作目录都取工作区键**，于是每个本地目录各有一个互不打扰的会话，
 // 断线重连仍回到自己那个。
 //
-// 保留 legacy 形态（ws 为空 → 会话 main、工作目录 /workspace）只为一件事：
-// 管理员授权 Claude 账号时用的就是 `-t main`（见 DEPLOY.md 的 A7 与
-// docs/claude-auth-quickref.md）。那条路不带工作区，不该被这次改动打断。
-
-const legacySession = "main"
+// **不接受空工作区**：调用方（terminal/ws.go）在建立连接前就已用
+// ValidWorkspace 拒掉了缺失与非法的键，这里再留一条"空则退回 /workspace"
+// 的分支只会是死代码，而且读起来像还有那么一条受支持的路径。
+//
+// 管理员授权 Claude 账号用的 `-t main` 会话不走这里——那是手敲 docker exec
+// 建的另一个会话（见 DEPLOY.md 的 A7），与本文件无关。
 
 // Names：同一 project + 工作区永远得到同一 tmux socket 与会话名，保证重连回到原会话。
 func Names(projectID, ws string) (socket, session string) {
-	if ws == "" {
-		return projectID, legacySession
-	}
 	return projectID, ws
 }
 
 // workdir返回容器内的工作目录。与同步的落盘位置必须一致：
 // worker 把工作区写在 <workspace-root>/<slug>/<ws>，容器里挂成 /workspace/<ws>。
 func workdir(ws string) string {
-	if ws == "" {
-		return "/workspace"
-	}
 	return "/workspace/" + ws
 }
 
