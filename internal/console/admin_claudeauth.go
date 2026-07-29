@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -24,6 +25,68 @@ func (s *Server) registerClaudeAuth(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/nodes/{id}/claude/refresh", s.Auth.requireAdmin(s.claudeAuthRefresh))
 	mux.HandleFunc("POST /admin/nodes/{id}/claude/code", s.Auth.requireAdmin(s.claudeAuthCode))
 	mux.HandleFunc("POST /admin/nodes/{id}/claude/cancel", s.Auth.requireAdmin(s.claudeAuthCancel))
+}
+
+var (
+	errNoContainers = errors.New("本节点还没有项目容器；等 init-projects 跑完，或先点「从节点同步项目」")
+	errNoService    = errors.New("缺少要重建的服务名")
+)
+
+// nodeAction是节点级远程操作的公共骨架：CSRF → 取节点与容器 → 执行 → 审计 → 回节点页。
+//
+// 与cdkAction同款，只是作用域是整台节点。诊断、重建、同步项目、授权都走它。
+func (s *Server) nodeAction(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession,
+	action string, do func(nodeID string, containers []string) (string, error)) {
+	if !s.Auth.checkCSRF(r) {
+		http.Error(w, "csrf", http.StatusForbidden)
+		return
+	}
+	ctx := r.Context()
+	nodeID := r.PathValue("id")
+	node, err := s.Fleet.Store.GetNode(ctx, nodeID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if s.Fleet.Orchestrator == nil {
+		s.redirectNode(w, r, nodeID, "", "机队编排器未启用，无法远程执行")
+		return
+	}
+
+	notice, derr := do(nodeID, s.nodeContainers(ctx, nodeID))
+	result := "ok"
+	if derr != nil {
+		result = "error"
+	}
+	if aerr := s.Auth.audit(ctx, consolestore.AuditEntry{
+		Actor: sess.UserID, Action: action, Target: node.Name, Result: result, ClientIP: clientIP(r),
+	}); aerr != nil {
+		s.Logf("console: 审计写入失败: %v", aerr)
+	}
+	if derr != nil {
+		s.redirectNode(w, r, nodeID, "", derr.Error())
+		return
+	}
+	if notice != "" {
+		http.Redirect(w, r, "/admin/nodes/"+nodeID+"?ok="+urlQueryEscape(notice), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/nodes/"+nodeID, http.StatusFound)
+}
+
+// nodeContainers列出本节点全部项目容器名（容器名恒为 ccw-<slug>，I5契约）。
+func (s *Server) nodeContainers(ctx context.Context, nodeID string) []string {
+	all, err := s.Fleet.Store.ListNodeProjects(ctx)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, p := range all {
+		if p.NodeID == nodeID {
+			out = append(out, "ccw-"+p.Slug)
+		}
+	}
+	return out
 }
 
 // claudeAuthAction是四个动作的公共骨架：CSRF → 取节点与容器 → 执行 → 回节点页。

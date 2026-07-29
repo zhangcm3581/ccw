@@ -143,6 +143,16 @@ func (f *fakeFleetStore) RecordCDKIssue(_ context.Context, projectID, publicID, 
 	return nil
 }
 
+func (f *fakeFleetStore) UpsertNodeProject(_ context.Context, nodeID, slug, remoteID string,
+	diskBytes, fiveHour, sevenDay int64) (string, error) {
+	id := "p-" + nodeID + "-" + slug
+	f.projects[id] = consolestore.NodeProject{
+		ID: id, NodeID: nodeID, Slug: slug, RemoteProjectID: remoteID,
+		DiskLimitBytes: diskBytes, FiveHourLimit: fiveHour, SevenDayLimit: sevenDay,
+	}
+	return id, nil
+}
+
 // RetireNode：退役域名 + 删节点，与生产同形（域名行保留，seq不回收）。
 func (f *fakeFleetStore) RetireNode(_ context.Context, nodeID string) error {
 	if _, ok := f.nodes[nodeID]; !ok {

@@ -18,6 +18,14 @@
 </div>
 {{end}}
 
+{{if .Notice}}
+<div class="note ok" style="margin-bottom:20px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="m4.5 12.5 5 5 10-11"/>
+  </svg><span>{{.Notice}}</span>
+</div>
+{{end}}
+
 {{if .DomainPending}}
 <div class="note warn" style="margin-bottom:20px;flex-direction:column;align-items:stretch;gap:14px">
   <div style="display:flex;align-items:center;gap:12px">
@@ -75,9 +83,61 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
             <circle cx="12" cy="12" r="9.2"/><path d="M12 11v5.5M12 7.6v.1"/>
           </svg>
-          <span>更换域名、轮换托管密钥、收集诊断还未做进后台，用 SSH + <code>ccwadmin</code>，
-            见 <code>DEPLOY.md</code> 的 A6。</span>
+          <span>更换域名与轮换托管密钥还未做进后台，用 SSH + <code>ccwadmin</code>，
+            见 <code>DEPLOY.md</code> 的 A6。其余日常操作（诊断、授权、重建容器、
+            签发/轮换/禁用 CDK、解除纳管）本页与「项目与 CDK」页都能做，不必登机。</span>
         </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h2>节点诊断</h2><span class="spacer"></span>
+        <span class="meta">只读检查，一次跑完</span></div>
+      <div class="card-bd">
+        <p class="muted" style="margin:0 0 16px;line-height:1.7">
+          容器在不在跑、每个项目登没登录、凭据文件属主对不对、磁盘还剩多少——
+          这些原本要登机逐条敲的检查，点一下全跑一遍。
+        </p>
+        <div class="card-ft" style="border:none;padding:0">
+          <form method="POST" action="/admin/nodes/{{.Node.ID}}/diag" style="display:contents">
+            <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+            <button class="btn" type="submit">运行检查</button>
+          </form>
+          <form method="POST" action="/admin/nodes/{{.Node.ID}}/sync-projects" style="display:contents">
+            <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+            <button class="btn plain" type="submit">从节点同步项目</button>
+          </form>
+        </div>
+
+        {{if .Diag}}
+        <div style="margin-top:18px;display:flex;flex-direction:column;gap:14px">
+          {{range .Diag}}
+          <div>
+            <p class="eyebrow" style="margin:0 0 7px;display:flex;align-items:center;gap:10px">
+              <span>{{.Title}}</span>
+              {{if .LoggedIn}}<span class="st st-ok">已登录</span>
+              {{else if ne .LoggedIn nil}}<span class="st st-bad">未登录</span>{{end}}
+            </p>
+            <div class="cmdbox"><pre>{{.Output}}</pre></div>
+          </div>
+          {{end}}
+        </div>
+        {{end}}
+
+        {{if .AuthProjects}}
+        <div style="margin-top:18px">
+          <p class="eyebrow">重建容器（验证凭据随卷持久；附着中的终端会断开）</p>
+          <div class="card-ft" style="border:none;padding:0">
+            {{range .AuthProjects}}
+            <form method="POST" action="/admin/nodes/{{$.Node.ID}}/recreate" style="display:contents">
+              <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+              <input type="hidden" name="service" value="{{.Slug}}">
+              <button class="btn plain" type="submit">重建 {{.Slug}}</button>
+            </form>
+            {{end}}
+          </div>
+        </div>
+        {{end}}
       </div>
     </div>
 

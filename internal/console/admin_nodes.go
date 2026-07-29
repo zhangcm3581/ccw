@@ -41,6 +41,9 @@ type FleetStore interface {
 	RevokeCDKIssue(ctx context.Context, publicID string) error
 	// RetireNode解除纳管：退役域名并删节点行。**不碰远端机器**。
 	RetireNode(ctx context.Context, nodeID string) error
+	// UpsertNodeProject供「从节点同步项目」补齐镜像。
+	UpsertNodeProject(ctx context.Context, nodeID, slug, remoteID string,
+		diskBytes, fiveHour, sevenDay int64) (string, error)
 }
 
 // Fleet持有机队页的依赖。
@@ -54,6 +57,25 @@ type Fleet struct {
 	mu        stdsync.Mutex
 	// vault是CDK明文的一次性中转站：只在内存、取走即清（§8.4）。
 	vault cdkVault
+	// diag是最近一次节点诊断的结果。**不是凭据**，所以不做取走即清——
+	// 刷新页面还能看到上次结果，方便对照着排查。
+	diagMu stdsync.Mutex
+	diag   map[string][]provision.DiagSection
+}
+
+func (f *Fleet) putDiag(nodeID string, secs []provision.DiagSection) {
+	f.diagMu.Lock()
+	defer f.diagMu.Unlock()
+	if f.diag == nil {
+		f.diag = map[string][]provision.DiagSection{}
+	}
+	f.diag[nodeID] = secs
+}
+
+func (f *Fleet) getDiag(nodeID string) []provision.DiagSection {
+	f.diagMu.Lock()
+	defer f.diagMu.Unlock()
+	return f.diag[nodeID]
 }
 
 // StashCDK把纳管过程中签发的CDK明文交给UI一次性展示。
@@ -66,6 +88,7 @@ func (s *Server) registerFleet(mux *http.ServeMux) {
 	s.registerDomains(mux)
 	s.registerCDKs(mux)
 	s.registerClaudeAuth(mux)
+	s.registerDiag(mux)
 	mux.HandleFunc("GET /admin/nodes", s.Auth.requireAdmin(s.adminNodes))
 	mux.HandleFunc("GET /admin/nodes/new", s.Auth.requireAdmin(s.adminNodeNew))
 	mux.HandleFunc("POST /admin/nodes/new", s.Auth.requireAdmin(s.adminNodeCreate))
@@ -280,6 +303,7 @@ func (s *Server) adminNodeDetail(w http.ResponseWriter, r *http.Request, sess co
 		"AuthProjects":  authProjects,
 		"SSHTarget":     node.SSHUser + "@" + node.Host,
 		"Screen":        r.URL.Query().Get("screen"),
+		"Diag":          s.Fleet.getDiag(node.ID),
 		"Error":         r.URL.Query().Get("err"),
 		"Notice":        r.URL.Query().Get("ok"),
 	}

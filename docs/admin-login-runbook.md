@@ -6,6 +6,19 @@
 
 > 项目可以全归管理员自己，也可以分配给他人使用（2026-07-26定）。多人共用同一个Claude账号在上游服务条款下是否被允许，本仓库不作判断，由部署者自行核实——见`docs/design-deviations.md`的D6。
 
+## 先看后台
+
+第 1、2 节的操作**后台都能做**（节点详情页）：
+
+| 本文的命令 | 后台入口 |
+|---|---|
+| `docker ps` / `claude auth status` / `ls -l` 凭据文件 | 「节点诊断」→ 运行检查 |
+| `tmux new-session … claude` + `attach` 完成登录 | 「授权 Claude 账号」→ 开始授权 → 粘贴授权码 |
+| `docker compose up -d --force-recreate <svc>` | 「节点诊断」→ 重建 `<slug>` |
+| `ccwadmin list-projects` | 「节点诊断」→ 从节点同步项目 |
+
+下面保留完整的手动流程：后台不可达时用，或后台报错后要手动深挖时对照。
+
 ## 前置：卷权限（否则登录写不进凭据）
 
 Claude 授权后，账户资料写 `/home/claude/.claude.json`、访问令牌写 `/home/claude/.claude/.credentials.json`。容器以 `claude`(UID 1001) 运行，若挂载卷归 `root:root`，`claude` 无法写入凭据 → 登录后 `loggedIn=false`、反复要求登录。

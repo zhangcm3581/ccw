@@ -131,6 +131,14 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
     （**不走命令行**，那在节点上人人可见）。**不解析Claude的输出**——
     登录提示与URL形态会随版本变，写死解析等于把后台绑死在某个客户端版本上
 
+- **节点诊断与维护**（2026-07-30）：把两份运行手册里要登机敲的命令搬进后台。
+  一次SSH跑完 `docker ps` / 每个项目的 `claude auth status` / 凭据文件属主 /
+  磁盘与 data-root，输出**原文照显**（只对登录状态取一个布尔用于染色，
+  判不出来就留空——把"没解析出来"显示成"未登录"会让人白折腾一轮）。
+  另有「重建容器」（验证凭据随卷持久）与「从节点同步项目」
+  （镜像为空时补齐，不必为一行记录重跑部署）。
+  **现在还需要登机的只剩**：更换域名、轮换托管密钥（DEPLOY.md 的 A6）。
+
 **未实施**：C9（Route 53自动化）、C10（证书预算记账与到期告警）、C19剩余（节点巡检）、C22（真实VPS纳管验收）、C21剩余（备份恢复演练）。
 
 **2026-07-26代码审查修掉的两个阻断项**：①此前只推4个编排文件到扁平目录，而compose用`context: ..`+`dockerfile: deploy/X`且Dockerfile从Go源码构建——compose-up必然失败；现改为推完整源码包（`push-source`步骤+`scripts/build-node-src.sh`+Console镜像内置），缺源码包时机队管理直接不启用。②`LogHub`的cancel会close通道，与Append并发时`panic: send on closed channel`（已复现），触发路径是部署中关掉日志页；现改为只注销不close，并给运行详情页加只读的`History()`。同批还修了：Console日志目录未挂卷（重建即丢）、install-docker注释声称配了data-root实际没有、凭据交接不进provision_steps、CSRF每次渲染换token导致多标签403、CAA查询固定query ID、日志缓冲map无上限。
