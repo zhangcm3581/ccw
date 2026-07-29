@@ -84,16 +84,8 @@ func (o *Orchestrator) ClaudeAuthCapture(ctx context.Context, nodeID, container 
 // 人人可见（ps aux）。paste-buffer 之后单独发一次 Enter。
 func (o *Orchestrator) ClaudeAuthSendCode(ctx context.Context, nodeID, container, code string) (string, error) {
 	code = strings.TrimSpace(code)
-	if code == "" {
-		return "", errors.New("授权码为空")
-	}
-	// 只允许授权码里可能出现的字符。这不是为了校验码的正确性（那是Claude的事），
-	// 而是不让任意内容经buffer流进终端。
-	for _, r := range code {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
-			r == '-' || r == '_' || r == '.' || r == '#' || r == '/' || r == ':') {
-			return "", errors.New("授权码含不支持的字符；请直接粘贴 Claude 给出的那一串")
-		}
+	if err := checkAuthCode(code); err != nil {
+		return "", err
 	}
 
 	cli, sudo, err := o.dialNode(ctx, nodeID)
@@ -120,6 +112,25 @@ sleep 3
 		return "", err
 	}
 	return res.Stdout, nil
+}
+
+// checkAuthCode校验粘贴进来的授权码。
+//
+// **拒绝控制字符与空白，而不是给出一份字母表**。真正的风险是换行：
+// 粘进 tmux buffer 后会被当成多次提交，把后面的内容送给会话里的下一个提示。
+// 至于码本身用了哪些字符——base64url 有 `-_`，有的实现带 `=`、`+`、`%`、`?`——
+// 猜错就会把一个合法的码挡在门外，而管理员在后台里没有任何绕过的办法。
+// 宁可放宽：风险已由"无控制字符、无空白"覆盖。
+func checkAuthCode(code string) error {
+	if code == "" {
+		return errors.New("授权码为空")
+	}
+	for _, r := range code {
+		if r < 0x20 || r == 0x7f || r == ' ' || r == '\t' {
+			return errors.New("授权码里有换行或空白；请只粘贴那一串码本身")
+		}
+	}
+	return nil
 }
 
 // ClaudeAuthCancel结束授权会话。

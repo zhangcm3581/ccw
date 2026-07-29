@@ -2,10 +2,10 @@ package console
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
 	"ccw/internal/consolestore"
-	"ccw/internal/provision"
 )
 
 // 节点诊断与维护：把 docs/admin-login-runbook.md 与 claude-auth-quickref.md 里
@@ -25,21 +25,11 @@ func (s *Server) registerDiag(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/nodes/{id}/sync-projects", s.Auth.requireAdmin(s.adminNodeSyncProjects))
 }
 
-// diagResult是一次诊断的结果，放在内存里等页面来取。
-//
-// 为什么不经查询串回传：诊断输出是多段、每段可能几十行，塞进URL会被截断，
-// 也没法给"已登录"上色。与CDK明文那个中转站同款做法，但**这里不是凭据**，
-// 所以不做"取走即清"——管理员刷新一次页面还能看到上次的结果。
-type diagResult struct {
-	Sections []provision.DiagSection
-	At       string
-}
-
 func (s *Server) adminNodeDiag(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
 	s.nodeAction(w, r, sess, "node.diagnose", func(nodeID string, containers []string) (string, error) {
-		if len(containers) == 0 {
-			return "", errNoContainers
-		}
+		// **没有项目容器时照跑**：节点级检查（docker ps、磁盘、data-root）
+		// 恰恰是这种时候最需要——纳管卡在 init-projects 之前，你想知道的
+		// 正是"到底起来了什么"。只有逐容器的那几段会被跳过。
 		secs, err := s.Fleet.Orchestrator.Diagnose(r.Context(), nodeID, containers)
 		if err != nil {
 			return "", err
@@ -52,7 +42,10 @@ func (s *Server) adminNodeDiag(w http.ResponseWriter, r *http.Request, sess cons
 func (s *Server) adminNodeRecreate(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
 	service := strings.TrimSpace(r.PostFormValue("service"))
 	s.nodeAction(w, r, sess, "node.recreate", func(nodeID string, containers []string) (string, error) {
-		if service == "" {
+		// 只允许重建本节点已知的项目服务。名字虽然经shellQuote不会注入，
+		// 但把 postgres / caddy / control-api 也变成一个可点的入口不是本意——
+		// 那几个的重建后果与项目容器完全不同，该有各自的设计。
+		if !slices.Contains(containers, "ccw-"+service) {
 			return "", errNoService
 		}
 		if _, err := s.Fleet.Orchestrator.RecreateContainer(r.Context(), nodeID, service); err != nil {

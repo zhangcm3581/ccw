@@ -57,10 +57,33 @@ type Fleet struct {
 	mu        stdsync.Mutex
 	// vault是CDK明文的一次性中转站：只在内存、取走即清（§8.4）。
 	vault cdkVault
-	// diag是最近一次节点诊断的结果。**不是凭据**，所以不做取走即清——
-	// 刷新页面还能看到上次结果，方便对照着排查。
+	// diag是最近一次节点诊断的结果，screen是授权会话的最近一屏。
+	// **都不是凭据**，所以不做取走即清——刷新页面还能看到，方便对照着排查。
+	//
+	// 为什么不经查询串回传：一屏中文终端输出百分号编码后接近 10 KB，
+	// 超过常见反代 8192 的请求行上限，会变成 414 而不是页面。实测见提交说明。
 	diagMu stdsync.Mutex
 	diag   map[string][]provision.DiagSection
+	screen map[string]string
+}
+
+func (f *Fleet) putScreen(nodeID, s string) {
+	f.diagMu.Lock()
+	defer f.diagMu.Unlock()
+	if f.screen == nil {
+		f.screen = map[string]string{}
+	}
+	if s == "" {
+		delete(f.screen, nodeID)
+		return
+	}
+	f.screen[nodeID] = s
+}
+
+func (f *Fleet) getScreen(nodeID string) string {
+	f.diagMu.Lock()
+	defer f.diagMu.Unlock()
+	return f.screen[nodeID]
 }
 
 func (f *Fleet) putDiag(nodeID string, secs []provision.DiagSection) {
@@ -302,7 +325,7 @@ func (s *Server) adminNodeDetail(w http.ResponseWriter, r *http.Request, sess co
 		"CanResume":     node.Status != "provisioning",
 		"AuthProjects":  authProjects,
 		"SSHTarget":     node.SSHUser + "@" + node.Host,
-		"Screen":        r.URL.Query().Get("screen"),
+		"Screen":        s.Fleet.getScreen(node.ID),
 		"Diag":          s.Fleet.getDiag(node.ID),
 		"Error":         r.URL.Query().Get("err"),
 		"Notice":        r.URL.Query().Get("ok"),

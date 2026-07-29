@@ -34,7 +34,7 @@ func TestSplitDiagUnknownLoginStaysNil(t *testing.T) {
 	if len(secs) != 1 {
 		t.Fatalf("got %d", len(secs))
 	}
-	if secs[1-1].LoggedIn != nil {
+	if secs[0].LoggedIn != nil {
 		t.Errorf("输出无法判定时应为nil，got %v", *secs[0].LoggedIn)
 	}
 	// 原文仍要给出来，让人自己看
@@ -52,4 +52,28 @@ func contains(s, sub string) bool {
 		}
 		return false
 	})()
+}
+
+// 授权码只拒绝控制字符与空白，不猜码的字母表。
+//
+// 猜错字母表的后果是把一个合法的码挡在门外，而管理员在后台里没有任何
+// 绕过的办法——base64url 有 -_，有的实现还带 = + % ?，都得能过。
+func TestAuthCodeCharset(t *testing.T) {
+	ok := []string{
+		"abc123", "AbC-1_2", "code=with+plus/and=equals",
+		"pct%20encoded", "q?a=b&c=d", "有效但含中文的码",
+	}
+	bad := []string{
+		"", "  ", "has space", "two\nlines", "tab\there", "bell\x07",
+	}
+	for _, c := range ok {
+		if err := checkAuthCode(c); err != nil {
+			t.Errorf("应接受 %q: %v", c, err)
+		}
+	}
+	for _, c := range bad {
+		if err := checkAuthCode(c); err == nil {
+			t.Errorf("应拒绝 %q", c)
+		}
+	}
 }

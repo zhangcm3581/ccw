@@ -27,10 +27,7 @@ func (s *Server) registerClaudeAuth(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/nodes/{id}/claude/cancel", s.Auth.requireAdmin(s.claudeAuthCancel))
 }
 
-var (
-	errNoContainers = errors.New("本节点还没有项目容器；等 init-projects 跑完，或先点「从节点同步项目」")
-	errNoService    = errors.New("缺少要重建的服务名")
-)
+var errNoService = errors.New("要重建的服务不属于本节点；只能重建本节点的项目容器")
 
 // nodeAction是节点级远程操作的公共骨架：CSRF → 取节点与容器 → 执行 → 审计 → 回节点页。
 //
@@ -162,6 +159,7 @@ func (s *Server) claudeAuthCancel(w http.ResponseWriter, r *http.Request, sess c
 		if err := s.Fleet.Orchestrator.ClaudeAuthCancel(r.Context(), nodeID, container); err != nil {
 			return "", err
 		}
+		s.Fleet.putScreen(nodeID, "") // 会话结束了，别留着上一屏让人以为还在
 		return "", nil
 	})
 }
@@ -181,22 +179,17 @@ func (s *Server) firstContainer(ctx context.Context, nodeID string) (string, boo
 	return "", false
 }
 
-// redirectNode回到节点页，把终端画面或错误经查询串带回去。
+// redirectNode回到节点页。
 //
-// 画面可能很长（一屏终端），URL 带得下但不好看；这里截到 4000 字符——
-// 授权提示与 URL 都在最前面，截断只会丢掉尾部的空行。
+// **终端画面走内存缓存而不是查询串**：一屏中文输出百分号编码后接近 10 KB，
+// 超过常见反代 8192 的请求行上限——那会变成 414 而不是页面。
+// 错误信息短，仍走查询串。
 func (s *Server) redirectNode(w http.ResponseWriter, r *http.Request, nodeID, screen, errMsg string) {
 	u := "/admin/nodes/" + nodeID
-	switch {
-	case errMsg != "":
+	if errMsg != "" {
 		u += "?err=" + urlQueryEscape(errMsg)
-	case screen != "":
-		if len(screen) > 4000 {
-			screen = screen[:4000]
-		}
-		u += "?screen=" + urlQueryEscape(strings.TrimRight(screen, "\n "))
-	default:
-		u += "?ok=1"
+	} else {
+		s.Fleet.putScreen(nodeID, strings.TrimRight(screen, "\n "))
 	}
 	http.Redirect(w, r, u, http.StatusFound)
 }
