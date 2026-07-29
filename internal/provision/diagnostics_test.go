@@ -95,3 +95,31 @@ func TestCapturePaneJoinsWrappedLines(t *testing.T) {
 		t.Errorf("命令形状不对：%s", cmd)
 	}
 }
+
+// 送键必须走白名单：这个通道直通容器里正在跑的终端。
+func TestAuthKeysAreWhitelisted(t *testing.T) {
+	for _, k := range []string{"up", "down", "enter", "escape"} {
+		if _, ok := authKeys[k]; !ok {
+			t.Errorf("走选单必需的键 %q 不在白名单里", k)
+		}
+	}
+	// 任意文本、组合键、shell 元字符都不该被接受
+	for _, bad := range []string{"", "C-c", "rm -rf /", "Enter; echo x", "F1", "$(id)"} {
+		if _, ok := authKeys[bad]; ok {
+			t.Errorf("不该接受 %q", bad)
+		}
+	}
+}
+
+// pane 宽度足以让登录 URL 不被应用自己折行。
+//
+// 实测（2026-07-30，ubuntu:24.04 + Claude Code v2.1.220）：URL 约 400 字符，
+// -x 200 时 Claude 的 TUI 会自己把它折成三行，而 capture-pane -J 只能合并
+// **终端**折行、合不了应用折的——管理员复制到的仍是断的。-x 600 时完整成一行。
+func TestAuthPaneWideEnoughForURL(t *testing.T) {
+	const measuredURLLen = 400
+	if authCols < measuredURLLen+100 {
+		t.Errorf("pane 宽度 %d 不足以容纳约 %d 字符的登录 URL；"+
+			"窄了会被 Claude 的 TUI 自己折行，capture-pane -J 救不回来", authCols, measuredURLLen)
+	}
+}

@@ -97,7 +97,7 @@ func TestClaudeAuthRequiresCSRF(t *testing.T) {
 	fs.nodes["n1"] = consolestore.Node{ID: "n1", Name: "node-1"}
 	fs.projects["p1"] = consolestore.NodeProject{ID: "p1", NodeID: "n1", Slug: "project-a"}
 
-	for _, path := range []string{"start", "refresh", "code", "cancel"} {
+	for _, path := range []string{"start", "refresh", "key", "code", "cancel"} {
 		form := url.Values{"code": {"abc"}}
 		w := postForm(t, s, "/admin/nodes/n1/claude/"+path, form, []*http.Cookie{sess}, "203.0.113.5")
 		if w.Code != http.StatusForbidden {

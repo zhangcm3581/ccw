@@ -9,7 +9,7 @@ import (
 	"ccw/internal/sshexec"
 )
 
-// 在后台里给节点授权 Claude 账号（2026-07-29）。
+// 在后台里给节点授权 Claude 账号（2026-07-29；2026-07-30 按真机实测修正）。
 //
 // 此前只能 SSH 上机、手敲一串 docker exec + tmux 命令（DEPLOY.md 的 A7）。
 // 这里把那套流程搬进后台，但**不去解析 Claude Code 的输出**：
@@ -19,14 +19,25 @@ import (
 // 做法是把终端本身当中转：
 //
 //	Start   → 在容器里起一个独立的 tmux 会话跑 claude，capture-pane 把画面取回来
-//	Capture → 再取一次（管理员点"刷新"，或前端轮询）
-//	SendCode→ 把粘贴的授权码送进那个会话，回车
+//	Capture → 再取一次（管理员点"刷新"）
+//	SendKeys→ 送方向键/回车（走完选单），或送粘贴的授权码
 //	Cancel  → kill-session
 //
 // 状态全在 tmux 里，HTTP 这边无状态，Console 重启也不影响正在进行的授权。
 //
 // **授权码经 stdin 送入，不进命令行**：命令行在节点上对所有用户可见（ps aux），
 // 与推送源码包同款约束。
+//
+// ---- 2026-07-30 在 ubuntu:24.04 + Claude Code v2.1.220 上实测到的三件事 ----
+//
+//  1. **第一屏不是登录**。首次运行依次是「主题选择」→「登录方式选择」→ 才到
+//     带 URL 的粘贴码界面。前两步要方向键与回车——只给一个文本输入框的话，
+//     管理员会卡在主题选择器上，且完全看不出该做什么。因此有了 SendKeys。
+//  2. **pane 必须开得很宽**。URL 约 400 字符；`-x 200` 时 Claude 的 TUI 会**自己**
+//     把它折成三行，而 `capture-pane -J` 只能合并终端折行、合不了应用自己折的。
+//     实测 `-x 600` 时 URL 完整落在一行里。
+//  3. `-J` 仍然要带：它解决的是另一层（终端级折行）。
+const authCols = 600
 
 // authSession是授权用的tmux会话名。与终端会话（工作区键）、
 // 管理员手动登录会话（main）都不同名，互不打扰。
@@ -43,6 +54,14 @@ func capturePane(sudo, container string) string {
 		sudo, shellQuote(container), authSession, authSession)
 }
 
+// authKeys是允许送进授权会话的按键。**白名单而不是自由文本**：
+// 这个通道直通一个正在跑的终端，放开等于把任意输入送进容器。
+// 这几个键足够走完「主题选择 → 登录方式选择 → 粘贴码」的全部选单。
+var authKeys = map[string]string{
+	"up": "Up", "down": "Down", "enter": "Enter", "escape": "Escape",
+	"1": "1", "2": "2", "3": "3",
+}
+
 // ClaudeAuthStart在节点上起一个跑claude的tmux会话，并返回当前画面。
 //
 // 已存在同名会话时**先杀掉重开**：授权流程卡在半路时，让管理员点一次"重新开始"
@@ -55,10 +74,10 @@ func (o *Orchestrator) ClaudeAuthStart(ctx context.Context, nodeID, container st
 	defer cli.Close()
 
 	script := fmt.Sprintf(`%[1]sdocker exec %[2]s tmux -L %[3]s kill-session -t %[3]s 2>/dev/null
-%[1]sdocker exec -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8 %[2]s tmux -L %[3]s new-session -d -s %[3]s -x 200 -y 50 claude
+%[1]sdocker exec -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8 %[2]s tmux -L %[3]s new-session -d -s %[3]s -x %[5]d -y 60 claude
 sleep 3
 %[4]s`,
-		sudo, shellQuote(container), authSession, capturePane(sudo, container))
+		sudo, shellQuote(container), authSession, capturePane(sudo, container), authCols)
 
 	res, err := cli.Run(ctx, script)
 	if err != nil {
@@ -141,6 +160,34 @@ func checkAuthCode(code string) error {
 		}
 	}
 	return nil
+}
+
+// ClaudeAuthSendKey送一个按键进授权会话，然后返回新画面。
+//
+// 首次运行的前两屏（主题、登录方式）是选单，只能用方向键与回车走。
+// key必须来自authKeys白名单——这个通道直通一个正在跑的终端。
+func (o *Orchestrator) ClaudeAuthSendKey(ctx context.Context, nodeID, container, key string) (string, error) {
+	tk, ok := authKeys[key]
+	if !ok {
+		return "", errors.New("不支持的按键")
+	}
+	cli, sudo, err := o.dialNode(ctx, nodeID)
+	if err != nil {
+		return "", err
+	}
+	defer cli.Close()
+
+	cmd := fmt.Sprintf(`%[1]sdocker exec %[2]s tmux -L %[3]s send-keys -t %[3]s %[4]s
+sleep 3
+%[5]s`, sudo, shellQuote(container), authSession, tk, capturePane(sudo, container))
+	res, err := cli.Run(ctx, cmd)
+	if err != nil {
+		return "", err
+	}
+	if res.ExitCode != 0 {
+		return "", errors.New("授权会话已结束或不存在，请重新开始")
+	}
+	return res.Stdout, nil
 }
 
 // ClaudeAuthCancel结束授权会话。

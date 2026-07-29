@@ -169,14 +169,26 @@
 
         {{if .Screen}}
         <p class="eyebrow">容器里的终端画面</p>
-        <div class="term" style="margin-bottom:16px">
-          <pre class="term-bd" style="height:auto;max-height:340px;min-height:0">{{.Screen}}</pre>
+        <div class="term" style="margin-bottom:14px">
+          <pre class="term-bd" style="height:auto;max-height:380px;min-height:0">{{.Screen}}</pre>
         </div>
+
+        <p class="eyebrow">走选单（前两屏是主题与登录方式，用这几个键）</p>
+        <div class="card-ft" style="border:none;padding:0 0 16px">
+          {{range $.AuthKeys}}
+          <form method="POST" action="/admin/nodes/{{$.Node.ID}}/claude/key" style="display:contents">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+            <input type="hidden" name="key" value="{{.K}}">
+            <button class="btn plain" type="submit">{{.L}}</button>
+          </form>
+          {{end}}
+        </div>
+
         <form method="POST" action="/admin/nodes/{{.Node.ID}}/claude/code">
           <input type="hidden" name="csrf_token" value="{{.CSRF}}">
           <label class="fld">
             <span class="lb">授权码</span>
-            <input type="text" name="code" placeholder="把上面提示的链接在浏览器打开，登录后把拿到的码粘在这里"
+            <input type="text" name="code" placeholder="走到 Paste code here 那一步后，把浏览器给的码粘在这里"
                    autocomplete="off" spellcheck="false" required>
             <span class="hint">码只送往节点，不回显、不入审计详情、不进日志。</span>
           </label>

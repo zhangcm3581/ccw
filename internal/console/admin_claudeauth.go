@@ -23,6 +23,7 @@ import (
 func (s *Server) registerClaudeAuth(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/nodes/{id}/claude/start", s.Auth.requireAdmin(s.claudeAuthStart))
 	mux.HandleFunc("POST /admin/nodes/{id}/claude/refresh", s.Auth.requireAdmin(s.claudeAuthRefresh))
+	mux.HandleFunc("POST /admin/nodes/{id}/claude/key", s.Auth.requireAdmin(s.claudeAuthKey))
 	mux.HandleFunc("POST /admin/nodes/{id}/claude/code", s.Auth.requireAdmin(s.claudeAuthCode))
 	mux.HandleFunc("POST /admin/nodes/{id}/claude/cancel", s.Auth.requireAdmin(s.claudeAuthCancel))
 }
@@ -143,6 +144,15 @@ func (s *Server) claudeAuthStart(w http.ResponseWriter, r *http.Request, sess co
 func (s *Server) claudeAuthRefresh(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
 	s.claudeAuthAction(w, r, sess, "claude.auth.refresh", func(nodeID, container string) (string, error) {
 		return s.Fleet.Orchestrator.ClaudeAuthCapture(r.Context(), nodeID, container)
+	})
+}
+
+// claudeAuthKey送一个按键。首次运行的前两屏是选单（主题、登录方式），
+// 只有方向键与回车能走——实测见 internal/provision/claudeauth.go 顶部。
+func (s *Server) claudeAuthKey(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	key := r.PostFormValue("key")
+	s.claudeAuthAction(w, r, sess, "claude.auth.key", func(nodeID, container string) (string, error) {
+		return s.Fleet.Orchestrator.ClaudeAuthSendKey(r.Context(), nodeID, container, key)
 	})
 }
 

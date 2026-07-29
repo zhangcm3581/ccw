@@ -327,8 +327,13 @@ func (s *Server) adminNodeDetail(w http.ResponseWriter, r *http.Request, sess co
 		"SSHTarget":     node.SSHUser + "@" + node.Host,
 		"Screen":        s.Fleet.getScreen(node.ID),
 		"Diag":          s.Fleet.getDiag(node.ID),
-		"Error":         r.URL.Query().Get("err"),
-		"Notice":        r.URL.Query().Get("ok"),
+		// 授权选单能用的按键。**白名单**：这个通道直通容器里正在跑的终端。
+		"AuthKeys": []map[string]string{
+			{"K": "up", "L": "↑ 上"}, {"K": "down", "L": "↓ 下"},
+			{"K": "enter", "L": "回车 / 确认"}, {"K": "escape", "L": "Esc"},
+		},
+		"Error":  r.URL.Query().Get("err"),
+		"Notice": r.URL.Query().Get("ok"),
 	}
 	if derr == nil && d.RecordState == "pending" {
 		data["DomainPending"] = true
