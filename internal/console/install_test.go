@@ -1,9 +1,19 @@
 package console
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"ccw/internal/consolestore"
 )
 
 // 一键安装脚本是**要被 shell / PowerShell 直接执行的纯文本**。
@@ -95,4 +105,109 @@ func TestInstallScriptFailsLoudlyWithoutRelease(t *testing.T) {
 	if !strings.Contains(body, "exit 1") {
 		t.Errorf("脚本应以非零码退出而不是静默成功: %q", body)
 	}
+}
+
+// 真正跑一遍安装脚本。
+//
+// **之前的测试只断言脚本文本里有校验和与文件名，从没执行过它**——
+// 于是脚本里写着 `tar xzf` 而 build-release.sh 产出的是裸二进制这件事，
+// 四条测试全绿地漏了过去。安装器是要在别人机器上跑的东西，
+// 只测"文本里有那几个字"等于没测。
+func TestInstallScriptActuallyInstalls(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	s, f, _, dist := newTestServer(t)
+
+	// 产物就是可执行文件本身，与 scripts/build-release.sh 的产出形态一致
+	const payload = "#!/bin/sh\necho fake-cclaude\n"
+	sum := sha256.Sum256([]byte(payload))
+	f.arts = []consolestore.Artifact{{
+		Version: "v0.1.0", OS: runtime.GOOS, Arch: runtime.GOARCH,
+		Filename:  "cclaude_v0.1.0_" + runtime.GOOS + "_" + runtime.GOARCH,
+		SizeBytes: int64(len(payload)), SHA256: hex.EncodeToString(sum[:]),
+	}}
+	if err := os.WriteFile(filepath.Join(dist, f.arts[0].Filename), []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	script := fetch(t, srv.URL+"/install.sh")
+	dest := t.TempDir()
+	out, err := runSh(t, script, "CCLAUDE_INSTALL_DIR="+dest)
+	if err != nil {
+		t.Fatalf("安装脚本执行失败: %v\n%s", err, out)
+	}
+
+	bin := filepath.Join(dest, "cclaude")
+	fi, err := os.Stat(bin)
+	if err != nil {
+		t.Fatalf("cclaude 没被装进目标目录: %v\n%s", err, out)
+	}
+	if fi.Mode()&0o111 == 0 {
+		t.Error("安装后应是可执行的")
+	}
+	got, _ := os.ReadFile(bin)
+	if string(got) != payload {
+		t.Errorf("装进去的不是下载到的那个文件:\n%q", string(got))
+	}
+}
+
+// 校验和不符必须中止且非零退出——这是这个脚本存在的全部意义。
+func TestInstallScriptAbortsOnChecksumMismatch(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	s, f, _, dist := newTestServer(t)
+	f.arts = []consolestore.Artifact{{
+		Version: "v0.1.0", OS: runtime.GOOS, Arch: runtime.GOARCH,
+		Filename:  "cclaude_v0.1.0_" + runtime.GOOS + "_" + runtime.GOARCH,
+		SizeBytes: 3, SHA256: strings.Repeat("ab", 32), // 与实际内容不符
+	}}
+	if err := os.WriteFile(filepath.Join(dist, f.arts[0].Filename), []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	dest := t.TempDir()
+	out, err := runSh(t, fetch(t, srv.URL+"/install.sh"), "CCLAUDE_INSTALL_DIR="+dest)
+	if err == nil {
+		t.Fatalf("校验和不符时必须失败退出:\n%s", out)
+	}
+	if !strings.Contains(out, "校验和不符") {
+		t.Errorf("应说明是校验和问题: %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "cclaude")); !os.IsNotExist(err) {
+		t.Error("校验失败时不得留下任何文件")
+	}
+}
+
+func fetch(t *testing.T, url string) string {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func runSh(t *testing.T, script string, env ...string) (string, error) {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), "install.sh")
+	if err := os.WriteFile(f, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", f)
+	cmd.Env = append(os.Environ(), env...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }

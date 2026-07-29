@@ -46,6 +46,19 @@ func Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, key []by
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// 工作区键从请求头取。**不放URL查询参数**（会进反代日志，与令牌同款约束），
+	// 也不放令牌——签发令牌的control-api根本不知道客户端在哪个本地目录。
+	//
+	// **缺失或非法一律拒绝**，与/ws/sync的hello同一口径。此前这里是"退回
+	// legacy的/workspace"，那会造出最坏的一种组合：老客户端的终端能用、
+	// 同步被拒，用户看到一个正常的终端，文件却一个都没同步，还没有任何提示。
+	ws := r.Header.Get("X-CCW-Workspace")
+	if !syncpkg.ValidWorkspace(ws) {
+		http.Error(w, "workspace required", http.StatusBadRequest)
+		return
+	}
+
+	// 校验必须排在Upgrade之前：升级会劫持连接，之后再调http.Error写不出任何东西。
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -58,13 +71,6 @@ func Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, key []by
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
-	// 工作区键从请求头取。**不放URL查询参数**（会进反代日志，与令牌同款约束），
-	// 也不放令牌——签发令牌的control-api根本不知道客户端在哪个本地目录。
-	// 非法值一律当成空：退回legacy的/workspace，而不是让客户端指定任意路径。
-	ws := r.Header.Get("X-CCW-Workspace")
-	if !syncpkg.ValidWorkspace(ws) {
-		ws = ""
-	}
 	pty, err := start(claims.ProjectID, ws)
 	if err != nil {
 		conn.WriteControl(websocket.CloseMessage,

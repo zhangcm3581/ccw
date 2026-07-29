@@ -91,6 +91,13 @@ func ServeSync(w http.ResponseWriter, r *http.Request, key []byte, maxMessage in
 		}
 		switch req.Op {
 		case "hello":
+			// 工作区在会话建立时定死：**第二次hello一律断开**，不允许中途换。
+			// 允许换的话，同一条连接上先前用旧工作区算出的base_revision
+			// 会被拿去和新工作区的索引比对，三方判断的前提就没了。
+			if ready {
+				writeSyncJSON(conn, wsResp{Op: "reject", Reason: "already_hello"})
+				return
+			}
 			sess.Device = req.Device
 			// 老客户端不发ws：拒绝而不是退回平铺目录。静默兼容会让升级后的
 			// 服务端继续制造污染，且没人会发现。

@@ -38,10 +38,8 @@ try {
     throw "cclaude: 校验和不符，已中止`n  期望 $sum`n  实际 $got"
   }
 
-  Expand-Archive -Path $pkg -DestinationPath $tmp -Force
-  $bin = Get-ChildItem -Path $tmp -Recurse -Filter 'cclaude*.exe' | Select-Object -First 1
-  if (-not $bin) { throw 'cclaude: 压缩包里没找到 cclaude.exe' }
-  Copy-Item $bin.FullName (Join-Path $dest 'cclaude.exe') -Force
+  # 产物就是 exe 本身（scripts/build-release.sh 直接 go build 出来，不打包），不解压。
+  Copy-Item $pkg (Join-Path $dest 'cclaude.exe') -Force
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }

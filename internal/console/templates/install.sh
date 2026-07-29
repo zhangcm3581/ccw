@@ -34,9 +34,13 @@ if [ -z "$FILE" ]; then
   exit 1
 fi
 
-# 装到哪：能写 /usr/local/bin 就装那儿（全局可用），否则退到 ~/.local/bin。
+# 装到哪：CCLAUDE_INSTALL_DIR 优先；否则能写 /usr/local/bin 就装那儿（全局可用），
+# 再否则退到 ~/.local/bin。
 # 不自动 sudo——脚本从管道里跑，弹密码提示是很糟的体验，也不该由它替你提权。
-if [ -w /usr/local/bin ] 2>/dev/null; then
+if [ -n "${CCLAUDE_INSTALL_DIR:-}" ]; then
+  DEST="$CCLAUDE_INSTALL_DIR"
+  mkdir -p "$DEST"
+elif [ -w /usr/local/bin ] 2>/dev/null; then
   DEST=/usr/local/bin
 else
   DEST="$HOME/.local/bin"
@@ -67,14 +71,10 @@ if [ "$GOT" != "$SUM" ]; then
   exit 1
 fi
 
-tar xzf "$TMP/$FILE" -C "$TMP"
-BIN="$(find "$TMP" -type f -name 'cclaude*' ! -name '*.tar.gz' | head -1)"
-if [ -z "$BIN" ]; then
-  echo "cclaude: 压缩包里没找到可执行文件" >&2
-  exit 1
-fi
-chmod +x "$BIN"
-mv "$BIN" "$DEST/cclaude"
+# 产物就是可执行文件本身（scripts/build-release.sh 直接 go build 出来，不打包），
+# 所以不解压——装错成"解压一个不是压缩包的文件"会在这里当场失败。
+chmod +x "$TMP/$FILE"
+mv "$TMP/$FILE" "$DEST/cclaude"
 
 echo "已安装到 $DEST/cclaude"
 case ":$PATH:" in
