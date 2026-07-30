@@ -151,6 +151,20 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   仍会解析出接入域名，使用者拿到域名却在 exchange 时吃 invalid_cdk。
   `rm -rf` 的目标过 `safeWipeRoot` 守卫（RepoRoot 现在写死，但接到配置上时
   空值或 `/` 就是一台机器）。**远端擦除已在真机上跑通**（2026-07-30，Node-NY-02）。
+- **同步落盘的文件归容器里的 claude(1001)**（2026-07-30，真机暴露）：
+  worker-agent 以 root 写盘（它持 docker.sock），项目容器以 1001 运行同一个卷，
+  于是同步上去的文件是 `root:root 0600`——容器里 `cat` 直接 Permission denied，
+  Claude 读不了也改不了。目录同样要 chown：`root:root 0755` 能进能读，
+  但没法在里面建文件。
+  `DirStore` 只在服务端构造（客户端下行走 `writeLocal`，用当前用户身份），
+  所以加 chown 不影响本地文件。判定用 `uid > 0` 而不是 `>= 0`——uid 0 就是 root，
+  当成 chown 目标毫无意义，这样零值（单元测试）天然表示"不改属主"。
+  **UID 不做成配置项**：它由 `deploy/Dockerfile.claude` 的 `useradd -u 1001` 定死，
+  加个 env 只是多一个能让两处悄悄漂移的地方（漂了不报错，只是"容器里读不了"）；
+  改成常量 + 一条读 Dockerfile 比对的测试。
+  历史遗留的 root 文件由 `repairOwnerOnce` 修回来（每进程每目录一次——
+  客户端每 2 秒重连，不能每次遍历整棵树）；修不了也不阻断同步。
+  三条都在 Linux 容器里以 root 实测，并对两个 chown 点各做了变异验证。
 - **安装脚本支持重装/升级**（2026-07-30）：重装是常态（客户端升级就得重装）。
   两个脚本都会先探测旧版本并打印「已从 v0.1.0 升级到 v0.1.1」；
   **PATH 遮挡**会告警——别处有一个更靠前的 `cclaude` 时，装了新的也还是跑旧的，

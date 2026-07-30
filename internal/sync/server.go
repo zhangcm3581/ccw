@@ -23,9 +23,40 @@ type Store interface {
 	Manifest() ([]FileEntry, error)
 }
 
-type DirStore struct{ root string }
+// ContainerUID/GID是项目容器里运行claude的身份，由deploy/Dockerfile.claude的
+// `useradd -m -u 1001 claude` 定死（有测试比对，见fsops_owner_test.go）。
+//
+// **为什么不做成配置项**：worker-agent 以 root 写盘，容器以 1001 读写同一个卷。
+// 这两个数字必须一致，做成 env 只是多一个能让它们悄悄漂移的地方——
+// 漂了的表现是"文件同步上去了，容器里读不了"，而且不报错。
+const (
+	ContainerUID = 1001
+	ContainerGID = 1001
+)
 
-func NewDirStore(root string) *DirStore { return &DirStore{root: root} }
+// DirStore是服务端（worker-agent）的落盘实现。**只在服务端构造**：
+// 客户端下行写盘走syncclient.go的writeLocal，用当前用户的身份，不经这里。
+//
+// owner是新建文件与目录要chown到的身份。worker-agent 以 root 跑，
+// 默认创建出来的是 root:root，而项目容器里是 1001——不 chown 的话
+// 同步上去的文件容器里读不了、也改不了（2026-07-30 真机上就是这样）。
+// uid<=0 表示不改属主（单测与非Linux平台：那里没有root，chown 只会失败）。
+// 用 <=0 而不是 <0：uid 0 是 root，正是要避开的那个值，当成目标没有意义，
+// 于是零值天然安全，不必依赖谁记得填 -1。
+type DirStore struct {
+	root     string
+	uid, gid int
+}
+
+func NewDirStore(root string) *DirStore { return &DirStore{root: root, uid: -1, gid: -1} }
+
+// NewOwnedDirStore建一个会把新建文件/目录chown到uid:gid的DirStore。
+func NewOwnedDirStore(root string, uid, gid int) *DirStore {
+	return &DirStore{root: root, uid: uid, gid: gid}
+}
+
+// chownEnabled报告是否要改属主。
+func (d *DirStore) chownEnabled() bool { return d.uid > 0 }
 
 // 路径安全边界（审查§2.5、spec §8）：全部文件操作经fsops_{linux,other}.go的
 // 平台实现进行。Linux生产用openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)+父目录fd，

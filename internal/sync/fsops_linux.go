@@ -58,6 +58,9 @@ func (d *DirStore) openRootFD(create bool) (int, error) {
 		if err := os.MkdirAll(d.root, 0o755); err != nil {
 			return -1, err
 		}
+		if d.chownEnabled() {
+			_ = os.Chown(d.root, d.uid, d.gid)
+		}
 	}
 	fd, err := unix.Open(d.root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -98,6 +101,11 @@ func (d *DirStore) openParentFD(rel string, create bool) (int, string, error) {
 		fd, err := openat2Retry(cur, comp, how)
 		if errors.Is(err, unix.ENOENT) {
 			unix.Mkdirat(cur, comp, 0o755) // EEXIST竞态无害：随后的openat2才是裁决
+			// 目录也要 chown：root:root 0755 容器能进能读，但**不能在里面建文件**，
+			// 于是 Claude 在同步下来的子目录里没法写东西。
+			if d.chownEnabled() {
+				unix.Fchownat(cur, comp, d.uid, d.gid, unix.AT_SYMLINK_NOFOLLOW)
+			}
 			fd, err = openat2Retry(cur, comp, how)
 		}
 		unix.Close(cur)
@@ -123,6 +131,16 @@ func (d *DirStore) openTempWriter(rel, tmpID string) (*os.File, func(removeTmp b
 	if err != nil {
 		unix.Close(dirfd)
 		return nil, nil, mapPathErr("create-temp", tmpID, err)
+	}
+	// 属主要在**改名前**就位：promoteTemp 用的是 rename，rename 不动属主，
+	// 所以这里错了就一路错到最终文件。
+	if d.chownEnabled() {
+		if err := unix.Fchown(fd, d.uid, d.gid); err != nil {
+			unix.Close(fd)
+			unix.Unlinkat(dirfd, tmpID, 0)
+			unix.Close(dirfd)
+			return nil, nil, mapPathErr("chown-temp", tmpID, err)
+		}
 	}
 	f := os.NewFile(uintptr(fd), tmpID)
 	cleanup := func(remove bool) {

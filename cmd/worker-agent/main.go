@@ -128,6 +128,9 @@ func main() {
 		return &syncpkg.SyncSession{
 			ProjectID: projectID, Device: device, Mode: mode,
 			Store: st, Root: root,
+			// 落盘文件归容器里的 claude(1001)：worker-agent 以 root 写盘，
+			// 不 chown 的话同步上去的文件在容器里读不了也改不了。
+			OwnerUID: syncpkg.ContainerUID, OwnerGID: syncpkg.ContainerGID,
 			MaxBytes: 1 << 30, AllowQuota: gate.Allow, Lock: lockFor(projectID),
 		}
 	}

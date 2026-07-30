@@ -54,6 +54,12 @@ type SyncSession struct {
 	// Lock：项目级锁，串行化同一项目的写，防并发上传各读旧revision/用量后同时通过（审查§15.2）。
 	// 可为 nil（单元测试）；worker 为每个 project 注入同一把锁。
 	Lock *stdsync.Mutex
+	// OwnerUID/GID是落盘文件要归给谁。worker-agent 以 root 写盘，而项目容器里
+	// 是 claude(1001)——不设的话同步上去的文件容器里读不了也改不了。
+	// **判定用 >0 而不是 >=0**：uid 0 就是 root——正是要避开的那个值，
+	// 把它当成"要 chown 的目标"没有任何意义。这样零值（单元测试）
+	// 天然表示"不改属主"，不需要谁记得填 -1。
+	OwnerUID, OwnerGID int
 }
 
 // key把工作区内的相对路径转成索引里的全局路径。
@@ -81,7 +87,13 @@ func (s *SyncSession) SetWorkspace(ws string) error {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
-		s.Dir = NewDirStore(dir)
+		if s.OwnerUID > 0 {
+			_ = os.Chown(dir, s.OwnerUID, s.OwnerGID)
+			repairOwnerOnce(dir, s.OwnerUID, s.OwnerGID)
+			s.Dir = NewOwnedDirStore(dir, s.OwnerUID, s.OwnerGID)
+		} else {
+			s.Dir = NewDirStore(dir)
+		}
 	}
 	return nil
 }
