@@ -3,6 +3,7 @@ package provision
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -465,5 +466,63 @@ func TestHardenIsAPipelineStep(t *testing.T) {
 	err := stepByName(BootstrapSteps(d), "harden").Run(context.Background(), noLog)
 	if err == nil || !strings.Contains(err.Error(), "公钥注入失败") {
 		t.Fatalf("凭据交接失败应让harden步骤失败（从而被记账），got %v", err)
+	}
+}
+
+// healthcheck 失败时，探测现场必须进日志。
+//
+// 老版本用 `curl -s`，失败原因被吞掉，错误只剩一个 `000`——连不上、TLS 校验失败、
+// 超时全是 000，管理员无从下手（2026-07-30 真机上就卡在这里）。
+// 现在探测脚本自己把现场打在 stdout 上，而 run() 出错时只带得走第一行，
+// 所以步骤必须**先把 stdout 写进日志再返回错误**。
+func TestHealthcheckLogsProbeEvidenceOnFailure(t *testing.T) {
+	evidence := "探测30次仍未就绪：code=000 curl_exit=60 curl: (60) SSL certificate problem\n" +
+		"--- 域名解析 ---\n203.0.113.9\n--- control-api 近期日志 ---\nmigrate: connection refused\n"
+	r := &scriptRunner{rules: []rule{
+		// 探测脚本（唯一带 auth/exchange 的那条）退出1，并把现场打在stdout
+		{contains: "auth/exchange", res: sshexec.Result{Stdout: evidence, ExitCode: 1}},
+		{contains: "compose -p", res: sshexec.Result{Stdout: "caddy running\ncontrol-api running\n"}},
+	}}
+	var logs []string
+	logf := func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+
+	err := stepByName(BootstrapSteps(baseDeps(r, &fakeDNS{})), "healthcheck").Run(context.Background(), logf)
+	if err == nil {
+		t.Fatal("探测失败时步骤应失败")
+	}
+	joined := strings.Join(logs, "\n")
+	for _, want := range []string{"curl_exit=60", "control-api 近期日志", "connection refused"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("现场未进日志，缺 %q。日志：\n%s", want, joined)
+		}
+	}
+}
+
+// 探测脚本必须重试：`docker compose ps` 说 running 不等于在听端口，
+// control-api 启动时要跑迁移（重置后是空库，更久）。一次性探测会在
+// "正在迁移"这个正常状态上判失败。
+func TestHealthcheckProbeRetries(t *testing.T) {
+	r := &scriptRunner{rules: []rule{
+		{contains: "auth/exchange", res: sshexec.Result{Stdout: "OK code=401\n"}},
+		{contains: "compose -p", res: sshexec.Result{Stdout: "caddy running\n"}},
+	}}
+	if err := stepByName(BootstrapSteps(baseDeps(r, &fakeDNS{})), "healthcheck").Run(context.Background(), noLog); err != nil {
+		t.Fatalf("401应算就绪: %v", err)
+	}
+	var probe string
+	for _, c := range r.cmds {
+		if strings.Contains(c, "auth/exchange") {
+			probe = c
+		}
+	}
+	if !strings.Contains(probe, "seq 1 30") {
+		t.Error("探测应重试而不是一次定生死")
+	}
+	if strings.Contains(probe, "curl -s ") {
+		t.Error("不能用 curl -s：它把失败原因一起吞掉，错误就只剩一个 000")
+	}
+	// 日志命令不能依赖 `cd` 进源码树——重置之后那棵树可能已经不在了
+	if strings.Contains(probe, "cd ") {
+		t.Error("现场收集不应依赖 cd 进源码树")
 	}
 }

@@ -448,11 +448,48 @@ func stepHealthcheck(d Deps) pipeline.Step {
 					return fmt.Errorf("容器未全部运行：%s", line)
 				}
 			}
-			// 认证端点可达（401是正常的：没给CDK）
-			if _, err := run(ctx, d, fmt.Sprintf(
-				`code=$(curl -s -o /dev/null -w '%%{http_code}' -X POST https://%s/api/v1/auth/exchange -H 'Content-Type: application/json' -d '{}'); `+
-					`echo "$code"; case "$code" in 401|429) exit 0;; *) exit 1;; esac`, d.FQDN)); err != nil {
-				return fmt.Errorf("API端点不可达: %w", err)
+			// 认证端点可达（401是正常的：没给CDK）。
+			//
+			// **要重试**：`docker compose ps` 说 running 不等于在听端口。control-api
+			// 启动时要跑数据库迁移，重置之后是一个全新的空库，迁移比平时久；
+			// 一次性探测会在"正在迁移"这个正常状态上判失败。
+			//
+			// **不能用 `curl -s`**：它把失败原因一起吞掉，于是错误只剩一个 `000`
+			// ——连不上、TLS 校验失败、超时全都是 000，无法定位。改用 -sS 留下原因，
+			// 并把 curl 的退出码一起带出来（60=证书校验失败，7=连不上，28=超时）。
+			//
+			// 最后仍失败时把现场一次性打出来：解析结果、80 端口有没有人应、
+			// 以及 caddy 与 control-api 的近期日志——502 说明 Caddy 好而后端没起来，
+			// 000 说明连 Caddy 都没碰到，两者的排查方向完全不同。
+			probe := fmt.Sprintf(`fq=%[1]s
+last=""
+for i in $(seq 1 30); do
+  code=$(curl -sS -m 10 -o /dev/null -w '%%{http_code}' -X POST "https://$fq/api/v1/auth/exchange" -H 'Content-Type: application/json' -d '{}' 2>/tmp/ccw-curl.err)
+  rc=$?
+  case "$code" in 401|429) echo "OK code=$code"; exit 0;; esac
+  last="code=$code curl_exit=$rc $(head -1 /tmp/ccw-curl.err)"
+  sleep 5
+done
+echo "探测30次仍未就绪：$last"
+echo "--- 域名解析 ---"
+getent hosts "$fq" 2>/dev/null || nslookup "$fq" 2>&1 | tail -4 || echo "(解析不到 $fq，且没有 getent/nslookup)"
+echo "--- 80端口（绕开TLS，只看有没有人应）---"
+curl -sS -m 10 -o /dev/null -w 'http_code=%%{http_code}\n' "http://$fq/api/v1/auth/exchange" 2>&1 | head -2
+echo "--- caddy 近期日志 ---"
+%[2]sdocker compose -p %[3]s logs caddy --tail=15 2>&1 | tail -15
+echo "--- control-api 近期日志 ---"
+%[2]sdocker compose -p %[3]s logs control-api --tail=25 2>&1 | tail -25
+exit 1`,
+				shellQuote(d.FQDN), d.Sudo, shellQuote(d.ComposeProjectName))
+
+			out, perr := run(ctx, d, probe)
+			// 无论成败都把输出留在日志里：成功时是一行 OK，失败时是上面那套现场。
+			// **先 log 再判错**——错误本身只带得走第一行（run 用 firstLine）。
+			if s := strings.TrimSpace(out); s != "" {
+				log("%s", s)
+			}
+			if perr != nil {
+				return fmt.Errorf("API端点不可达（现场见上方日志）: %w", perr)
 			}
 			log("API端点可达")
 			return nil
