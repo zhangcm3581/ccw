@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/websocket"
 )
@@ -19,8 +21,19 @@ type wsTransport struct {
 // DialSync连接同步端点：令牌放Authorization头（禁URL参数），读首帧auth_ok拿mode。
 func DialSync(ctx context.Context, url, token string) (*wsTransport, error) {
 	header := http.Header{"Authorization": {"Bearer " + token}}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, url, header)
+	// hresp 与下面的 wsResp 不是一回事：这是 HTTP 握手响应。
+	// 握手被拒时 gorilla 只给 `websocket: bad handshake`，服务端写在响应体里的
+	// 原因全被丢掉——把状态码与原因带出来，否则排查只能靠猜。
+	conn, hresp, err := websocket.DefaultDialer.DialContext(ctx, url, header)
 	if err != nil {
+		if hresp != nil {
+			defer hresp.Body.Close()
+			b, _ := io.ReadAll(io.LimitReader(hresp.Body, 512))
+			if reason := strings.TrimSpace(string(b)); reason != "" {
+				return nil, fmt.Errorf("同步握手被拒（HTTP %d）：%s", hresp.StatusCode, reason)
+			}
+			return nil, fmt.Errorf("同步握手被拒（HTTP %d）", hresp.StatusCode)
+		}
 		return nil, err
 	}
 	var resp wsResp

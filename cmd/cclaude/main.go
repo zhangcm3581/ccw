@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -127,6 +128,31 @@ func printStatus(conn control.ConnectionResponse) {
 		conn.DiskUsed, conn.DiskLimit, conn.SyncMode)
 }
 
+// wsDialError把握手失败翻成能定位的错误。
+//
+// gorilla 在握手被拒时只给 `websocket: bad handshake`——服务端明明在响应体里
+// 写了原因（如 "workspace required"），却全被丢掉。2026-07-30 真机上就是这样：
+// 旧版客户端连新节点，用户看到一句 bad handshake，既不知道是版本错配，
+// 也不知道 CDK 其实是好的（额度那行已经打出来了）。
+func wsDialError(err error, resp *http.Response) error {
+	if resp == nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	reason := strings.TrimSpace(string(body))
+	// 400 + workspace 相关＝这个客户端太旧，没报工作区键。说清怎么修，
+	// 而不是让人去猜或反复重输 CDK（CDK 是好的）。
+	if resp.StatusCode == http.StatusBadRequest && strings.Contains(reason, "workspace") {
+		return fmt.Errorf("服务端拒绝了终端连接：这个 cclaude 版本比节点旧（没有上报工作区键）。\n" +
+			"请重新执行一次安装命令升级客户端；CDK 不用换，认证已经通过了")
+	}
+	if reason != "" {
+		return fmt.Errorf("终端握手被拒（HTTP %d）：%s", resp.StatusCode, reason)
+	}
+	return fmt.Errorf("终端握手被拒（HTTP %d）", resp.StatusCode)
+}
+
 // runTerminal附着云端PTY：令牌放Authorization头（无?token=），raw mode双向转发，
 // GetSize轮询发resize。断开即返回，由外层循环重连。
 func runTerminal(ctx context.Context, conn control.ConnectionResponse, wsKey string) error {
@@ -136,9 +162,9 @@ func runTerminal(ctx context.Context, conn control.ConnectionResponse, wsKey str
 		"Authorization":   {"Bearer " + conn.TerminalToken},
 		"X-CCW-Workspace": {wsKey},
 	}
-	ws, _, err := websocket.DefaultDialer.DialContext(ctx, conn.TerminalURL, header)
+	ws, resp, err := websocket.DefaultDialer.DialContext(ctx, conn.TerminalURL, header)
 	if err != nil {
-		return err
+		return wsDialError(err, resp)
 	}
 	defer ws.Close()
 

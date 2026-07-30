@@ -151,6 +151,15 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   仍会解析出接入域名，使用者拿到域名却在 exchange 时吃 invalid_cdk。
   `rm -rf` 的目标过 `safeWipeRoot` 守卫（RepoRoot 现在写死，但接到配置上时
   空值或 `/` 就是一台机器）。**远端擦除已在真机上跑通**（2026-07-30，Node-NY-02）。
+- **握手被拒时带出服务端原因**（2026-07-30，真机暴露）：旧版客户端连新部署的节点，
+  服务端在 upgrade 之前以 400 `workspace required` 拒掉（工作区隔离去掉了老客户端
+  兼容分支），而 gorilla 只给 `websocket: bad handshake`——用户看到这一句，
+  既不知道是版本错配、也不知道 CDK 其实是好的（额度行已经打出来了），
+  于是反复重输 CDK。现在读 HTTP 握手响应，把状态码与原因带出来，
+  400+workspace 直接说"这个客户端比节点旧，重跑一次安装命令；CDK 不用换"。
+  终端与同步两侧都改了。
+  **提醒**：`dist/` 里的客户端产物不随 Console 更新而重建——节点侧改了协议就必须
+  重新 `scripts/build-release.sh` + 登记发布，否则新装的用户拿到的仍是旧二进制。
 - **/quickstart 并入 /connect**（2026-07-30）：公开站原有两个上手页，
   而 quickstart 只能给占位符命令（`cclaude --api https://api-01.example.com`
   外加一句"换成你的API域名"）——有 CDK 就能查出真域名，那个页面没有存在必要。
