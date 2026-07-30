@@ -154,6 +154,19 @@ func (o *Orchestrator) ListProjectsOnNode(ctx context.Context, nodeID string) ([
 	return rows, nil
 }
 
+// safeWipeRoot校验`rm -rf`的目标，返回规范化后的路径。
+//
+// 这个命令以 root 在远端跑，目标必须是个像样的子目录。RepoRoot 现在是
+// main.go 里写死的 /srv/ccw，但它哪天被接到配置上，一个空值或 "/"
+// 就意味着一台机器——这个守卫的成本比那个后果低得多。
+func safeWipeRoot(root string) (string, bool) {
+	root = strings.TrimRight(root, "/")
+	if len(root) < 4 || !strings.HasPrefix(root, "/") || strings.Count(root, "/") < 2 {
+		return "", false
+	}
+	return root, true
+}
+
 // ResetNode把节点擦回「装了Docker的干净机器」，供反复重来的测试循环用。
 //
 // **销毁什么**：ccw 这个 compose 项目的全部容器与**命名卷**，以及源码树
@@ -172,6 +185,11 @@ func (o *Orchestrator) ListProjectsOnNode(ctx context.Context, nodeID string) ([
 // 擦完之后点「继续 / 重新部署」即为一次全新部署：新 run 没有任何已完成步骤，
 // 12 步会重跑，harden 与 dns-allocate 因为凭据/域名还在而快速跳过。
 func (o *Orchestrator) ResetNode(ctx context.Context, nodeID string) (string, error) {
+	root, ok := safeWipeRoot(o.RepoRoot)
+	if !ok {
+		return "", fmt.Errorf("拒绝擦除：源码树路径 %q 不像一个安全的目标", o.RepoRoot)
+	}
+
 	cli, sudo, err := o.dialNode(ctx, nodeID)
 	if err != nil {
 		return "", err
@@ -199,7 +217,7 @@ echo "容器: $(%[1]sdocker ps -aq --filter label=com.docker.compose.project=%[3
 echo "卷:   $(%[1]sdocker volume ls -q --filter label=com.docker.compose.project=%[3]s | wc -l)"
 echo "源码树: $([ -e %[4]s ] && echo 仍存在 || echo 已删除)"
 echo "Docker: $(%[1]sdocker --version 2>/dev/null || echo 不可用)"`,
-		sudo, shellQuote(o.RepoRoot+"/deploy"), shellQuote(o.ComposeProjectName), shellQuote(o.RepoRoot))
+		sudo, shellQuote(root+"/deploy"), shellQuote(o.ComposeProjectName), shellQuote(root))
 
 	res, err := cli.Run(ctx, script)
 	if err != nil {

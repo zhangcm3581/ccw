@@ -39,6 +39,10 @@ type FleetStore interface {
 	ListCDKIssues(ctx context.Context) ([]consolestore.CDKIssue, error)
 	RecordCDKIssue(ctx context.Context, projectID, publicID, issuedBy string) error
 	RevokeCDKIssue(ctx context.Context, publicID string) error
+	// RevokeNodeCDKs供「重置节点」：擦除毁掉了节点库里的哈希，这些CDK已经死了。
+	RevokeNodeCDKs(ctx context.Context, nodeID string) (int, error)
+	// SetNodeStatus供「重置节点」把状态退回「待部署」——机器已经空了。
+	SetNodeStatus(ctx context.Context, nodeID, status string) error
 	// RetireNode解除纳管：退役域名并删节点行。**不碰远端机器**。
 	RetireNode(ctx context.Context, nodeID string) error
 	// UpsertNodeProject供「从节点同步项目」补齐镜像。

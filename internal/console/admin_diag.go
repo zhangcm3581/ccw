@@ -69,10 +69,32 @@ func (s *Server) adminNodeReset(w http.ResponseWriter, r *http.Request, sess con
 		s.redirectNode(w, r, nodeID, "", rerr.Error())
 		return
 	}
+
+	// 擦完要把 Console 这边的状态跟上，否则后台会替一台空机器背书。
+	//
+	// 1) 状态回「待部署」：机器上现在什么都没有，机队页却还写着「就绪」。
+	// 2) **撤销这台节点的全部 CDK**：擦除删掉了节点自己的 Postgres 卷，
+	//    那些 CDK 的哈希随之消失、永远认不过了。不撤销的话 /connect 仍会
+	//    把 public-id 解析成接入域名，使用者拿到域名却在 exchange 时吃
+	//    invalid_cdk——像是"服务坏了"，实际是后台在替死卡背书。
+	//
+	// 两个都是**擦除已经成功之后**才做：失败时保持原状，管理员看到的还是
+	// 擦除前的真实状态，可以直接重试。
+	if err := s.Fleet.Store.SetNodeStatus(ctx, nodeID, "new"); err != nil {
+		s.Logf("console: 重置后状态回写失败 node=%s: %v", nodeID, err)
+	}
+	revoked, verr := s.Fleet.Store.RevokeNodeCDKs(ctx, nodeID)
+	if verr != nil {
+		s.Logf("console: 重置后撤销CDK失败 node=%s: %v", nodeID, verr)
+	}
+
 	// 擦除结果原文显示在诊断区：容器/卷/源码树各剩多少，一眼能确认擦干净了。
 	s.Fleet.putDiag(nodeID, []provision.DiagSection{{Title: "重置结果", Output: out}})
-	http.Redirect(w, r, "/admin/nodes/"+nodeID+"?ok="+
-		urlQueryEscape("已擦除远端环境；点「继续 / 重新部署」开始一次全新部署"), http.StatusFound)
+	msg := "已擦除远端环境；点「继续 / 重新部署」开始一次全新部署"
+	if revoked > 0 {
+		msg += "。这台节点原有的 " + itoa(revoked) + " 张 CDK 已随之作废（哈希在被删的数据库里），重新部署后会另发新卡"
+	}
+	http.Redirect(w, r, "/admin/nodes/"+nodeID+"?ok="+urlQueryEscape(msg), http.StatusFound)
 }
 
 func (s *Server) adminNodeDiag(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {

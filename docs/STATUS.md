@@ -143,7 +143,14 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   **刻意保留** Docker（precheck 会跳过，每轮省几分钟）、authorized_keys 里的托管密钥
   （删了 Console 就再也连不上）、Console 库里的节点与域名分配（不用重填 IP、
   不用再等 DNS）。与「解除纳管」正交：前者擦远端留账，后者清账不碰机器。
-  清理靠 compose 项目标签而不是 `cd` 进源码树——树可能已经被上一次擦除删了。
+  清理靠 compose 项目标签而不是 `cd` 进源码树——树可能已经被上一次擦除删了
+  （**已实测**：compose 建的卷确实带 `com.docker.compose.project` 标签，
+  且源码树不存在时 `docker compose -p <name> down -v` 仍能纯靠标签拆干净）。
+  擦除成功后 Console 侧同步两件事：节点状态回「待部署」，
+  **该节点的全部 CDK 标为已撤销**——哈希在被删的库里，不撤的话 `/connect`
+  仍会解析出接入域名，使用者拿到域名却在 exchange 时吃 invalid_cdk。
+  `rm -rf` 的目标过 `safeWipeRoot` 守卫（RepoRoot 现在写死，但接到配置上时
+  空值或 `/` 就是一台机器）。仍未在真机上跑过。
 - **后台授权流程已按真机实测修正**（2026-07-30，ubuntu:24.04 + Claude Code v2.1.220，
   本机 Docker 里跑通）。实测纠正了三处此前靠推断写错的地方：
   ①首次运行的第一屏是**主题选择器**、第二屏是登录方式，之后才到粘贴码界面——

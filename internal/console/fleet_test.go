@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -168,6 +169,28 @@ func (f *fakeFleetStore) RetireNode(_ context.Context, nodeID string) error {
 	}
 	f.retired = append(f.retired, nodeID)
 	return nil
+}
+
+func (f *fakeFleetStore) SetNodeStatus(_ context.Context, nodeID, status string) error {
+	n, ok := f.nodes[nodeID]
+	if !ok {
+		return fmt.Errorf("no node")
+	}
+	n.Status = status
+	f.nodes[nodeID] = n
+	return nil
+}
+
+func (f *fakeFleetStore) RevokeNodeCDKs(_ context.Context, nodeID string) (int, error) {
+	n := 0
+	for i, is := range f.issues {
+		if is.NodeID == nodeID && is.RevokedAt == nil {
+			now := time.Now()
+			f.issues[i].RevokedAt = &now
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (f *fakeFleetStore) RevokeCDKIssue(_ context.Context, publicID string) error {

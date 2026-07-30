@@ -173,3 +173,55 @@ func TestEngineWithPGRecorderResume(t *testing.T) {
 		t.Errorf("续跑后run应succeeded: %s", run.Status)
 	}
 }
+
+// 重置节点会毁掉节点自己的 Postgres 卷，那台机器上的 CDK 哈希随之消失。
+// RevokeNodeCDKs 要把它们全标成已撤销——否则 /connect（只过滤 revoked_at
+// IS NULL）仍会把 public-id 解析成接入域名，使用者拿到域名却在 exchange
+// 时吃 invalid_cdk。
+func TestRevokeNodeCDKsOnlyTouchesThatNode(t *testing.T) {
+	st := testConsoleStore(t)
+	ctx := context.Background()
+	nodeA, nodeB := newNode(t, st), newNode(t, st)
+
+	mk := func(nodeID, slug, pub string) {
+		pid, err := st.UpsertNodeProject(ctx, nodeID, slug, "remote-"+slug, 15<<30, 100, 500)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RecordCDKIssue(ctx, pid, pub, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk(nodeA, "alpha", "pub-a1")
+	mk(nodeA, "beta", "pub-a2")
+	mk(nodeB, "gamma", "pub-b1")
+	// nodeA 上已经撤销过的一张：不该被重复计数，也不该改撤销时间。
+	if err := st.RevokeCDKIssue(ctx, "pub-a2"); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := st.RevokeNodeCDKs(ctx, nodeA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("应只撤销 nodeA 上仍有效的那 1 张，got %d", n)
+	}
+
+	issues, err := st.ListCDKIssues(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, is := range issues {
+		revoked := is.RevokedAt != nil
+		want := is.PublicID != "pub-b1" // 另一台节点的必须完好
+		if revoked != want {
+			t.Errorf("%s: revoked=%v, want %v（撤销不能越过节点边界）", is.PublicID, revoked, want)
+		}
+	}
+
+	// 幂等：再跑一次没有可撤的了。
+	if n2, err := st.RevokeNodeCDKs(ctx, nodeA); err != nil || n2 != 0 {
+		t.Errorf("重复撤销应为0条，got %d, %v", n2, err)
+	}
+}

@@ -230,6 +230,8 @@
           <span><b>把这台机器擦回「装了 Docker 的干净机器」，用于反复重来的测试。</b><br>
             <b>会销毁：</b>ccw 的全部容器与命名卷、源码树 <code>/srv/ccw</code>——
             也就是 workspace 里的文件、<b>Claude 授权凭据</b>、节点自己的 Postgres（项目与 CDK）全部消失。<br>
+            <b>已发出的 CDK 随之作废：</b>它们的哈希就在被删掉的那个数据库里，再也认不过了。
+            后台会自动把这台节点的 CDK 标成已撤销，重新部署后另发新卡——请通知使用者换卡。<br>
             <b>刻意保留：</b>Docker 本身（重装要几分钟，precheck 会跳过，每轮能快很多）、
             authorized_keys 里的托管密钥（删了 Console 就再也连不上）、
             Console 库里的节点与域名分配（所以不用重填 IP、不用再等一次 DNS 生效）。<br>

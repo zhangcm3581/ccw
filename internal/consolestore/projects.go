@@ -157,3 +157,24 @@ func (s *Store) GetNodeProject(ctx context.Context, id string) (NodeProject, err
 	}
 	return p, nil
 }
+
+// RevokeNodeCDKs把某个节点上全部未撤销的CDK标记为已撤销，返回条数。
+//
+// 用于「重置节点」：擦除会删掉节点自己的 Postgres 卷，**那些 CDK 的
+// Argon2id 哈希随之消失**，它们已经不可能再通过认证了。
+// 不撤销的话 `/connect` 仍会把 public-id 解析成接入域名（resolve.go 的查询
+// 只过滤 revoked_at IS NULL），使用者拿到域名、却在 exchange 时吃一个
+// invalid_cdk——看起来像"服务坏了"，实际是 Console 在替一张死卡背书。
+//
+// **撤销而不是删行**：签发历史是审计材料。而且 cdk_issues 对 node_projects
+// 是 ON DELETE CASCADE，删项目镜像会连着把历史一起带走。
+func (s *Store) RevokeNodeCDKs(ctx context.Context, nodeID string) (int, error) {
+	tag, err := s.Pool.Exec(ctx, `
+		UPDATE cdk_issues SET revoked_at = now()
+		WHERE revoked_at IS NULL
+		  AND node_project_id IN (SELECT id FROM node_projects WHERE node_id = $1)`, nodeID)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}

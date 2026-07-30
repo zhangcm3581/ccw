@@ -123,3 +123,24 @@ func TestAuthPaneWideEnoughForURL(t *testing.T) {
 			"窄了会被 Claude 的 TUI 自己折行，capture-pane -J 救不回来", authCols, measuredURLLen)
 	}
 }
+
+// 擦除的目标路径必须过守卫。RepoRoot 现在写死在 main.go，但它一旦被接到
+// 配置上，空值或 "/" 就意味着一台机器。
+func TestSafeWipeRoot(t *testing.T) {
+	for _, bad := range []string{"", "/", "//", "/srv", "/srv/", "srv/ccw", "/etc"} {
+		if _, ok := safeWipeRoot(bad); ok {
+			t.Errorf("%q 应被守卫拦下", bad)
+		}
+	}
+	// 正常值必须放行，且尾斜杠被规范掉——否则拼出的是 /srv/ccw//deploy。
+	for in, want := range map[string]string{
+		"/srv/ccw":  "/srv/ccw",
+		"/srv/ccw/": "/srv/ccw",
+		"/opt/a/b":  "/opt/a/b",
+	} {
+		got, ok := safeWipeRoot(in)
+		if !ok || got != want {
+			t.Errorf("safeWipeRoot(%q) = %q,%v; want %q,true", in, got, ok, want)
+		}
+	}
+}
