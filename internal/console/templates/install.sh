@@ -47,6 +47,13 @@ else
   mkdir -p "$DEST"
 fi
 
+# 旧版本（如果有）：重装最该看到的就是"从哪个版本换到了哪个版本"，
+# 否则"到底换上了没有"完全看不出来。取不到就当没有，绝不因此中止安装。
+OLD=""
+if [ -x "$DEST/cclaude" ]; then
+  OLD="$("$DEST/cclaude" --version 2>/dev/null | awk '{print $2}' || true)"
+fi
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -76,7 +83,24 @@ fi
 chmod +x "$TMP/$FILE"
 mv "$TMP/$FILE" "$DEST/cclaude"
 
+if [ -n "$OLD" ] && [ "$OLD" != "$VERSION" ]; then
+  echo "已从 $OLD 升级到 $VERSION"
+elif [ -n "$OLD" ]; then
+  echo "已重新安装 ${VERSION}（与原有版本相同）"
+fi
 echo "已安装到 $DEST/cclaude"
+
+# **PATH 遮挡**：别的位置有一个更靠前的 cclaude 时，装了新的也还是跑旧的。
+# 这种"升级了但没生效"极难自己看出来——表现是明明重装过，行为还是老的
+# （比如连新节点报 workspace required）。宁可吵一句。
+hash -r 2>/dev/null || true
+WHICH="$(command -v cclaude 2>/dev/null || true)"
+if [ -n "$WHICH" ] && [ "$WHICH" != "$DEST/cclaude" ]; then
+  echo
+  echo "⚠ PATH 里更靠前的位置还有一个 cclaude：$WHICH"
+  echo "  现在敲 cclaude 跑的是它，不是刚装的这个。删掉它，或把 $DEST 提到 PATH 前面。"
+fi
+
 case ":$PATH:" in
   *":$DEST:"*) echo "运行 cclaude 即可开始。" ;;
   *) echo

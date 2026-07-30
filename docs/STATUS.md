@@ -151,6 +151,15 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   仍会解析出接入域名，使用者拿到域名却在 exchange 时吃 invalid_cdk。
   `rm -rf` 的目标过 `safeWipeRoot` 守卫（RepoRoot 现在写死，但接到配置上时
   空值或 `/` 就是一台机器）。**远端擦除已在真机上跑通**（2026-07-30，Node-NY-02）。
+- **安装脚本支持重装/升级**（2026-07-30）：重装是常态（客户端升级就得重装）。
+  两个脚本都会先探测旧版本并打印「已从 v0.1.0 升级到 v0.1.1」；
+  **PATH 遮挡**会告警——别处有一个更靠前的 `cclaude` 时，装了新的也还是跑旧的，
+  表现是"明明升级过、行为还是老的"，极难自己看出来。
+  install.ps1 另外接住"exe 正在运行被锁住"，提示先关窗口，而不是抛一段 .NET 异常。
+  两个脚本都**实际执行验证过**（install.sh 起本地 HTTP 服务真装了一遍，
+  install.ps1 的版本解析与遮挡判断在 PowerShell 容器里跑过）；
+  执行时抓到一个 `$VERSION（` 被 sh 吃进变量名的 unbound variable
+  ——与 76472b2 同一个坑，现在有测试守着。
 - **握手被拒时带出服务端原因**（2026-07-30，真机暴露）：旧版客户端连新部署的节点，
   服务端在 upgrade 之前以 400 `workspace required` 拒掉（工作区隔离去掉了老客户端
   兼容分支），而 gorilla 只给 `websocket: bad handshake`——用户看到这一句，

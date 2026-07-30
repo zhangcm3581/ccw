@@ -25,6 +25,12 @@ if (-not $file) { throw "cclaude: 本站当前版本没有 windows/$arch 的产�
 $dest = Join-Path $env:LOCALAPPDATA 'Programs\cclaude'
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
+$old = $null
+$exePath = Join-Path $dest 'cclaude.exe'
+if (Test-Path $exePath) {
+  try { $old = (& $exePath --version 2>$null) -split ' ' | Select-Object -Last 1 } catch { $old = $null }
+}
+
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
@@ -39,9 +45,25 @@ try {
   }
 
   # 产物就是 exe 本身（scripts/build-release.sh 直接 go build 出来，不打包），不解压。
-  Copy-Item $pkg (Join-Path $dest 'cclaude.exe') -Force
+  #
+  # **正在运行的 exe 会被 Windows 锁住**，覆盖会失败。默认的 $ErrorActionPreference='Stop'
+  # 会把它抛成一段 .NET 异常，看的人不知道该做什么——所以自己接住，说清楚。
+  $exe = Join-Path $dest 'cclaude.exe'
+  try {
+    Copy-Item $pkg $exe -Force
+  } catch {
+    throw "cclaude: 写入 $exe 失败。若 cclaude 正在运行，请先关掉那个窗口再重试。（$($_.Exception.Message)）"
+  }
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+}
+
+# 旧版本（如果有）：重装最该看到的就是"从哪个版本换到了哪个版本"。
+# 取不到就当没有——绝不因为版本探测失败而中止安装。
+if ($old -and $old -ne $Version) {
+  Write-Host "已从 $old 升级到 $Version"
+} elseif ($old) {
+  Write-Host "已重新安装 $Version（与原有版本相同）"
 }
 
 # 加进用户级 PATH（不动系统 PATH，不需要管理员）。
@@ -65,6 +87,15 @@ if (($env:PATH -split ';') -notcontains $dest) {
 }
 
 Write-Host "已安装到 $dest\cclaude.exe"
+
+# **PATH 遮挡**：别处有一个更靠前的 cclaude 时，装了新的也还是跑旧的。
+# 这种"升级了但没生效"极难自己看出来。
+$found = Get-Command cclaude -ErrorAction SilentlyContinue
+if ($found -and $found.Source -and $found.Source -ne $exePath) {
+  Write-Host ''
+  Write-Host "⚠ PATH 里更靠前的位置还有一个 cclaude：$($found.Source)" -ForegroundColor Yellow
+  Write-Host "  现在敲 cclaude 跑的是它，不是刚装的这个。删掉它，或把 $dest 提到 PATH 前面。"
+}
 Write-Host '当前窗口已可用，新开的终端也会有。' -ForegroundColor Green
 Write-Host ''
 Write-Host '连接你的节点：' -NoNewline

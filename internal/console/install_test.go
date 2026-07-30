@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -251,6 +252,45 @@ func TestInstallPS1MakesCommandUsableInCurrentSession(t *testing.T) {
 	for _, line := range strings.Split(body, "\n") {
 		if strings.Contains(line, "Write-Host") && strings.Contains(line, "**") {
 			t.Errorf("终端输出含 markdown 记号，会被原样打印：%s", strings.TrimSpace(line))
+		}
+	}
+}
+
+// 重装是常态（升级客户端就得重装），两个脚本都要处理三件事。
+//
+// 其中 PATH 遮挡最要紧：别处有一个更靠前的 cclaude 时，装了新的也还是跑旧的，
+// 表现是"明明升级过、行为还是老的"——2026-07-30 真机上正是这类版本错配
+// 让人反复重输 CDK 找错方向。
+func TestInstallScriptsHandleReinstall(t *testing.T) {
+	s, _, _, _ := newTestServer(t)
+	for _, path := range []string{"/install.sh", "/install.ps1"} {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = "ccw.example.com"
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, req)
+		body := w.Body.String()
+		for _, want := range []string{"升级到", "PATH 里更靠前"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s 缺少 %q（重装场景）", path, want)
+			}
+		}
+	}
+}
+
+// `$VAR` 紧跟非 ASCII 会被 sh 把首字节吃进变量名，报 unbound variable。
+// 仓库在 76472b2 已经踩过一次（全角括号），这里守住不再犯。
+func TestInstallShNoVarFollowedByNonASCII(t *testing.T) {
+	s, _, _, _ := newTestServer(t)
+	req := httptest.NewRequest("GET", "/install.sh", nil)
+	req.Host = "ccw.example.com"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	bad := regexp.MustCompile(`\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]`)
+	for i, line := range strings.Split(w.Body.String(), "\n") {
+		if m := bad.FindString(line); m != "" {
+			t.Errorf("第%d行 %q：变量名后紧跟非ASCII，sh 会报 unbound variable；改用 ${VAR}",
+				i+1, m)
 		}
 	}
 }
