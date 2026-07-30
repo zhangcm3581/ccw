@@ -68,7 +68,7 @@ func New(store SiteStore, distDir string, logf func(string, ...any)) *Server {
 		text: map[string]*texttemplate.Template{}}
 	// 公开站点与管理后台是两套外壳：站点是可读的文档页，后台是操作台。
 	// 用不同的 layout 而不是同一个套两种样式——它们的信息密度与导航模型不同。
-	for _, page := range []string{"home.html", "download.html", "quickstart.html", "connect.html"} {
+	for _, page := range []string{"home.html", "download.html", "connect.html"} {
 		s.tmpl[page] = template.Must(template.ParseFS(tmplFS, "templates/layout.html", "templates/"+page))
 	}
 	for _, page := range []string{"admin_dashboard.html", "admin_nodes.html",
@@ -93,10 +93,16 @@ func New(store SiteStore, distDir string, logf func(string, ...any)) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page("home.html", func(*http.Request) (any, error) { return nil, nil }))
-	mux.HandleFunc("GET /quickstart", s.page("quickstart.html", func(r *http.Request) (any, error) {
+	// /connect 是唯一的上手页：粘 CDK → 拿到填好域名的两条命令。
+	// 原先的 /quickstart 把同样的步骤又写了一遍，而且只能给占位符域名
+	// （`--api https://api-01.example.com`，还要读的人自己替换）——
+	// 有了 CDK 就能直接给真域名，那个页面没有存在的必要。旧链接重定向过来。
+	mux.HandleFunc("GET /quickstart", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/connect", http.StatusMovedPermanently)
+	})
+	mux.HandleFunc("GET /connect", s.page("connect.html", func(r *http.Request) (any, error) {
 		return map[string]any{"Site": siteURL(r)}, nil
 	}))
-	mux.HandleFunc("GET /connect", s.page("connect.html", func(*http.Request) (any, error) { return nil, nil }))
 	mux.HandleFunc("GET /download", s.download)
 	mux.HandleFunc("GET /download/{os}/{arch}", s.downloadRedirect)
 	mux.HandleFunc("GET /install.sh", s.installScript("install.sh", "text/x-shellscript"))

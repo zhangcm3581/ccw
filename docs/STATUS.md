@@ -151,6 +151,14 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   仍会解析出接入域名，使用者拿到域名却在 exchange 时吃 invalid_cdk。
   `rm -rf` 的目标过 `safeWipeRoot` 守卫（RepoRoot 现在写死，但接到配置上时
   空值或 `/` 就是一台机器）。**远端擦除已在真机上跑通**（2026-07-30，Node-NY-02）。
+- **/quickstart 并入 /connect**（2026-07-30）：公开站原有两个上手页，
+  而 quickstart 只能给占位符命令（`cclaude --api https://api-01.example.com`
+  外加一句"换成你的API域名"）——有 CDK 就能查出真域名，那个页面没有存在必要。
+  现在 /connect 是唯一上手页：粘 CDK → 直接给出填好域名的两条命令；
+  结果区在查询前完全不显示（没 CDK 时摆占位符只会让人照着抄错）。
+  命令块里只放**能直接跑的那一行**——`cd 你的项目目录` 移到标题里，
+  掺进命令块的话复制走就跑不起来，与占位符域名是同一类问题。
+  常见问题一节删除。`/quickstart` 301 到 `/connect`（下载页与外链都指过它），有测试守着。
 - **install.ps1 装完当场可用**（2026-07-30，真机 PowerShell 7.6.4 暴露）：
   原先只写用户级 PATH，而 `SetEnvironmentVariable(...,'User')` 只对将来启动的
   进程生效——`irm ... | iex` 就跑在当前会话里，于是装完立刻敲 `cclaude` 必然是

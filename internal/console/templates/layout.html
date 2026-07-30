@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{block "title" .}}ccw · 云端 Claude Code 工作空间{{end}}</title>
 <style>
-/* 公开站：落地页、下载、快速开始、查询接入地址。
+/* 公开站：落地页、下载、开始使用（/connect）。
    自包含样式，不引用任何外部CDN（设计§3.3——下载页不应因第三方不可达而挂掉）。
 
    配色与管理后台同源（2026-07-27定）：珊瑚橙做唯一强调色、暖米白底、暖炭深色模式。
@@ -157,8 +157,7 @@ input[type=text]:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 
     <a class="brand" href="/"><span class="mark">cc</span>ccw</a>
     <nav>
       <a href="/download">下载</a>
-      <a href="/quickstart">快速开始</a>
-      <a href="/connect">查询接入地址</a>
+      <a href="/connect">开始使用</a>
     </nav>
   </div>
 </header>

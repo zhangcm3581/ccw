@@ -77,10 +77,21 @@ func get(t *testing.T, s *Server, path string, hdr map[string]string) *httptest.
 	return w
 }
 
+// 旧的 /quickstart 已并入 /connect（那里能给出填好域名的真命令，
+// 而 quickstart 只能给占位符）。**必须重定向而不是404**：下载页与
+// 外部链接都指过它。
+func TestQuickstartRedirectsToConnect(t *testing.T) {
+	s, _, _, _ := newTestServer(t)
+	w := get(t, s, "/quickstart", nil)
+	if w.Code != 301 || w.Header().Get("Location") != "/connect" {
+		t.Errorf("应301到/connect，got %d %s", w.Code, w.Header().Get("Location"))
+	}
+}
+
 // 页面自包含：不引用任何外部CDN/字体/脚本（设计§3.3）。
 func TestPagesSelfContained(t *testing.T) {
 	s, _, _, _ := newTestServer(t)
-	for _, p := range []string{"/", "/download", "/quickstart", "/connect"} {
+	for _, p := range []string{"/", "/download", "/connect"} {
 		w := get(t, s, p, nil)
 		if w.Code != 200 {
 			t.Fatalf("%s: code=%d", p, w.Code)

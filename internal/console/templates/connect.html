@@ -1,32 +1,51 @@
-{{define "title"}}查询接入地址 · ccw{{end}}
+{{define "title"}}开始使用 · ccw{{end}}
 {{define "content"}}
-<h1>用 CDK 查询接入地址</h1>
-<p class="lead">粘贴你的 CDK，查出该连接的 API 域名与完整命令。</p>
+<h1>开始使用</h1>
+<p class="lead">粘贴管理员给你的 CDK，拿到属于你的两条命令。</p>
 
-<div class="notice">隐私说明：CDK 形如 <code>ccw_公开ID.密钥</code>。本页在<strong>你的浏览器本地</strong>切分，
-只把公开ID（<code>ccw_</code> 与 <code>.</code> 之间的部分）发送到服务器；<strong>密钥部分永不离开你的设备</strong>，服务器也拒绝接收任何含密钥格式的输入。</div>
+<div class="notice">CDK 形如 <code>ccw_公开ID.密钥</code>。切分在<strong>你的浏览器本地</strong>完成，
+只有公开ID（<code>ccw_</code> 与 <code>.</code> 之间的部分）会发到服务器；<strong>密钥部分永不离开你的设备</strong>。</div>
 
 <noscript><div class="notice warn">本页需要启用 JavaScript——切分在本地完成正是为了保证密钥不被上传，因此不提供无 JS 的回退表单。</div></noscript>
 
 <p style="margin-top:24px">
-  <input type="text" id="cdk" placeholder="ccw_xxxxxxxxxxxxxxxx.****（粘贴完整CDK或仅公开ID）"
+  <input type="text" id="cdk" placeholder="ccw_xxxxxxxxxxxxxxxx.****（粘贴完整 CDK）"
          autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
 </p>
 <p><button class="btn" id="go">查询</button></p>
 
-<div id="out" style="display:none" class="card">
-  <h3 class="ok">找到了</h3>
-  <p>API 地址：<code id="api"></code></p>
-  <p>接入命令（在你的项目目录里执行）：</p>
-  <pre><code id="cmd"></code></pre>
-  <p><button class="btn ghost" id="copy">复制命令</button> <span id="copied" class="ok" style="display:none">已复制</span></p>
-</div>
 <div id="err" style="display:none" class="notice warn"></div>
+
+<!-- 结果区在查询前完全不显示：没有 CDK 时给一堆占位符命令，只会让人照着抄错。 -->
+<div id="out" style="display:none">
+  <ol class="steps">
+    <li>
+      <strong>安装客户端</strong>
+      <pre><code id="cmd-install"></code></pre>
+      <p><button class="btn ghost" data-copy="cmd-install">复制</button>
+        <a href="#" id="other-os" style="margin-left:12px">其他平台</a></p>
+      <pre id="all-os" style="display:none"><code># macOS / Linux
+curl -fsSL {{.Site}}/install.sh | sh
+
+# Windows（PowerShell）
+irm {{.Site}}/install.ps1 | iex</code></pre>
+    </li>
+    <li>
+      <strong>进入你的项目目录，运行</strong>
+      <!-- 命令块里只放**能直接跑的那一行**。把 `cd 你的项目目录` 也写进去，
+           复制走就跑不起来——和 `# 换成你的API域名` 是同一类问题。 -->
+      <pre><code id="cmd-run"></code></pre>
+      <p><button class="btn ghost" data-copy="cmd-run">复制</button></p>
+      <p class="muted">提示 <code>CDK:</code> 时粘贴上面那张 CDK（不回显）。</p>
+    </li>
+  </ol>
+</div>
 
 <script>
 (function () {
   var input = document.getElementById('cdk');
   var out = document.getElementById('out'), err = document.getElementById('err');
+  var site = {{.Site}};
 
   // 本地切分：无论用户粘贴什么，发出去的只可能是公开ID——含"."的内容绝不上传。
   function publicIDOf(raw) {
@@ -37,12 +56,18 @@
     return s;
   }
 
+  // 按浏览器标识猜平台，只为决定**先展示**哪一条；猜错有「其他平台」兜底。
+  function installCmd() {
+    if (/Windows/i.test(navigator.userAgent)) return 'irm ' + site + '/install.ps1 | iex';
+    return 'curl -fsSL ' + site + '/install.sh | sh';
+  }
+
   function fail(msg) { out.style.display = 'none'; err.style.display = 'block'; err.textContent = msg; }
 
   function go() {
     var pid = publicIDOf(input.value);
     if (!/^[0-9a-f]{16}$/.test(pid)) {
-      fail('这不像一个有效的CDK：公开ID应为16位十六进制。请粘贴完整CDK（ccw_开头）。');
+      fail('这不像一个有效的 CDK：公开ID应为16位十六进制。请粘贴完整 CDK（ccw_ 开头）。');
       return;
     }
     fetch('/v1/resolve', {
@@ -51,24 +76,45 @@
       body: JSON.stringify({ public_id: pid })
     }).then(function (r) {
       if (r.status === 429) { fail('查询太频繁，请稍后再试。'); return null; }
-      if (!r.ok) { fail('未找到。请核对CDK是否正确；若刚完成轮换，请使用新CDK。'); return null; }
+      if (!r.ok) { fail('未找到。请核对 CDK 是否正确；若刚完成轮换，请使用新 CDK。'); return null; }
       return r.json();
     }).then(function (d) {
       if (!d) return;
       err.style.display = 'none'; out.style.display = 'block';
-      document.getElementById('api').textContent = d.api;
-      document.getElementById('cmd').textContent = 'cclaude --api ' + d.api;
+      document.getElementById('cmd-install').textContent = installCmd();
+      // 域名直接填进命令里——留一个 api-01.example.com 之类的占位符，
+      // 就是把"换成你自己的"这一步推给读的人，而这一步本来可以不存在。
+      // 同理不掺 `cd 你的项目目录`：复制走的必须是能直接跑的一行。
+      document.getElementById('cmd-run').textContent = 'cclaude --api ' + d.api;
     }).catch(function () { fail('网络错误，请重试。'); });
   }
 
   document.getElementById('go').addEventListener('click', go);
   input.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
-  document.getElementById('copy').addEventListener('click', function () {
-    navigator.clipboard.writeText(document.getElementById('cmd').textContent).then(function () {
-      var c = document.getElementById('copied');
-      c.style.display = 'inline'; setTimeout(function () { c.style.display = 'none'; }, 1500);
+
+  document.getElementById('other-os').addEventListener('click', function (e) {
+    e.preventDefault();
+    var all = document.getElementById('all-os');
+    all.style.display = all.style.display === 'none' ? 'block' : 'none';
+  });
+
+  // 复制按钮：clipboard 不可用时（非 HTTPS、旧浏览器）退回选中，
+  // 而不是让按钮点了没反应。
+  Array.prototype.forEach.call(document.querySelectorAll('[data-copy]'), function (btn) {
+    btn.addEventListener('click', function () {
+      var el = document.getElementById(btn.getAttribute('data-copy'));
+      var done = function () { var t = btn.textContent; btn.textContent = '已复制'; setTimeout(function () { btn.textContent = t; }, 1500); };
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(el.textContent).then(done, function () { selectNode(el); });
+      } else {
+        selectNode(el);
+      }
     });
   });
+  function selectNode(el) {
+    var r = document.createRange(); r.selectNodeContents(el);
+    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  }
 })();
 </script>
 {{end}}
