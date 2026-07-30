@@ -211,3 +211,46 @@ func runSh(t *testing.T, script string, env ...string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// Windows 装完后必须**在当前窗口就能用**。
+//
+// 2026-07-30 真机（PowerShell 7.6.4）暴露：脚本只写了用户级 PATH，
+// 而 `[Environment]::SetEnvironmentVariable(...,'User')` 只对将来启动的进程生效。
+// `irm ... | iex` 就跑在当前会话里，于是装完立刻敲 cclaude 必然是
+// "不是可识别的命令"——那句"请新开一个终端"只是把缺陷写进了提示语。
+//
+// 同时锁住 PATH 去重的写法：`-notlike "*$dest*"` 会把已有的 `...\cclaude2`
+// 当成"已经装过"而跳过写入，命令连开新终端都救不回来（PATH 里压根没加）。
+func TestInstallPS1MakesCommandUsableInCurrentSession(t *testing.T) {
+	s, _, _, _ := newTestServer(t)
+	req := httptest.NewRequest("GET", "/install.ps1", nil)
+	req.Host = "ccw.example.com"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	body := w.Body.String()
+	// 只看**实际执行的行**：注释里会引用被否决的写法（说明为什么不用它），
+	// 拿整段正文做子串匹配会把解释文字当成代码。
+	var code []string
+	for _, line := range strings.Split(body, "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			code = append(code, line)
+		}
+	}
+	body = strings.Join(code, "\n")
+
+	if !strings.Contains(body, "$env:PATH = ") {
+		t.Error("必须同时更新当前会话的 $env:PATH，否则装完当场不可用")
+	}
+	if strings.Contains(body, `-notlike "*$dest*"`) {
+		t.Error("PATH 去重不能用通配比对：会把 ...\\cclaude2 误判成已安装而跳过写入")
+	}
+	if !strings.Contains(body, "-notcontains $dest") {
+		t.Error("PATH 去重应按分号切段做精确比对")
+	}
+	// 终端输出里不该有 markdown 记号——它会被原样打出来
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, "Write-Host") && strings.Contains(line, "**") {
+			t.Errorf("终端输出含 markdown 记号，会被原样打印：%s", strings.TrimSpace(line))
+		}
+	}
+}

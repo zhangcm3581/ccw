@@ -44,13 +44,28 @@ try {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 
-# 加进用户级 PATH（不动系统 PATH，不需要管理员）
+# 加进用户级 PATH（不动系统 PATH，不需要管理员）。
+#
+# 按分号切开做**精确段比对**，不是 `-notlike "*$dest*"`：后者会把已有的
+# `...\cclaude2` 之类当成"已经装过"而跳过写入，于是命令永远不可用——
+# 连开新终端都救不回来，因为 PATH 里压根没加。
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-if ($userPath -notlike "*$dest*") {
-  [Environment]::SetEnvironmentVariable('Path', "$userPath;$dest", 'User')
-  Write-Host ''
-  Write-Host "已把 $dest 加进 PATH。**新开一个终端**后 cclaude 命令才可用。" -ForegroundColor Yellow
-} else {
-  Write-Host '运行 cclaude 即可开始。'
+if (-not $userPath) { $userPath = '' }
+$parts = @($userPath -split ';' | Where-Object { $_ -ne '' })
+if ($parts -notcontains $dest) {
+  # 用切好的段重新拼：用户级 PATH 为空时 "$userPath;$dest" 会留一个前导分号。
+  [Environment]::SetEnvironmentVariable('Path', ((@($parts) + $dest) -join ';'), 'User')
 }
+
+# **当前会话也要立刻可用。**`irm ... | iex` 就跑在这个会话里，而 'User' 级
+# 设置只对**将来启动的进程**生效——所以光设注册表的话，装完在同一个窗口敲
+# cclaude 必然是"不是可识别的命令"。这一步就是那句"请新开一个终端"的替代品。
+if (($env:PATH -split ';') -notcontains $dest) {
+  $env:PATH = "$env:PATH;$dest"
+}
+
 Write-Host "已安装到 $dest\cclaude.exe"
+Write-Host '当前窗口已可用，新开的终端也会有。' -ForegroundColor Green
+Write-Host ''
+Write-Host '连接你的节点：' -NoNewline
+Write-Host '  cclaude --api https://<你的接入域名>' -ForegroundColor Cyan

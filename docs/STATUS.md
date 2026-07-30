@@ -151,6 +151,16 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   仍会解析出接入域名，使用者拿到域名却在 exchange 时吃 invalid_cdk。
   `rm -rf` 的目标过 `safeWipeRoot` 守卫（RepoRoot 现在写死，但接到配置上时
   空值或 `/` 就是一台机器）。**远端擦除已在真机上跑通**（2026-07-30，Node-NY-02）。
+- **install.ps1 装完当场可用**（2026-07-30，真机 PowerShell 7.6.4 暴露）：
+  原先只写用户级 PATH，而 `SetEnvironmentVariable(...,'User')` 只对将来启动的
+  进程生效——`irm ... | iex` 就跑在当前会话里，于是装完立刻敲 `cclaude` 必然是
+  "不是可识别的命令"，而脚本那句"请新开一个终端"只是把缺陷写成了提示语。
+  现在同时更新 `$env:PATH`。顺带修掉一个更糟的：PATH 去重原来用
+  `-notlike "*$dest*"`，已有 `...\cclaude2` 会被当成"已安装"而**跳过写入**,
+  那样连开新终端都救不回来。改成按分号切段精确比对。
+  `tests/e2e/install_ps1_test.go` 用 PowerShell 容器**真的执行**这套 PATH 逻辑
+  （无 Docker 自动 skip）——此前 install 脚本的测试只断言文本、从没执行，
+  正是那样让 `tar xzf` 对着裸 exe 的 bug 混过了全部测试。
 - **healthcheck 会自证失败原因**（2026-07-30，真机暴露）：原先探测用 `curl -s`，
   失败原因被吞掉，错误只剩一个 `000`——连不上、TLS 校验失败、超时全是 000，
   管理员无从下手。现在：探测重试 30×5s（`ps` 说 running 不等于在听端口，
