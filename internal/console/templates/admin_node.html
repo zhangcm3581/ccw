@@ -220,8 +220,35 @@
     </div>
 
     <div class="card">
+      <div class="card-hd"><h2>重置节点</h2><span class="spacer"></span>
+        <span class="meta">擦远端、留账，不可撤销</span></div>
+      <div class="card-bd">
+        <div class="note bad" style="margin-bottom:16px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.2"/><path d="M12 7.5v5.5M12 16.4v.1"/>
+          </svg>
+          <span><b>把这台机器擦回「装了 Docker 的干净机器」，用于反复重来的测试。</b><br>
+            <b>会销毁：</b>ccw 的全部容器与命名卷、源码树 <code>/srv/ccw</code>——
+            也就是 workspace 里的文件、<b>Claude 授权凭据</b>、节点自己的 Postgres（项目与 CDK）全部消失。<br>
+            <b>刻意保留：</b>Docker 本身（重装要几分钟，precheck 会跳过，每轮能快很多）、
+            authorized_keys 里的托管密钥（删了 Console 就再也连不上）、
+            Console 库里的节点与域名分配（所以不用重填 IP、不用再等一次 DNS 生效）。<br>
+            擦完点右上角「继续 / 重新部署」即为一次全新部署。要连 Console 的账一起清，用下面的「解除纳管」。</span>
+        </div>
+        <form method="POST" action="/admin/nodes/{{.Node.ID}}/reset">
+          <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+          <label class="fld">
+            <span class="lb">输入节点名 <code>{{.Node.Name}}</code> 以确认</span>
+            <input type="text" name="confirm" placeholder="{{.Node.Name}}" autocomplete="off" required>
+          </label>
+          <button class="btn danger" type="submit">擦除远端环境</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-hd"><h2>解除纳管</h2><span class="spacer"></span>
-        <span class="meta">不可撤销</span></div>
+        <span class="meta">清账、不碰机器，不可撤销</span></div>
       <div class="card-bd">
         <div class="note bad" style="margin-bottom:16px">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">

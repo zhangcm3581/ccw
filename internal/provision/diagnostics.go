@@ -153,3 +153,60 @@ func (o *Orchestrator) ListProjectsOnNode(ctx context.Context, nodeID string) ([
 	}
 	return rows, nil
 }
+
+// ResetNode把节点擦回「装了Docker的干净机器」，供反复重来的测试循环用。
+//
+// **销毁什么**：ccw 这个 compose 项目的全部容器与**命名卷**，以及源码树
+// /srv/ccw。也就是说 workspace 里的文件、Claude 授权凭据、节点自己的 Postgres
+// （项目与 CDK）全部消失。这是不可撤销的。
+//
+// **刻意保留什么，以及为什么**：
+//   - Docker 本身：重装要好几分钟，而 install-docker 那一步有 precheck 会跳过，
+//     留着能让每轮测试快很多。
+//   - authorized_keys 里的托管密钥：删了 Console 就再也连不上这台机器，
+//     一旦擦除中途失败就彻底失联，连重试都做不到。
+//   - Console 库里的节点、域名分配与托管密钥：留着才能直接点「继续 / 重新部署」
+//     重跑一遍，而不是重新填一次 IP、再等一次 DNS 生效。
+//     要连 Console 的账一起清，用「解除纳管」。
+//
+// 擦完之后点「继续 / 重新部署」即为一次全新部署：新 run 没有任何已完成步骤，
+// 12 步会重跑，harden 与 dns-allocate 因为凭据/域名还在而快速跳过。
+func (o *Orchestrator) ResetNode(ctx context.Context, nodeID string) (string, error) {
+	cli, sudo, err := o.dialNode(ctx, nodeID)
+	if err != nil {
+		return "", err
+	}
+	defer cli.Close()
+
+	// 不 `cd` 进 deploy 再执行：源码树可能已经被上一次擦除删掉了，那样 cd 会失败、
+	// 后面的清理全都跑不到。compose v2 能只凭项目名（靠标签）拆掉资源。
+	//
+	// 标签过滤是精确的：只碰 compose 为 ccw 这个项目建的东西，
+	// 同机上别人的容器与卷不受影响。
+	script := fmt.Sprintf(`set -u
+if [ -f %[2]s/compose.yaml ]; then
+  cd %[2]s && %[1]sdocker compose -p %[3]s down -v --remove-orphans 2>&1 || true
+else
+  %[1]sdocker compose -p %[3]s down -v --remove-orphans 2>&1 || true
+fi
+left_c=$(%[1]sdocker ps -aq --filter label=com.docker.compose.project=%[3]s)
+[ -n "$left_c" ] && %[1]sdocker rm -f $left_c 2>&1 || true
+left_v=$(%[1]sdocker volume ls -q --filter label=com.docker.compose.project=%[3]s)
+[ -n "$left_v" ] && %[1]sdocker volume rm -f $left_v 2>&1 || true
+%[1]srm -rf %[4]s
+echo "---- 擦除后剩余 ----"
+echo "容器: $(%[1]sdocker ps -aq --filter label=com.docker.compose.project=%[3]s | wc -l)"
+echo "卷:   $(%[1]sdocker volume ls -q --filter label=com.docker.compose.project=%[3]s | wc -l)"
+echo "源码树: $([ -e %[4]s ] && echo 仍存在 || echo 已删除)"
+echo "Docker: $(%[1]sdocker --version 2>/dev/null || echo 不可用)"`,
+		sudo, shellQuote(o.RepoRoot+"/deploy"), shellQuote(o.ComposeProjectName), shellQuote(o.RepoRoot))
+
+	res, err := cli.Run(ctx, script)
+	if err != nil {
+		return "", err
+	}
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("擦除未完成（退出码%d）：%s", res.ExitCode, firstLine(res.Stdout+res.Stderr))
+	}
+	return res.Stdout, nil
+}

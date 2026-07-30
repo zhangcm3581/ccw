@@ -122,3 +122,36 @@ func TestClaudeAuthWithoutProjectsSaysSo(t *testing.T) {
 		t.Errorf("提示应说明原因: %s", loc)
 	}
 }
+
+// 重置节点同样要求打对节点名——它会不可撤销地擦掉远端的卷（含 Claude 凭据）。
+func TestNodeResetRequiresTypedName(t *testing.T) {
+	s, fs, sess, csrf := newFleetServer(t)
+	fs.nodes["n1"] = consolestore.Node{ID: "n1", Name: "node-hk-1"}
+
+	// 名字不对：连编排器都不该碰
+	form := url.Values{"csrf_token": {csrf.Value}, "confirm": {"node-hk"}}
+	w := postForm(t, s, "/admin/nodes/n1/reset", form, []*http.Cookie{sess, csrf}, "203.0.113.5")
+	loc := w.Header().Get("Location")
+	dec, _ := url.QueryUnescape(loc)
+	if !strings.Contains(dec, "确认文本") {
+		t.Errorf("名字不符应拦下并说明原因，got %s", loc)
+	}
+
+	// 名字对了，但本测试里没有编排器——应报"编排器未启用"而不是静默成功
+	form.Set("confirm", "node-hk-1")
+	w = postForm(t, s, "/admin/nodes/n1/reset", form, []*http.Cookie{sess, csrf}, "203.0.113.5")
+	dec, _ = url.QueryUnescape(w.Header().Get("Location"))
+	if !strings.Contains(dec, "编排器") {
+		t.Errorf("名字对了应进入执行路径，got %s", dec)
+	}
+}
+
+func TestNodeResetRequiresCSRF(t *testing.T) {
+	s, fs, sess, _ := newFleetServer(t)
+	fs.nodes["n1"] = consolestore.Node{ID: "n1", Name: "node-1"}
+	form := url.Values{"confirm": {"node-1"}}
+	w := postForm(t, s, "/admin/nodes/n1/reset", form, []*http.Cookie{sess}, "203.0.113.5")
+	if w.Code != http.StatusForbidden {
+		t.Errorf("无CSRF应403，got %d", w.Code)
+	}
+}

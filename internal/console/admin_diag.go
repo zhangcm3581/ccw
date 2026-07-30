@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"ccw/internal/consolestore"
+	"ccw/internal/provision"
 )
 
 // 节点诊断与维护：把 docs/admin-login-runbook.md 与 claude-auth-quickref.md 里
@@ -23,6 +24,55 @@ func (s *Server) registerDiag(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/nodes/{id}/diag", s.Auth.requireAdmin(s.adminNodeDiag))
 	mux.HandleFunc("POST /admin/nodes/{id}/recreate", s.Auth.requireAdmin(s.adminNodeRecreate))
 	mux.HandleFunc("POST /admin/nodes/{id}/sync-projects", s.Auth.requireAdmin(s.adminNodeSyncProjects))
+	mux.HandleFunc("POST /admin/nodes/{id}/reset", s.Auth.requireAdmin(s.adminNodeReset))
+}
+
+// adminNodeReset把节点擦回「装了Docker的干净机器」。
+//
+// 与「解除纳管」正交：
+//   - 重置：擦远端，Console 的账留着——擦完点「继续 / 重新部署」就是一次全新部署
+//   - 解除纳管：清 Console 的账，远端一动不动
+//
+// 要求把节点名原样打一遍。**审计先于动作**：擦除不可撤销，事后写不进去
+// 也已经擦了，那还不如先把"谁要擦哪台"记下来（§8.5）。
+func (s *Server) adminNodeReset(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	if !s.Auth.checkCSRF(r) {
+		http.Error(w, "csrf", http.StatusForbidden)
+		return
+	}
+	ctx := r.Context()
+	nodeID := r.PathValue("id")
+	node, err := s.Fleet.Store.GetNode(ctx, nodeID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if strings.TrimSpace(r.PostFormValue("confirm")) != node.Name {
+		s.redirectNode(w, r, nodeID, "", "确认文本与节点名不一致，未执行重置")
+		return
+	}
+	if s.Fleet.Orchestrator == nil {
+		s.redirectNode(w, r, nodeID, "", "机队编排器未启用，无法远程执行")
+		return
+	}
+	if aerr := s.Auth.audit(ctx, consolestore.AuditEntry{
+		Actor: sess.UserID, Action: "node.reset", Target: node.Name, Result: "ok",
+		Detail: map[string]any{"host": node.Host}, ClientIP: clientIP(r),
+	}); aerr != nil {
+		s.Logf("console: 审计写入失败，重置中止: %v", aerr)
+		s.redirectNode(w, r, nodeID, "", "服务暂时不可用，请稍后再试")
+		return
+	}
+
+	out, rerr := s.Fleet.Orchestrator.ResetNode(ctx, nodeID)
+	if rerr != nil {
+		s.redirectNode(w, r, nodeID, "", rerr.Error())
+		return
+	}
+	// 擦除结果原文显示在诊断区：容器/卷/源码树各剩多少，一眼能确认擦干净了。
+	s.Fleet.putDiag(nodeID, []provision.DiagSection{{Title: "重置结果", Output: out}})
+	http.Redirect(w, r, "/admin/nodes/"+nodeID+"?ok="+
+		urlQueryEscape("已擦除远端环境；点「继续 / 重新部署」开始一次全新部署"), http.StatusFound)
 }
 
 func (s *Server) adminNodeDiag(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
