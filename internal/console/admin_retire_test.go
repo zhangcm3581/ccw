@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -153,5 +154,44 @@ func TestNodeResetRequiresCSRF(t *testing.T) {
 	w := postForm(t, s, "/admin/nodes/n1/reset", form, []*http.Cookie{sess}, "203.0.113.5")
 	if w.Code != http.StatusForbidden {
 		t.Errorf("无CSRF应403，got %d", w.Code)
+	}
+}
+
+// Console 重启后内存里的部署参数就没了——而「更新 Console」就是重建镜像＋重启，
+// 所以这是常态。续跑必须能从库里把参数重建出来，否则「重置 → 重新部署」
+// 这个测试循环一过重启就断。
+func TestResumeRebuildsInputAfterRestart(t *testing.T) {
+	s, fs, sess, csrf := newFleetServer(t)
+	fs.nodes["n1"] = consolestore.Node{ID: "n1", Name: "node-1", Host: "203.0.113.9"}
+	// 模拟重启：lastInput 是空的，但库里有项目镜像
+	s.Fleet.lastInput = nil
+	pid, err := fs.UpsertNodeProject(context.Background(), "n1", "alpha", "r-1", 15<<30, 100, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = pid
+
+	in, rerr := s.reconstructBootstrap(context.Background(), "n1")
+	if rerr != nil {
+		t.Fatalf("有项目镜像却重建失败: %v", rerr)
+	}
+	if len(in.Slugs) != 1 || in.Slugs[0] != "alpha" {
+		t.Errorf("slug 应从 node_projects 重建，got %v", in.Slugs)
+	}
+	if in.NodeID != "n1" {
+		t.Errorf("NodeID = %q", in.NodeID)
+	}
+
+	// 没有任何项目记录时**不猜**：空 slug 列表会渲染出一个没有项目的 compose。
+	fs.nodes["n2"] = consolestore.Node{ID: "n2", Name: "node-2"}
+	if _, err := s.reconstructBootstrap(context.Background(), "n2"); err == nil {
+		t.Error("没有项目镜像应报错而不是用空列表跑")
+	}
+
+	// 端到端：POST resume 不该再回「没有部署参数」
+	form := url.Values{"csrf_token": {csrf.Value}}
+	w := postForm(t, s, "/admin/nodes/n1/resume", form, []*http.Cookie{sess, csrf}, "203.0.113.5")
+	if strings.Contains(w.Body.String(), "本次Console启动后没有该节点的部署参数") {
+		t.Errorf("重启后仍报缺参数：%s", w.Body.String())
 	}
 }

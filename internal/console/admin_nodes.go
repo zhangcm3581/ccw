@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -271,6 +272,43 @@ func (s *Server) adminNodeCreate(w http.ResponseWriter, r *http.Request, sess co
 	http.Redirect(w, r, fmt.Sprintf("/admin/nodes/%s/runs/%s", nodeID, runID), http.StatusFound)
 }
 
+// reconstructBootstrap从Console库重建部署参数，用于内存里没有的时候
+// （Console重启过——重建镜像更新就会重启，所以这是常态而不是边角情况）。
+//
+// **不需要首登密码**：续跑用的是库里的托管密钥，调用方随后就会校验它存在。
+// 其余全部有权威来源：
+//   - Slugs 与配额 ← node_projects 镜像（`ORDER BY n.name, np.slug`，顺序稳定，
+//     所以渲染出的 compose 与首次纳管字节一致，不会被漂移检查判成改过）
+//   - ZoneID       ← 该节点的域名分配
+//
+// 「重置节点」刻意保留这两样，正是为了让擦除之后还能直接重新部署。
+//
+// 取不到 slug 时**不猜**：那意味着这台机器从来没跑到 init-projects
+// （或镜像写失败过），用空列表跑一遍会渲染出一个没有任何项目的 compose。
+func (s *Server) reconstructBootstrap(ctx context.Context, nodeID string) (provision.BootstrapInput, error) {
+	all, err := s.Fleet.Store.ListNodeProjects(ctx)
+	if err != nil {
+		return provision.BootstrapInput{}, errors.New("读不到项目镜像，无法重建部署参数；请重新走「新增节点」流程")
+	}
+	var slugs []string
+	for _, p := range all {
+		if p.NodeID == nodeID {
+			slugs = append(slugs, p.Slug)
+		}
+	}
+	if len(slugs) == 0 {
+		return provision.BootstrapInput{}, errors.New(
+			"库里没有该节点的项目记录（这台机器可能从未部署到「建项目」那一步），无法重建部署参数；请重新走「新增节点」流程")
+	}
+	in := provision.BootstrapInput{NodeID: nodeID, Slugs: slugs}
+	// 域名已分配时带上原zone：dns-allocate会认出已有分配并跳过，
+	// 不会重复占一个序号。取不到就留空，那一步自己会报缺zone。
+	if d, derr := s.Fleet.Store.DomainByNode(ctx, nodeID); derr == nil {
+		in.ZoneID = d.ZoneID
+	}
+	return in, nil
+}
+
 func (f *Fleet) remember(nodeID string, in provision.BootstrapInput) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -353,10 +391,15 @@ func (s *Server) adminNodeResume(w http.ResponseWriter, r *http.Request, sess co
 	nodeID := r.PathValue("id")
 	in, ok := s.Fleet.recall(nodeID)
 	if !ok {
-		// Console重启后内存里的输入没了：从最近一次运行恢复不了slug列表，
-		// 如实告诉管理员而不是用猜的参数去跑。
-		http.Error(w, "本次Console启动后没有该节点的部署参数，请重新走「新增节点」流程", http.StatusBadRequest)
-		return
+		// Console重启后内存里的输入没了。**先试着从库里重建**——
+		// 部署参数里唯一不在库里的是首登密码，而续跑不需要它（托管密钥已在库里）。
+		// slug与配额就是node_projects镜像，zone在域名分配上。
+		var rerr error
+		in, rerr = s.reconstructBootstrap(r.Context(), nodeID)
+		if rerr != nil {
+			http.Error(w, rerr.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	if _, _, _, err := s.Fleet.Store.NodeCredential(r.Context(), nodeID); err != nil {
 		http.Error(w, "该节点尚未建立托管密钥，请重新走「新增节点」流程（需要再次输入密码）", http.StatusBadRequest)
