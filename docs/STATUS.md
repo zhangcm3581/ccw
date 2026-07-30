@@ -161,6 +161,18 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   `tests/e2e/install_ps1_test.go` 用 PowerShell 容器**真的执行**这套 PATH 逻辑
   （无 Docker 自动 skip）——此前 install 脚本的测试只断言文本、从没执行，
   正是那样让 `tar xzf` 对着裸 exe 的 bug 混过了全部测试。
+- **healthcheck 经回环探测**（2026-07-30，真机暴露）：客户端从公网拿到 401
+  （说明 Caddy 与 control-api 都健康），而节点自己 curl 同一个域名得到 000。
+  这一步要验的是「Caddy → control-api 接对了」，不是「云厂商的 hairpin NAT 通不通」
+  ——后者与栈的健康无关，却足以让整次部署失败。改用
+  `curl --resolve "$fq:443:127.0.0.1"`：只改连哪个 IP，SNI 与证书仍按真实域名校验
+  （实测：指对 IP 得 200、指错 IP 连不上），覆盖面没缩小。失败时会再走一次公网路径，
+  用来佐证"是栈坏了还是只是绕不回来"。
+- **客户端错误可照着做**（2026-07-30，真机暴露）：`control: rejected with status 401`
+  改成说清下一步。401 同时覆盖"卡打错了"与"卡已不存在"，服务端刻意不区分
+  （不泄露存在性），客户端同样不猜，但把该做什么说清楚。测试同时守着
+  「不得指向不存在的命令」——初稿写的 `cclaude --reset` 并不存在（实际是
+  `cclaude logout`），而认证失败时客户端本就会自动清缓存，压根不需要额外命令。
 - **healthcheck 会自证失败原因**（2026-07-30，真机暴露）：原先探测用 `curl -s`，
   失败原因被吞掉，错误只剩一个 `000`——连不上、TLS 校验失败、超时全是 000，
   管理员无从下手。现在：探测重试 30×5s（`ps` 说 running 不等于在听端口，

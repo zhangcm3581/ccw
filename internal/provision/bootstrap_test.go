@@ -526,3 +526,31 @@ func TestHealthcheckProbeRetries(t *testing.T) {
 		t.Error("现场收集不应依赖 cd 进源码树")
 	}
 }
+
+// 探测必须经**回环**，不能依赖节点访问自己的公网地址。
+//
+// 2026-07-30 真机：客户端从公网拿到 401（说明 Caddy 与 control-api 都是好的），
+// 而节点自己 curl 同一个域名得到 000。这一步要验的是"Caddy → control-api 接对了"，
+// 不是"云厂商的 hairpin NAT 通不通"——后者与栈的健康无关，却能让部署整体失败。
+func TestHealthcheckProbesViaLoopback(t *testing.T) {
+	r := &scriptRunner{rules: []rule{
+		{contains: "auth/exchange", res: sshexec.Result{Stdout: "OK code=401\n"}},
+		{contains: "compose -p", res: sshexec.Result{Stdout: "caddy running\n"}},
+	}}
+	if err := stepByName(BootstrapSteps(baseDeps(r, &fakeDNS{})), "healthcheck").Run(context.Background(), noLog); err != nil {
+		t.Fatalf("401应算就绪: %v", err)
+	}
+	var probe string
+	for _, c := range r.cmds {
+		if strings.Contains(c, "auth/exchange") {
+			probe = c
+		}
+	}
+	if !strings.Contains(probe, `--resolve "$fq:443:127.0.0.1"`) {
+		t.Error("重试循环里的探测应经回环，不该绕公网")
+	}
+	// 失败时仍要走一次公网，用来佐证"是栈坏了还是只是绕不回来"
+	if !strings.Contains(probe, "公网路径") {
+		t.Error("失败现场应包含一次公网探测作为对照")
+	}
+}

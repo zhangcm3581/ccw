@@ -458,19 +458,29 @@ func stepHealthcheck(d Deps) pipeline.Step {
 			// ——连不上、TLS 校验失败、超时全都是 000，无法定位。改用 -sS 留下原因，
 			// 并把 curl 的退出码一起带出来（60=证书校验失败，7=连不上，28=超时）。
 			//
+			// **经回环探测（`--resolve $fq:443:127.0.0.1`）而不是绕公网**：这一步要验的是
+			// 「Caddy → control-api 接对了」，不是「这台机器能不能访问自己的公网地址」。
+			// 后者取决于云厂商的 hairpin NAT 与安全组，与栈的健康无关——2026-07-30 真机上
+			// 就出现过"客户端从公网拿到 401（栈是好的），而节点自己 curl 得到 000"。
+			// `--resolve` 只改连哪个 IP，SNI 与证书仍按真实域名校验（实测：指对 IP 得 200，
+			// 指错 IP 连不上），所以覆盖面没有缩小。
+			// 失败时会再走一次公网路径，用来佐证到底是栈坏了还是只是绕不回来。
+			//
 			// 最后仍失败时把现场一次性打出来：解析结果、80 端口有没有人应、
 			// 以及 caddy 与 control-api 的近期日志——502 说明 Caddy 好而后端没起来，
 			// 000 说明连 Caddy 都没碰到，两者的排查方向完全不同。
 			probe := fmt.Sprintf(`fq=%[1]s
 last=""
 for i in $(seq 1 30); do
-  code=$(curl -sS -m 10 -o /dev/null -w '%%{http_code}' -X POST "https://$fq/api/v1/auth/exchange" -H 'Content-Type: application/json' -d '{}' 2>/tmp/ccw-curl.err)
+  code=$(curl -sS -m 10 --resolve "$fq:443:127.0.0.1" -o /dev/null -w '%%{http_code}' -X POST "https://$fq/api/v1/auth/exchange" -H 'Content-Type: application/json' -d '{}' 2>/tmp/ccw-curl.err)
   rc=$?
   case "$code" in 401|429) echo "OK code=$code"; exit 0;; esac
   last="code=$code curl_exit=$rc $(head -1 /tmp/ccw-curl.err)"
   sleep 5
 done
-echo "探测30次仍未就绪：$last"
+echo "探测30次仍未就绪（经回环）：$last"
+echo "--- 再试一次公网路径（能佐证是否只是绕不回来）---"
+curl -sS -m 10 -o /dev/null -w 'http_code=%%{http_code}\n' -X POST "https://$fq/api/v1/auth/exchange" -H 'Content-Type: application/json' -d '{}' 2>&1 | head -2
 echo "--- 域名解析 ---"
 getent hosts "$fq" 2>/dev/null || nslookup "$fq" 2>&1 | tail -4 || echo "(解析不到 $fq，且没有 getent/nslookup)"
 echo "--- 80端口（绕开TLS，只看有没有人应）---"

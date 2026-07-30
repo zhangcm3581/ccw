@@ -61,3 +61,35 @@ func TestExchange4xxNoRetry(t *testing.T) {
 		t.Fatalf("4xx must not be retried, got %d calls", calls)
 	}
 }
+
+// 401 的提示必须能照着做下一步。
+//
+// 原先一律是 "rejected with status 401"，看到的人无从下手（2026-07-30 真机上
+// 就是这个）。同时守两条：不得暗示 CDK 是否存在（服务端刻意不区分），
+// 也不得指向不存在的命令——`--reset` 就不存在，实际是 `cclaude logout`，
+// 而认证失败时客户端已自动清缓存，压根不需要额外命令。
+func TestStatusErrorIsActionable(t *testing.T) {
+	msg := statusError(401).Error()
+	for _, want := range []string{"CDK", "管理后台", "签发"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("401 提示缺少 %q：%s", want, msg)
+		}
+	}
+	for _, bad := range []string{"--reset", "rejected with status"} {
+		if strings.Contains(msg, bad) {
+			t.Errorf("401 提示含 %q（不存在的命令/无信息量的原文）：%s", bad, msg)
+		}
+	}
+	// 不得泄露存在性：不能出现"不存在"/"未找到"这类区分
+	for _, leak := range []string{"该卡不存在", "未找到该 CDK"} {
+		if strings.Contains(msg, leak) {
+			t.Errorf("401 提示泄露存在性：%s", msg)
+		}
+	}
+	if !strings.Contains(statusError(429).Error(), "频繁") {
+		t.Error("429 应说明是限流")
+	}
+	if !strings.Contains(statusError(404).Error(), "--api") {
+		t.Error("404 应提示检查 --api")
+	}
+}
