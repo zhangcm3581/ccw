@@ -151,6 +151,15 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   仍会解析出接入域名，使用者拿到域名却在 exchange 时吃 invalid_cdk。
   `rm -rf` 的目标过 `safeWipeRoot` 守卫（RepoRoot 现在写死，但接到配置上时
   空值或 `/` 就是一台机器）。**远端擦除已在真机上跑通**（2026-07-30，Node-NY-02）。
+- **Windows 上终端尺寸从不上报**（2026-07-30，真机暴露）：客户端用
+  `term.GetSize(os.Stdin.Fd())` 轮询尺寸，而 Windows 上它走
+  `GetConsoleScreenBufferInfo`——那个 API 只接受**屏幕缓冲区**句柄（stdout/stderr），
+  传 stdin 必然失败，于是 resize 帧一次都没发出去，PTY 永远停在服务端建会话时的
+  默认尺寸，界面只占窗口左上角一块。Unix 的 `TIOCGWINSZ` 对 stdin 有效，
+  所以这条在 macOS/Linux 上从来看不见。
+  现在按 stdout → stderr → stdin 依次试，并且**连上立刻发一次**（等第一个
+  500ms tick 意味着 Claude 的欢迎界面按默认尺寸画完了再重画）。
+  探测顺序提成变量并单独断言——真正会被改回去的是顺序，不是探测函数本身。
 - **同步落盘的文件归容器里的 claude(1001)**（2026-07-30，真机暴露）：
   worker-agent 以 root 写盘（它持 docker.sock），项目容器以 1001 运行同一个卷，
   于是同步上去的文件是 `root:root 0600`——容器里 `cat` 直接 Permission denied，

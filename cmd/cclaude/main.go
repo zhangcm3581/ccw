@@ -200,8 +200,53 @@ func runTerminal(ctx context.Context, conn control.ConnectionResponse, wsKey str
 	}
 }
 
+// termSize取当前终端尺寸，按 stdout → stderr → stdin 依次试。
+//
+// **顺序是关键，不是随手写的**：Windows 上 term.GetSize 走
+// GetConsoleScreenBufferInfo，那个 API 只接受**屏幕缓冲区**句柄（stdout/stderr），
+// 传 stdin 一定失败。原来只问 stdin，于是 Windows 上 resize 帧一次都发不出去，
+// PTY 永远停在服务端建会话时的默认尺寸——界面只占窗口左上角一块
+// （2026-07-30 真机上就是这样）。Unix 的 TIOCGWINSZ 对三个都有效，
+// 所以这个顺序两边都对。
+//
+// 三个都拿不到就返回 ok=false（管道/重定向，本来就没有尺寸可言）。
+func termSize(getSize func(int) (int, int, error), fds ...int) (cols, rows int, ok bool) {
+	for _, fd := range fds {
+		c, r, err := getSize(fd)
+		if err == nil && c > 0 && r > 0 {
+			return c, r, true
+		}
+	}
+	return 0, 0, false
+}
+
+// sizeFDs是探测顺序。**stdout 必须排第一**（原因见 termSize）。
+// 做成变量只为可测——真正会被改回去的是这个顺序，而不是 termSize 本身。
+var sizeFDs = func() []int {
+	return []int{int(os.Stdout.Fd()), int(os.Stderr.Fd()), int(os.Stdin.Fd())}
+}
+
+func currentSize() (cols, rows int, ok bool) {
+	return termSize(term.GetSize, sizeFDs()...)
+}
+
 func resizeLoop(ctx context.Context, ws *websocket.Conn) {
 	var lastR, lastC int
+	send := func() bool {
+		cols, rows, ok := currentSize()
+		if !ok || (rows == lastR && cols == lastC) {
+			return true
+		}
+		lastR, lastC = rows, cols
+		msg, _ := json.Marshal(map[string]any{"type": "resize", "rows": rows, "cols": cols})
+		return ws.WriteMessage(websocket.TextMessage, msg) == nil
+	}
+
+	// **先发一次再进轮询**：等第一个 tick 意味着头 500ms 用的是服务端默认尺寸，
+	// 而 Claude 的欢迎界面恰好在附着的瞬间就画完了——晚发就是画错一次再重画。
+	if !send() {
+		return
+	}
 	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
 	for {
@@ -209,13 +254,7 @@ func resizeLoop(ctx context.Context, ws *websocket.Conn) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			cols, rows, err := term.GetSize(int(os.Stdin.Fd()))
-			if err != nil || (rows == lastR && cols == lastC) {
-				continue
-			}
-			lastR, lastC = rows, cols
-			msg, _ := json.Marshal(map[string]any{"type": "resize", "rows": rows, "cols": cols})
-			if ws.WriteMessage(websocket.TextMessage, msg) != nil {
+			if !send() {
 				return
 			}
 		}
