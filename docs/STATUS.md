@@ -166,6 +166,11 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   会把几十 GB 无关文件推上云端；`d` 只移出列表、绝不删文件。
   路径比较解符号链接（macOS 的 /var、Windows junction、OneDrive 重定向），
   否则"明明在自己的工程里，每次还是弹选择器"。
+  `t 其他位置` 是**可浏览的目录选择器**（↑/↓ 移动、Enter/→ 进入、←/Backspace
+  上一级、s 选定当前目录、p 直接输入、Esc 取消），Windows 上在盘符根再上一级
+  会回到盘符列表。手打 `C:\TestProjects\SyntheticProject` 既慢又容易打错，
+  而打错只得到一句"不是一个存在的目录"。读不了的目录列一行原因、仍可返回上级，
+  不会把人困住。
 - **左侧残影的根因是 ConPTY，用官方变量修**（2026-07-31）：官方文档
   code.claude.com/docs/en/fullscreen 的「Stale or misplaced text」写明：
   fullscreen 渲染只发送变化的单元格，而 **Windows Terminal 等 ConPTY 宿主会错误

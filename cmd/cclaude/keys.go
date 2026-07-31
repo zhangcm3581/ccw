@@ -85,31 +85,18 @@ func promptNewProject(io_ pickerIO, rd *bufio.Reader, root string) (project, err
 	return project{Name: name, Path: p}, nil
 }
 
-// promptRegisterPath让用户输入一个已有目录并就地登记。
+// promptRegisterPath让用户挑一个已有目录并就地登记。
+//
+// **走目录树而不是手打路径**：在 Windows 上打
+// `C:\TestProjects\SyntheticProject` 既慢又容易打错，而打错只得到一句
+// "不是一个存在的目录"、还得从头再来。浏览器里仍留着 p 直接输入，
+// 路径已经在剪贴板里时粘贴更快。
 func promptRegisterPath(io_ pickerIO, rd *bufio.Reader, cfgDir, def string) (project, error) {
-	prompt := "目录路径"
-	if def != "" {
-		prompt += fmt.Sprintf("（回车用 %s）", def)
-	}
-	line, err := readLineRaw(io_, rd, prompt+": ")
-	if err != nil {
-		return project{}, err
-	}
-	p := strings.TrimSpace(line)
-	// 从文件管理器拖进终端的路径常自带引号。
-	p = strings.Trim(p, "\"'")
-	if p == "" {
-		p = def
-	}
-	if p == "" {
+	abs := browseForDir(io_, rd, def)
+	if abs == "" {
 		return project{}, nil
 	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return project{}, err
-	}
 	if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
-		fmt.Fprintf(io_.out, "\r\n  %s不是一个存在的目录：%s%s\r\n", fgDim, abs, reset)
 		return project{}, nil
 	}
 	if err := registerProject(cfgDir, abs); err != nil {
