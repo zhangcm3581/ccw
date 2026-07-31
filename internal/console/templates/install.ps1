@@ -86,6 +86,18 @@ if (($env:PATH -split ';') -notcontains $dest) {
   $env:PATH = "$env:PATH;$dest"
 }
 
+# 同步目录：装完就在桌面上出现。**用 .NET 的 Desktop 已知文件夹**而不是
+# 拼 $HOME\Desktop——桌面常被 OneDrive 重定向，拼出来的那个用户根本看不见。
+$desktop = [Environment]::GetFolderPath('Desktop')
+if (-not $desktop) { $desktop = Join-Path $env:USERPROFILE 'Desktop' }
+$syncDir = if ($env:CCLAUDE_SYNC_DIR) { $env:CCLAUDE_SYNC_DIR } else { Join-Path $desktop 'cclaude 同步目录' }
+try {
+  New-Item -ItemType Directory -Force -Path $syncDir | Out-Null
+  Write-Host "同步目录：$syncDir"
+} catch {
+  Write-Host '（同步目录建不了，首次运行 cclaude 时会再试一次）'
+}
+
 Write-Host "已安装到 $dest\cclaude.exe"
 
 # **PATH 遮挡**：别处有一个更靠前的 cclaude 时，装了新的也还是跑旧的。

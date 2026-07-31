@@ -33,6 +33,8 @@ var buildVersion = "dev"
 func main() {
 	// 域名可以做参数（不是机密）；CDK绝不做参数——参数会进shell history与ps输出（A24）。
 	apiFlag := flag.String("api", "", "服务端API地址（如 https://api-01.example.com）；显式指定时写入本地配置")
+	// --dir 跳过选择器直接同步某个目录：脚本、CI 与"我就是要同步这里"的用法。
+	dirFlag := flag.String("dir", "", "直接同步指定目录，跳过项目选择器")
 	showVersion := flag.Bool("version", false, "输出版本号后退出")
 	flag.Parse()
 	if *showVersion {
@@ -67,7 +69,18 @@ func main() {
 	}
 
 	c := control.Client{Base: base}
-	cwd, _ := os.Getwd()
+
+	// 同步根目录（2026-07-31）：不再同步"你碰巧所在的那个目录"。
+	// resolveWorkDir 决定这次要同步哪个项目——已经在某个项目里就直接用它，
+	// 否则弹选择器。--dir 显式指定时一切照旧，脚本与 CI 不受影响。
+	cwd, err := resolveWorkDir(dir, *dirFlag)
+	if err != nil {
+		if err == errUserQuit {
+			return
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 
 	// session token在内存中随时可用CDK重新换取（审查§5.3）；CDK不入日志。
 	sessionToken, err := exchangeSession(ctx, c, cdk)

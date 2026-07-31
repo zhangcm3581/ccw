@@ -88,6 +88,15 @@ if [ -n "$OLD" ] && [ "$OLD" != "$VERSION" ]; then
 elif [ -n "$OLD" ]; then
   echo "已重新安装 ${VERSION}（与原有版本相同）"
 fi
+# 同步目录：装完就在桌面上出现，用户第一眼就知道文件该往哪放。
+# 名字必须与客户端的 SyncDirName 一致（有测试比对）。
+SYNC_DIR="${CCLAUDE_SYNC_DIR:-$HOME/Desktop/cclaude 同步目录}"
+if mkdir -p "$SYNC_DIR" 2>/dev/null; then
+  echo "同步目录：$SYNC_DIR"
+else
+  echo "（同步目录建不了，首次运行 cclaude 时会再试一次）"
+fi
+
 echo "已安装到 $DEST/cclaude"
 
 # **PATH 遮挡**：别的位置有一个更靠前的 cclaude 时，装了新的也还是跑旧的。
