@@ -37,7 +37,7 @@ type ctrlMsg struct {
 // 断开只关闭PTY附着进程与WebSocket，绝不kill tmux会话。
 // 调用方在调用本函数前必须已实时复查项目额度（审查§3.1：令牌不豁免其后发生的超额）。
 func Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, key []byte,
-	start func(projectID, ws string) (io.ReadWriteCloser, error)) {
+	start func(projectID, ws, term string) (io.ReadWriteCloser, error)) {
 	// 令牌只从Authorization头读取（2分钟短期令牌，可重连）；
 	// URL查询参数会进代理日志，禁止使用。
 	raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -57,6 +57,13 @@ func Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, key []by
 		http.Error(w, "workspace required", http.StatusBadRequest)
 		return
 	}
+	// 客户端报自己的 TERM。**非法或缺失都退回默认值而不是拒绝**：这只影响
+	// 显示效果，为它断掉一个本来能用的终端不成比例（与工作区键不同——
+	// 那个错了会写错地方）。
+	termName := r.Header.Get("X-CCW-Term")
+	if !ValidTerm(termName) {
+		termName = DefaultTerm
+	}
 
 	// 校验必须排在Upgrade之前：升级会劫持连接，之后再调http.Error写不出任何东西。
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -71,7 +78,7 @@ func Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, key []by
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
-	pty, err := start(claims.ProjectID, ws)
+	pty, err := start(claims.ProjectID, ws, termName)
 	if err != nil {
 		conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "pty start failed"),

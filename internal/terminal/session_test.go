@@ -20,7 +20,7 @@ func TestNamesDeterministic(t *testing.T) {
 }
 
 func TestAttachCmdNeverKills(t *testing.T) {
-	cmd := AttachCmd("ccw-project-a", "pid-1", "code-3f9a1b7c")
+	cmd := AttachCmd("ccw-project-a", "pid-1", "code-3f9a1b7c", "xterm-256color")
 	joined := strings.Join(cmd, " ")
 	if strings.Contains(joined, "kill") {
 		t.Fatalf("attach must never contain kill: %q", joined)
@@ -35,7 +35,7 @@ func TestAttachCmdNeverKills(t *testing.T) {
 }
 
 func TestEnsureSessionCmdsOrder(t *testing.T) {
-	cmds := EnsureSessionCmds("ccw-project-a", "pid-1", "code-3f9a1b7c")
+	cmds := EnsureSessionCmds("ccw-project-a", "pid-1", "code-3f9a1b7c", "xterm-256color")
 	if len(cmds) != 3 {
 		t.Fatalf("want has-session / mkdir / new-session, got %d cmds", len(cmds))
 	}
@@ -83,5 +83,46 @@ func TestTmuxSurvivesDetach(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "MARKER-42") {
 		t.Fatalf("marker lost after detach: %q", out)
+	}
+}
+
+// TERM 必须显式传给容器。
+//
+// `docker exec -it` 会写死 TERM=xterm（2026-07-31 实测，与调用方环境无关），
+// 而 xterm 只宣告 8 色——tmux 据此低估外层终端能力，Claude Code 这种重绘频繁的
+// TUI 会留下重绘残影（真机上滚动后左侧一列出现上一帧的字）。
+func TestTermIsPassedToContainer(t *testing.T) {
+	joined := strings.Join(AttachCmd("ccw-a", "pid", "code-3f9a1b7c", "xterm-256color"), " ")
+	if !strings.Contains(joined, "-e TERM=xterm-256color") {
+		t.Errorf("attach 未传 TERM：%s", joined)
+	}
+	// 建会话那条也要传：会话建立时的 TERM 决定 tmux server 的初始判断
+	for i, c := range EnsureSessionCmds("ccw-a", "pid", "code-3f9a1b7c", "screen-256color") {
+		if !strings.Contains(strings.Join(c, " "), "-e TERM=screen-256color") {
+			t.Errorf("第%d条命令未传 TERM：%v", i, c)
+		}
+	}
+	// 非法值退回默认，而不是原样塞进容器环境
+	joined = strings.Join(AttachCmd("ccw-a", "pid", "code-3f9a1b7c", "xterm; rm -rf /"), " ")
+	if !strings.Contains(joined, "-e TERM="+DefaultTerm) {
+		t.Errorf("非法 TERM 应退回默认值：%s", joined)
+	}
+	// 空值同样退回默认——绝不能让 docker 的 xterm 兜底
+	joined = strings.Join(AttachCmd("ccw-a", "pid", "code-3f9a1b7c", ""), " ")
+	if !strings.Contains(joined, "-e TERM="+DefaultTerm) {
+		t.Errorf("空 TERM 应退回默认值：%s", joined)
+	}
+}
+
+func TestValidTerm(t *testing.T) {
+	for _, ok := range []string{"xterm", "xterm-256color", "screen.linux", "rxvt-unicode-256color", "eterm+color"} {
+		if !ValidTerm(ok) {
+			t.Errorf("%q 应通过", ok)
+		}
+	}
+	for _, bad := range []string{"", "a b", "x;y", "$TERM", "x\ny", strings.Repeat("x", 65)} {
+		if ValidTerm(bad) {
+			t.Errorf("%q 应被拒", bad)
+		}
 	}
 }

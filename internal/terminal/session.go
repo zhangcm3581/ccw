@@ -18,6 +18,39 @@ package terminal
 // 管理员授权 Claude 账号用的 `-t main` 会话不走这里——那是手敲 docker exec
 // 建的另一个会话（见 DEPLOY.md 的 A7），与本文件无关。
 
+// DefaultTerm是客户端没报 TERM 时用的值。
+//
+// **不能不设**：`docker exec -it` 会写死 `TERM=xterm`（实测，与调用方的环境无关），
+// 而 xterm 只宣告 8 色。tmux 据此决定能对外层终端发哪些序列，Claude Code 这种
+// 重绘频繁的 TUI 在能力被低估时会留下重绘残影。
+const DefaultTerm = "xterm-256color"
+
+// termEnv把校验过的 TERM 拼成 docker exec 的 -e 参数。
+func termEnv(term string) []string {
+	if !ValidTerm(term) {
+		term = DefaultTerm
+	}
+	return []string{"-e", "TERM=" + term}
+}
+
+// ValidTerm校验 TERM 值。它会成为 docker exec 的一个 argv 元素（不经 shell），
+// 但仍然只放行 terminfo 名字里合法的字符——宁可退回默认值，也不把任意字符串
+// 塞进容器环境。
+func ValidTerm(t string) bool {
+	if t == "" || len(t) > 64 {
+		return false
+	}
+	for i := 0; i < len(t); i++ {
+		c := t[i]
+		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			c == '-' || c == '_' || c == '.' || c == '+'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // Names：同一 project + 工作区永远得到同一 tmux socket 与会话名，保证重连回到原会话。
 func Names(projectID, ws string) (socket, session string) {
 	return projectID, ws
@@ -31,26 +64,27 @@ func workdir(ws string) string {
 
 // EnsureSessionCmds：附着前必须依次尝试的命令（第一条失败时才执行第二条）。
 // 不使用new-session -A的前台形式：容器PID 1不是tmux，会话一律detached创建。
-func EnsureSessionCmds(containerName, projectID, ws string) [][]string {
+func EnsureSessionCmds(containerName, projectID, ws, term string) [][]string {
 	socket, session := Names(projectID, ws)
+	base := append([]string{"docker", "exec", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8"}, termEnv(term)...)
+	with := func(rest ...string) []string {
+		return append(append([]string{}, base...), append([]string{containerName}, rest...)...)
+	}
 	return [][]string{
-		{"docker", "exec", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8", containerName,
-			"tmux", "-L", socket, "has-session", "-t", session},
+		with("tmux", "-L", socket, "has-session", "-t", session),
 		// -c 指定的目录必须先存在，否则 tmux 会在 $HOME 起会话而不报错——
 		// 表现是"终端里看不到任何同步过来的文件"。mkdir -p 是幂等的。
-		{"docker", "exec", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8", containerName,
-			"sh", "-c", "mkdir -p " + shellQuote(workdir(ws))},
-		{"docker", "exec", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8", containerName,
-			"tmux", "-L", socket, "new-session", "-d", "-s", session, "-c", workdir(ws), "claude"},
+		with("sh", "-c", "mkdir -p "+shellQuote(workdir(ws))),
+		with("tmux", "-L", socket, "new-session", "-d", "-s", session, "-c", workdir(ws), "claude"),
 	}
 }
 
 // AttachCmd必须带-t（审查§2.1）：容器内不分配TTY时tmux attach会直接失败；
 // 宿主机侧的TTY由creack/pty提供给docker CLI进程，两者缺一不可。
-func AttachCmd(containerName, projectID, ws string) []string {
+func AttachCmd(containerName, projectID, ws, term string) []string {
 	socket, session := Names(projectID, ws)
-	return []string{"docker", "exec", "-it", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8", containerName,
-		"tmux", "-L", socket, "attach-session", "-t", session}
+	args := append([]string{"docker", "exec", "-it", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8"}, termEnv(term)...)
+	return append(args, containerName, "tmux", "-L", socket, "attach-session", "-t", session)
 }
 
 // shellQuote用单引号包裹参数。工作区键已经过ValidWorkspace校验（只有小写字母、

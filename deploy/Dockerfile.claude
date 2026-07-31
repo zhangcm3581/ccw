@@ -13,6 +13,12 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git tmux curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
+# tmux 配置：默认值里有两条在这套用法下是错的（default-terminal=screen 让
+# Claude 以为只有 8 色；mouse=off 让滚轮不归 tmux 管，滚动后画面留残影）。
+# 详见文件内注释。放 /etc 而不是 ~/.tmux.conf——管理员授权用的那个会话
+# （DEPLOY.md A7）也要吃到同一份配置。
+COPY deploy/tmux.conf /etc/tmux.conf
+
 RUN useradd -m -u 1001 -s /bin/bash claude
 
 # 以claude身份安装：官方脚本装进 $HOME/.local/bin，装成root的话

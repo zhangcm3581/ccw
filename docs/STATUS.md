@@ -151,6 +151,19 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   仍会解析出接入域名，使用者拿到域名却在 exchange 时吃 invalid_cdk。
   `rm -rf` 的目标过 `safeWipeRoot` 守卫（RepoRoot 现在写死，但接到配置上时
   空值或 `/` 就是一台机器）。**远端擦除已在真机上跑通**（2026-07-30，Node-NY-02）。
+- **容器里没有 tmux 配置、TERM 也没传**（2026-07-31，真机渲染残影后查出）：
+  两条默认值在这套用法下是错的。① `docker exec -it` **写死 `TERM=xterm`**
+  （已实测，与调用方环境无关），只宣告 8 色；② tmux 的 `default-terminal` 默认
+  `screen`，于是容器里的 Claude Code 看到的是 `TERM=screen`。一个重绘频繁的 TUI
+  在能力被低估时会留下重绘残影。③ tmux `mouse` 默认 off，滚轮不归 tmux 管。
+  现在：新增 `deploy/tmux.conf`（`default-terminal=tmux-256color`、真彩色透传、
+  `mouse on`、`escape-time 0`、`history-limit 20000`）装到 `/etc/tmux.conf`
+  （实测 tmux 3.4 会自动加载；`tmux-256color` 这份 terminfo 在 ubuntu:24.04
+  基础镜像里就有，无需 ncurses-term）；客户端经 `X-CCW-Term` 上报自己的 TERM，
+  服务端校验后用 `-e TERM=` 传进容器，非法或缺失退回 `xterm-256color`
+  （**不拒绝连接**——这只影响显示，为它断掉终端不成比例）。
+  端到端实测：tmux 内部的 TERM 从 `screen` 变成 `tmux-256color`。
+  **注意**：`mouse on` 之后拖选归 tmux 管，要用终端原生选择需按住 Shift。
 - **Windows 上终端尺寸从不上报**（2026-07-30，真机暴露）：客户端用
   `term.GetSize(os.Stdin.Fd())` 轮询尺寸，而 Windows 上它走
   `GetConsoleScreenBufferInfo`——那个 API 只接受**屏幕缓冲区**句柄（stdout/stderr），

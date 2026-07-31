@@ -161,6 +161,10 @@ func runTerminal(ctx context.Context, conn control.ConnectionResponse, wsKey str
 	header := http.Header{
 		"Authorization":   {"Bearer " + conn.TerminalToken},
 		"X-CCW-Workspace": {wsKey},
+		// 报自己的 TERM：`docker exec -it` 会写死 TERM=xterm（只有 8 色），
+		// tmux 据此低估外层终端的能力，重绘会留残影。
+		// Windows 上通常没有 TERM 这个环境变量，用默认值兜住。
+		"X-CCW-Term": {clientTerm()},
 	}
 	ws, resp, err := websocket.DefaultDialer.DialContext(ctx, conn.TerminalURL, header)
 	if err != nil {
@@ -198,6 +202,16 @@ func runTerminal(ctx context.Context, conn control.ConnectionResponse, wsKey str
 			return nil
 		}
 	}
+}
+
+// clientTerm返回本机的 TERM。Windows 通常不设这个变量，而现代 Windows
+// 终端（Windows Terminal / PowerShell 7）都支持 256 色与真彩色，
+// 所以缺省报 xterm-256color 而不是让服务端退到 docker 写死的 xterm。
+func clientTerm() string {
+	if t := os.Getenv("TERM"); t != "" && t != "dumb" {
+		return t
+	}
+	return "xterm-256color"
 }
 
 // termSize取当前终端尺寸，按 stdout → stderr → stdin 依次试。
