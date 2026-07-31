@@ -196,6 +196,22 @@ services:
 {{- end}}
       - {{.Slug}}-claude-projects:/home/claude/.claude/projects
       - {{.Slug}}-sync:/var/lib/cclaude-sync
+    environment:
+      # Fullscreen 渲染的两个开关（官方文档 code.claude.com/docs/en/fullscreen）。
+      #
+      # ALT_SCREEN_FULL_REPAINT 是**官方针对本问题的修复**：fullscreen 只发生变化的
+      # 单元格，而 Windows Terminal 这类 ConPTY 宿主会错误合并这些定位写入，
+      # 把上一帧的片段留在屏幕上——2026-07-31 真机上滚动后左侧一列残留旧字，
+      # 就是文档里「Stale or misplaced text」那一条。置 1 后每帧重画所有单元格。
+      #
+      # NO_FLICKER 让 fullscreen 明确开启，不依赖 ~/.claude/settings.json——
+      # 那份文件在 claude-shared 卷里，**一次重置就没了**，而这里跟着部署走。
+      # 用户仍可用 /tui default 切回经典渲染（官方说 /tui 会清掉这个变量）。
+      #
+      # 代价：每帧全量重绘的字节数高于增量，而我们这条链路是远程 WebSocket。
+      # 先要正确，如果实测觉得卡再权衡。
+      CLAUDE_CODE_NO_FLICKER: "1"
+      CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT: "1"
     networks: [ccw]
     restart: unless-stopped
 {{end}}

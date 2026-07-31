@@ -151,6 +151,19 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   仍会解析出接入域名，使用者拿到域名却在 exchange 时吃 invalid_cdk。
   `rm -rf` 的目标过 `safeWipeRoot` 守卫（RepoRoot 现在写死，但接到配置上时
   空值或 `/` 就是一台机器）。**远端擦除已在真机上跑通**（2026-07-30，Node-NY-02）。
+- **左侧残影的根因是 ConPTY，用官方变量修**（2026-07-31）：官方文档
+  code.claude.com/docs/en/fullscreen 的「Stale or misplaced text」写明：
+  fullscreen 渲染只发送变化的单元格，而 **Windows Terminal 等 ConPTY 宿主会错误
+  合并这些定位写入**，把上一帧片段留在屏幕上。修复是
+  `CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT=1`（每帧重画所有单元格）。
+  连同 `CLAUDE_CODE_NO_FLICKER=1` 一起**写进 compose 的项目服务环境**，
+  而不是远端的 `~/.claude/settings.json`——那份文件在 claude-shared 卷里，
+  一次「重置节点」就没了，且要 SSH 上去改。契约 I9 守着这两个变量。
+  代价：全量重绘的字节数高于增量，而这条链路是远程 WebSocket；先要正确。
+  用户仍可 `/tui default` 切回经典渲染。
+  **同一批 tmux 改动里，`set -g mouse on` 是官方文档明确要求的前置条件**
+  （没有它滚轮事件被 tmux 吃掉，不会送到 Claude）；而当时给 `escape-time 0`
+  写的"能修残影"是推断且推错了方向，注释已更正。
 - **容器里没有 tmux 配置、TERM 也没传**（2026-07-31，真机渲染残影后查出）：
   两条默认值在这套用法下是错的。① `docker exec -it` **写死 `TERM=xterm`**
   （已实测，与调用方环境无关），只宣告 8 色；② tmux 的 `default-terminal` 默认

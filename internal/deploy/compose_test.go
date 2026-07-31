@@ -285,3 +285,27 @@ func count(list []string, want string) int {
 	}
 	return n
 }
+
+// I9：每个项目容器都带 fullscreen 渲染的两个环境变量。
+//
+// 官方文档（code.claude.com/docs/en/fullscreen）的「Stale or misplaced text」：
+// fullscreen 只发送变化的单元格，而 Windows Terminal 这类 ConPTY 宿主会错误合并
+// 这些定位写入，把上一帧的片段留在屏幕上——2026-07-31 真机上滚动后左侧一列
+// 残留旧字就是这一条。CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT=1 是官方修复。
+//
+// **放 compose 而不是 ~/.claude/settings.json**：那份文件在 claude-shared 卷里，
+// 一次「重置节点」就没了，而这里跟着部署走，且三个项目一致。
+func TestInvariantI9FullscreenEnv(t *testing.T) {
+	_, doc := render(t, "alpha", "beta", "gamma")
+	for _, slug := range []string{"alpha", "beta", "gamma"} {
+		svc, ok := service(t, doc, slug)["environment"].(map[string]any)
+		if !ok {
+			t.Fatalf("I9: 项目%s没有environment段", slug)
+		}
+		for _, k := range []string{"CLAUDE_CODE_NO_FLICKER", "CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT"} {
+			if v, _ := svc[k].(string); v != "1" {
+				t.Errorf("I9: 项目%s的%s=%q，应为\"1\"", slug, k, v)
+			}
+		}
+	}
+}
