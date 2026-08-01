@@ -191,12 +191,10 @@ func main() {
 							logln("额度执行：项目%s额度查询失败，本轮不处理：%v", pid, qerr)
 							continue
 						}
-						// 额度写进 tmux 状态栏：数据这里本来就有，不额外查库。
-						// 失败只记日志——状态栏是锦上添花，不能拖累"超额就关终端"。
-						if serr := setStatusBar(ctx, containerFor(pid), pid,
-							quotaStatus(d, lim.FiveHour, lim.SevenDay)); serr != nil {
-							logln("状态栏更新失败 项目%s：%v", pid, serr)
-						}
+						// 状态行不再由这里推送：额度显示改用 Claude 自己的 rate_limits
+						// （见 cmd/ccw-statusline），不经过 worker-agent。
+						// lim 仍要拿——checkProject 用它做判定。
+						_ = lim
 						if d.Over {
 							registry.CloseProject(pid)
 						}

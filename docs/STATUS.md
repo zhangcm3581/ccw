@@ -159,10 +159,15 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   claude 进程改不了模式，客户端会如实提示这一点与怎么结束会话。
   客户端报上来的值经白名单收敛（`ParsePermMode`），认不出退回默认——
   它会成为容器里命令行的一部分，透传等于让客户端往 claude 的参数里塞任意东西。
-  额度显示走 **Claude Code 的 statusLine**（2026-08-01 从 tmux status-right 改过来，
-  位置离视线更近）：worker-agent 把一行文本写进容器的 `/tmp/ccw-quota`，
-  Claude 按 `/etc/claude-code/managed-settings.json` 每 10 秒 `cat` 它，
-  渲染在自己 footer 的上一行。数据来自已有的 30 秒额度执行循环，不额外查库。
+  额度显示走 **Claude Code 的 statusLine**，渲染在它自己 footer 的上一行。
+  **数据源改成 Claude 自己的 `rate_limits`**（2026-08-01 第二次改）：那是上游账号的
+  真实额度与真实重置时间，比本仓库那套未校准的内部估算有用得多，而且不经过
+  worker-agent——少一条要维护的链路，也少 30 秒的滞后。本仓库的内部额度闸门
+  **仍在服务端执行**，只是不在这行显示。
+  渲染器是 `cmd/ccw-statusline`（静态二进制，编进项目镜像）：四段——模型 /
+  context 已用 / 5h 剩余 + 倒计时 / 7d 剩余 + 倒计时，1/8 格精度的渐进进度条。
+  **写成 Go 而不是 shell**：这几段逻辑（子格填充、倒计时格式、缺数据降级）
+  用 shell 写既难读也难验，也省掉往镜像里装 jq。
   **配 managed-settings 而不是 `~/.claude/settings.json`**：后者在 claude-shared
   卷里，卷初始化过之后镜像里的同名文件根本不会出现；`/etc` 不是卷，重建即生效。
   代价是 managed 优先级最高、用户无法覆盖自己的 statusLine——额度是这套系统的

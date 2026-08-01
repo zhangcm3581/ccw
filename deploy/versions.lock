@@ -8,7 +8,7 @@
 
 ## 语言与工具链
 go                          1.22.5        # go.mod 的 go 指令
-go-build-image              golang:1.22-bookworm
+go-build-image              golang:1.22-bookworm  # 含 Dockerfile.claude 里编 ccw-statusline 的那一段
 
 ## Go 模块（权威来源是 go.mod / go.sum，此处为可读副本）
 github.com/creack/pty       v1.1.24
