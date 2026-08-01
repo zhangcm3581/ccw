@@ -316,6 +316,9 @@ func TestFaviconIsInline(t *testing.T) {
 
 // 首页介绍的必须是**已经实现**的能力。这几条各自对应一处真实实现，
 // 少了任何一条都说明介绍与产品脱节了。
+//
+// 排除清单（.env* / .ssh/ 等不参与同步）已按要求从首页移除。**行为没变**，
+// 它由 internal/sync 的路径测试守着——那才是边界本身，页面上只是说明。
 func TestHomeDescribesShippedCapabilities(t *testing.T) {
 	s, _, _, _ := newTestServer(t)
 	body := get(t, s, "/", nil).Body.String()
@@ -324,7 +327,6 @@ func TestHomeDescribesShippedCapabilities(t *testing.T) {
 		"冲突副本", // 三方同步的冲突处理
 		"同步目录", // 桌面同步目录与项目选择器
 		"云端",   // 云端副本管理
-		".env", // 排除清单（安全边界）
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("首页应介绍到 %q", want)
