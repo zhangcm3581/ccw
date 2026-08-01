@@ -120,29 +120,23 @@ func TestHomeCopyBoundary(t *testing.T) {
 }
 
 func TestDownloadPage(t *testing.T) {
-	s, f, _, _ := newTestServer(t)
+	s, _, _, _ := newTestServer(t)
 	body := get(t, s, "/download", map[string]string{"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}).Body.String()
-	for _, a := range f.arts {
-		if !strings.Contains(body, a.Filename) {
-			t.Errorf("下载表应列出 %s", a.Filename)
+
+	// 页面只剩"一条命令装好"：手动下载整块（推荐、平台表、校验说明）
+	// 已于 2026-08-01 按要求移除。
+	for _, want := range []string{"/install.sh | sh", "/install.ps1 | iex"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("下载页应给出安装命令 %q", want)
 		}
 	}
-	// SHA256 不再逐行显示——那一列在页面上被截成 "88d167a6…"，既核对不了也读不懂。
-	// **校验能力必须还在**：改由 SHA256SUMS 承担，这条断言守的就是它没被一起简化掉。
-	if !strings.Contains(body, "/dist/SHA256SUMS") {
-		t.Error("必须提供 SHA256SUMS 供校验")
+	// **产物仍要能拿到**，只是页面不再罗列——这两条路径是移除展示之后
+	// 唯一的手动下载入口，不能跟着一起没了。
+	if w := get(t, s, "/download/darwin/arm64", nil); w.Code != 302 {
+		t.Errorf("/download/{os}/{arch} 应仍可用，got %d", w.Code)
 	}
-	if !strings.Contains(body, "shasum -a 256 -c") {
-		t.Error("要给出校验命令，否则等于没提供校验")
-	}
-	if !strings.Contains(body, "windows/amd64") {
-		t.Error("Windows UA应得到windows/amd64推荐")
-	}
-
-	f.hasRel = false
-	body = get(t, s, "/download", nil).Body.String()
-	if !strings.Contains(body, "暂无发布") {
-		t.Error("无发布版本时应显示「暂无发布」")
+	if w := get(t, s, "/dist/SHA256SUMS", nil); w.Code != 200 {
+		t.Errorf("SHA256SUMS 应仍可下载，got %d", w.Code)
 	}
 }
 
@@ -294,23 +288,5 @@ func TestHealthz(t *testing.T) {
 	s, _, _, _ := newTestServer(t)
 	if w := get(t, s, "/healthz", nil); w.Code != 200 || w.Body.String() != "ok" {
 		t.Errorf("healthz: %d %q", w.Code, w.Body.String())
-	}
-}
-
-func TestDetectPlatform(t *testing.T) {
-	cases := []struct{ ua, os, arch string }{
-		{"Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "windows", "amd64"},
-		{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", "darwin", "arm64"}, // mac UA不区分芯片，默认arm64
-		{"Mozilla/5.0 (X11; Linux x86_64)", "linux", "amd64"},
-		{"Mozilla/5.0 (X11; Linux aarch64)", "linux", "arm64"},
-	}
-	for _, c := range cases {
-		osName, arch, ok := detectPlatform(c.ua)
-		if !ok || osName != c.os || arch != c.arch {
-			t.Errorf("detectPlatform(%q) = %s/%s/%v, want %s/%s", c.ua, osName, arch, ok, c.os, c.arch)
-		}
-	}
-	if _, _, ok := detectPlatform("curl/8.0"); ok {
-		t.Error("未知UA不应给推荐")
 	}
 }

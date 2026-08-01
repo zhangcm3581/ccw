@@ -18,32 +18,5 @@ irm {{.Site}}/install.ps1 | iex
 
 # 或 cmd.exe
 powershell -c "irm {{.Site}}/install.ps1 | iex"</code></pre>
-<p class="muted">脚本会<b>校验 SHA256</b> 后才安装。执行前想先读一遍：<a href="/install.sh">install.sh</a> · <a href="/install.ps1">install.ps1</a></p>
-
-<h2>手动下载</h2>
-<p class="muted">不想用脚本、或需要装到指定位置时用这里。</p>
-
-{{if .Rec}}
-<p style="margin:16px 0">
-  <a class="btn" href="/dist/{{.Rec.Filename}}">下载 {{.Rec.OS}}/{{.Rec.Arch}}</a>
-  <span class="muted" style="margin-left:12px">{{.Rec.Filename}} · {{.Rec.SizeHuman}}</span>
-</p>
-{{end}}
-
-<div class="scroll">
-<table>
-  <tr><th>系统</th><th>架构</th><th>文件</th><th>大小</th></tr>
-  {{range .Arts}}
-  <tr>
-    <td>{{.OS}}</td><td>{{.Arch}}</td>
-    <td><a href="/dist/{{.Filename}}">{{.Filename}}</a></td>
-    <td>{{.SizeHuman}}</td>
-  </tr>
-  {{end}}
-</table>
-</div>
-<p class="muted">校验：下载 <a href="/dist/SHA256SUMS">SHA256SUMS</a> 到同一目录，
-<code>shasum -a 256 -c SHA256SUMS --ignore-missing</code>（Linux 用 <code>sha256sum -c</code>）。
-macOS/Linux 还需 <code>chmod +x</code> 并放进 PATH。</p>
 {{end}}
 {{end}}

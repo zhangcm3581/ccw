@@ -186,16 +186,9 @@ func (s *Server) page(name string, data func(*http.Request) (any, error)) http.H
 
 // ---- 下载页与产物分发 ----
 
-type artifactView struct {
-	consolestore.Artifact
-	SizeHuman string
-}
-
 type downloadData struct {
 	Has     bool
 	Release consolestore.Release
-	Arts    []artifactView
-	Rec     *artifactView
 	Site    string // 用于拼一键安装命令；跟随用户正在访问的域名，不写死
 }
 
@@ -205,27 +198,11 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	d := downloadData{Has: err == nil, Release: rel, Site: siteURL(r)}
-	for _, a := range arts {
-		d.Arts = append(d.Arts, artifactView{Artifact: a, SizeHuman: sizeHuman(a.SizeBytes)})
-	}
-	if osName, arch, ok := detectPlatform(r.UserAgent()); ok {
-		if v := pick(d.Arts, osName, arch); v != nil {
-			d.Rec = v
-		} else if v := pick(d.Arts, osName, "amd64"); v != nil {
-			d.Rec = v // 架构探测不到时退到amd64
-		}
-	}
-	s.render(w, "download.html", d)
-}
-
-func pick(arts []artifactView, osName, arch string) *artifactView {
-	for i := range arts {
-		if arts[i].OS == osName && arts[i].Arch == arch {
-			return &arts[i]
-		}
-	}
-	return nil
+	// 下载页只给一条命令。手动下载那一整块（推荐、平台表、校验说明）已于
+	// 2026-08-01 按要求移除，因此不再需要 UA 探测与产物清单——
+	// 产物本身仍在 /dist/ 与 /download/{os}/{arch} 提供，只是页面上不再罗列。
+	_ = arts // 页面不再罗列产物；它们仍由 /dist/ 与 /download/{os}/{arch} 提供
+	s.render(w, "download.html", downloadData{Has: err == nil, Release: rel, Site: siteURL(r)})
 }
 
 // siteURL从请求还原出用户正在访问的站点地址。
@@ -434,36 +411,4 @@ func jsonErr(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
-}
-
-func sizeHuman(n int64) string {
-	switch {
-	case n >= 1<<20:
-		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
-	case n >= 1<<10:
-		return fmt.Sprintf("%.1f KiB", float64(n)/(1<<10))
-	default:
-		return fmt.Sprintf("%d B", n)
-	}
-}
-
-// detectPlatform从User-Agent猜平台，仅用于“为你推荐”展示；完整表格始终可见。
-// macOS的UA不区分Intel/Apple Silicon，默认推荐arm64（当前主流），Intel用户从表格选。
-func detectPlatform(ua string) (osName, arch string, ok bool) {
-	l := strings.ToLower(ua)
-	switch {
-	case strings.Contains(l, "windows"):
-		osName = "windows"
-	case strings.Contains(l, "mac os") || strings.Contains(l, "macintosh"):
-		return "darwin", "arm64", true
-	case strings.Contains(l, "linux") || strings.Contains(l, "x11"):
-		osName = "linux"
-	default:
-		return "", "", false
-	}
-	arch = "amd64"
-	if strings.Contains(l, "arm64") || strings.Contains(l, "aarch64") {
-		arch = "arm64"
-	}
-	return osName, arch, true
 }
