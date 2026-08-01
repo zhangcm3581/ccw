@@ -91,7 +91,7 @@ func TestQuickstartRedirectsToConnect(t *testing.T) {
 // 页面自包含：不引用任何外部CDN/字体/脚本（设计§3.3）。
 func TestPagesSelfContained(t *testing.T) {
 	s, _, _, _ := newTestServer(t)
-	for _, p := range []string{"/", "/download", "/connect"} {
+	for _, p := range []string{"/", "/connect"} {
 		w := get(t, s, p, nil)
 		if w.Code != 200 {
 			t.Fatalf("%s: code=%d", p, w.Code)
@@ -119,24 +119,29 @@ func TestHomeCopyBoundary(t *testing.T) {
 	}
 }
 
-func TestDownloadPage(t *testing.T) {
+// 下载页已移除（2026-08-01）：安装命令在 /connect 上，那里还能填好域名。
+// 这条测试守的是移除之后**不能一起消失**的东西。
+func TestDownloadRemovedButArtifactsStillReachable(t *testing.T) {
 	s, _, _, _ := newTestServer(t)
-	body := get(t, s, "/download", map[string]string{"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}).Body.String()
 
-	// 页面只剩"一条命令装好"：手动下载整块（推荐、平台表、校验说明）
-	// 已于 2026-08-01 按要求移除。
-	for _, want := range []string{"/install.sh | sh", "/install.ps1 | iex"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("下载页应给出安装命令 %q", want)
-		}
+	// 旧地址重定向而不是 404——导航与外部链接都指过它
+	w := get(t, s, "/download", nil)
+	if w.Code != 301 || w.Header().Get("Location") != "/connect" {
+		t.Errorf("/download 应 301 到 /connect，got %d %s", w.Code, w.Header().Get("Location"))
 	}
-	// **产物仍要能拿到**，只是页面不再罗列——这两条路径是移除展示之后
-	// 唯一的手动下载入口，不能跟着一起没了。
-	if w := get(t, s, "/download/darwin/arm64", nil); w.Code != 302 {
-		t.Errorf("/download/{os}/{arch} 应仍可用，got %d", w.Code)
-	}
+	// **产物必须仍能拿到**：install.sh/ps1 就从 /dist/ 取，断了整条安装链路就断了
 	if w := get(t, s, "/dist/SHA256SUMS", nil); w.Code != 200 {
 		t.Errorf("SHA256SUMS 应仍可下载，got %d", w.Code)
+	}
+	if w := get(t, s, "/download/darwin/arm64", nil); w.Code != 302 {
+		t.Errorf("/download/{os}/{arch} 应仍可用（移除页面后唯一的手动入口），got %d", w.Code)
+	}
+	// 安装命令要能在 /connect 上拿到
+	body := get(t, s, "/connect", nil).Body.String()
+	for _, want := range []string{"/install.sh | sh", "/install.ps1 | iex"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/connect 应给出安装命令 %q", want)
+		}
 	}
 }
 

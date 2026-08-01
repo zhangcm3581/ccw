@@ -68,7 +68,7 @@ func New(store SiteStore, distDir string, logf func(string, ...any)) *Server {
 		text: map[string]*texttemplate.Template{}}
 	// 公开站点与管理后台是两套外壳：站点是可读的文档页，后台是操作台。
 	// 用不同的 layout 而不是同一个套两种样式——它们的信息密度与导航模型不同。
-	for _, page := range []string{"home.html", "download.html", "connect.html"} {
+	for _, page := range []string{"home.html", "connect.html"} {
 		s.tmpl[page] = template.Must(template.ParseFS(tmplFS, "templates/layout.html", "templates/"+page))
 	}
 	for _, page := range []string{"admin_dashboard.html", "admin_nodes.html",
@@ -103,7 +103,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /connect", s.page("connect.html", func(r *http.Request) (any, error) {
 		return map[string]any{"Site": siteURL(r)}, nil
 	}))
-	mux.HandleFunc("GET /download", s.download)
+	// 下载页已于 2026-08-01 移除：安装命令在 /connect 上，而且那里能填好域名。
+	// **重定向而不是 404**：导航与外部链接都指过它。
+	mux.HandleFunc("GET /download", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/connect", http.StatusMovedPermanently)
+	})
 	mux.HandleFunc("GET /download/{os}/{arch}", s.downloadRedirect)
 	mux.HandleFunc("GET /install.sh", s.installScript("install.sh", "text/x-shellscript"))
 	mux.HandleFunc("GET /install.ps1", s.installScript("install.ps1", "text/plain"))
@@ -185,25 +189,6 @@ func (s *Server) page(name string, data func(*http.Request) (any, error)) http.H
 }
 
 // ---- 下载页与产物分发 ----
-
-type downloadData struct {
-	Has     bool
-	Release consolestore.Release
-	Site    string // 用于拼一键安装命令；跟随用户正在访问的域名，不写死
-}
-
-func (s *Server) download(w http.ResponseWriter, r *http.Request) {
-	rel, arts, err := s.Store.LatestPublished(r.Context())
-	if err != nil && !errors.Is(err, consolestore.ErrNotFound) {
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
-	}
-	// 下载页只给一条命令。手动下载那一整块（推荐、平台表、校验说明）已于
-	// 2026-08-01 按要求移除，因此不再需要 UA 探测与产物清单——
-	// 产物本身仍在 /dist/ 与 /download/{os}/{arch} 提供，只是页面上不再罗列。
-	_ = arts // 页面不再罗列产物；它们仍由 /dist/ 与 /download/{os}/{arch} 提供
-	s.render(w, "download.html", downloadData{Has: err == nil, Release: rel, Site: siteURL(r)})
-}
 
 // siteURL从请求还原出用户正在访问的站点地址。
 // 一键安装命令与脚本里的下载地址都要指回这里，写死域名会在换域名/本地开发时失效。
