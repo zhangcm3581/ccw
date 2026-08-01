@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -154,30 +153,32 @@ func browseForDir(io_ pickerIO, rd *bufio.Reader, start string) string {
 		}
 	}
 	st := newBrowseState(start)
+	sc := newScreen(io_.out)
 	for {
 		st = st.clampSel()
-		renderBrowse(io_, st)
+		sc.begin()
+		renderBrowse(sc, st)
 		b, err := rd.ReadByte()
 		if err != nil {
-			clearBrowse(io_, st)
+			sc.done()
 			return ""
 		}
-		prev := st
 		switch b {
 		case '\r', '\n':
 			st = st.enter()
 			st.sel = 0
 		case 's', 'S', ' ':
 			if cur := st.current(); cur != "" {
-				clearBrowse(io_, prev)
+				sc.done()
 				return cur
 			}
 		case 'p', 'P':
-			clearBrowse(io_, prev)
+			sc.done()
 			line, _ := readLineRaw(io_, rd, "直接输入路径（留空取消）: ")
 			p := strings.Trim(strings.TrimSpace(line), "\"'")
 			if p == "" {
 				st = newBrowseState(st.dir)
+				sc.external(2) // 提示自己打的两行
 				break
 			}
 			if abs, err := filepath.Abs(p); err == nil {
@@ -185,8 +186,9 @@ func browseForDir(io_ pickerIO, rd *bufio.Reader, start string) string {
 					return abs
 				}
 			}
-			fmt.Fprintf(io_.out, "  %s不是一个存在的目录：%s%s\r\n", fgDim, p, reset)
+			sc.line("  %s不是一个存在的目录：%s%s", fgDim, p, reset)
 			st = newBrowseState(st.dir)
+			sc.external(2) // 只补 readLineRaw 打的两行；错误行 sc.line 已经计过
 		case 127, 8: // Backspace＝上一级
 			st = st.up()
 			st.sel = 0
@@ -206,46 +208,37 @@ func browseForDir(io_ pickerIO, rd *bufio.Reader, start string) string {
 						st = st.up()
 						st.sel = 0
 					}
-					clearBrowse(io_, prev)
 					continue
 				}
 			}
-			clearBrowse(io_, prev)
+			sc.done()
 			return ""
 		case 'k':
 			st.sel--
 		case 'j':
 			st.sel++
 		}
-		clearBrowse(io_, prev)
 	}
 }
 
-func renderBrowse(io_ pickerIO, st browseState) {
+func renderBrowse(sc *screen, st browseState) {
 	loc := st.dir
 	if loc == driveListSentinel {
 		loc = "选择磁盘"
 	}
-	fmt.Fprintf(io_.out, "%s%s  选择目录%s  %s%s%s\r\n", clrLine, fgAccent, reset, fgDim, loc, reset)
-	fmt.Fprintf(io_.out, "%s%s  ↑/↓ 移动 · Enter/→ 进入 · ←/Backspace 上一级 · s 选定当前目录 · p 输入路径 · Esc 取消%s\r\n",
+	sc.line("%s%s  选择目录%s  %s%s%s", clrLine, fgAccent, reset, fgDim, loc, reset)
+	sc.line("%s%s  ↑/↓ 移动 · Enter/→ 进入 · ←/Backspace 上一级 · s 选定当前目录 · p 输入路径 · Esc 取消%s",
 		clrLine, fgDim, reset)
-	fmt.Fprintf(io_.out, "%s\r\n", clrLine)
+	sc.line("%s", clrLine)
 	for i, e := range st.entries {
 		line := "  " + e.name
 		if e.isUp {
 			line = "  " + e.name
 		}
 		if i == st.sel {
-			fmt.Fprintf(io_.out, "%s%s%s%s\r\n", clrLine, invert, padTo(line, 78), reset)
+			sc.line("%s%s%s%s", clrLine, invert, padTo(line, 78), reset)
 			continue
 		}
-		fmt.Fprintf(io_.out, "%s%s\r\n", clrLine, line)
+		sc.line("%s%s", clrLine, line)
 	}
-}
-
-func browseHeaderLines() int { return 3 }
-
-func clearBrowse(io_ pickerIO, st browseState) {
-	n := len(st.entries) + browseHeaderLines()
-	fmt.Fprintf(io_.out, esc+"[%dA", n)
 }

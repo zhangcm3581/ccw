@@ -50,6 +50,7 @@ func runCloudManager(io_ pickerIO, mgr syncpkg.CloudManager, curWS string, used,
 	defer fmt.Fprint(io_.out, showCur)
 
 	rd := bufio.NewReader(io_.in)
+	sc := newScreen(io_.out)
 	sel := 0
 	for {
 		if sel < 0 {
@@ -58,20 +59,21 @@ func runCloudManager(io_ pickerIO, mgr syncpkg.CloudManager, curWS string, used,
 		if sel >= len(rows) && len(rows) > 0 {
 			sel = len(rows) - 1
 		}
-		renderCloud(io_, rows, sel, used, limit)
+		sc.begin()
+		renderCloud(sc, rows, sel, used, limit)
 
 		b, err := rd.ReadByte()
 		if err != nil {
-			clearCloud(io_, len(rows))
+			sc.done()
 			return nil
 		}
 		switch b {
 		case 'q', 'Q', 3:
-			clearCloud(io_, len(rows))
+			sc.done()
 			return nil
 		case 0x1b:
 			if rd.Buffered() == 0 {
-				clearCloud(io_, len(rows))
+				sc.done()
 				return nil
 			}
 			if c, _ := rd.ReadByte(); c == '[' {
@@ -95,7 +97,7 @@ func runCloudManager(io_ pickerIO, mgr syncpkg.CloudManager, curWS string, used,
 			if len(marked) == 0 {
 				break
 			}
-			clearCloud(io_, len(rows))
+			sc.done()
 			var freed int64
 			var failed []string
 			for _, r := range marked {
@@ -106,14 +108,13 @@ func runCloudManager(io_ pickerIO, mgr syncpkg.CloudManager, curWS string, used,
 				}
 				freed += n
 			}
-			fmt.Fprintf(io_.out, "  已删除 %d 个云端副本，释放 %s\r\n", len(marked)-len(failed), humanBytes(freed))
+			sc.line("  已删除 %d 个云端副本，释放 %s", len(marked)-len(failed), humanBytes(freed))
 			if len(failed) > 0 {
-				fmt.Fprintf(io_.out, "  %s删除失败：%s%s\r\n", fgDim, strings.Join(failed, "、"), reset)
+				sc.line("  %s删除失败：%s%s", fgDim, strings.Join(failed, "、"), reset)
 			}
-			fmt.Fprintf(io_.out, "  %s本地文件没有变化；下次打开这些项目会重新上传。%s\r\n", fgDim, reset)
+			sc.line("  %s本地文件没有变化；下次打开这些项目会重新上传。%s", fgDim, reset)
 			return nil
 		}
-		clearCloud(io_, len(rows))
 	}
 }
 
@@ -127,18 +128,18 @@ func markedRows(rows []cloudRow) []cloudRow {
 	return out
 }
 
-func renderCloud(io_ pickerIO, rows []cloudRow, sel int, used, limit int64) {
-	fmt.Fprintf(io_.out, "%s%s  管理云端%s %s·%s 项目副本\r\n", clrLine, fgAccent, reset, fgDim, reset)
+func renderCloud(sc *screen, rows []cloudRow, sel int, used, limit int64) {
+	sc.line("%s%s  管理云端%s %s·%s 项目副本", clrLine, fgAccent, reset, fgDim, reset)
 	pct := 0
 	if limit > 0 {
 		pct = int(float64(used) / float64(limit) * 100)
 	}
-	fmt.Fprintf(io_.out, "%s%s    云端存储        %d%% · %s/%s%s\r\n",
+	sc.line("%s%s    云端存储        %d%% · %s/%s%s",
 		clrLine, fgDim, pct, humanBytes(used), humanBytes(limit), reset)
-	fmt.Fprintf(io_.out, "%s\r\n", clrLine)
+	sc.line("%s", clrLine)
 
 	if len(rows) == 0 {
-		fmt.Fprintf(io_.out, "%s%s  云端还没有任何副本。%s\r\n", clrLine, fgDim, reset)
+		sc.line("%s%s  云端还没有任何副本。%s", clrLine, fgDim, reset)
 	}
 	for i, r := range rows {
 		mark := "○"
@@ -154,10 +155,10 @@ func renderCloud(io_ pickerIO, rows []cloudRow, sel int, used, limit int64) {
 			line += "  （当前）"
 		}
 		if r.marked {
-			fmt.Fprintf(io_.out, "%s%s%s%s\r\n", clrLine, fgAccent, line, reset)
+			sc.line("%s%s%s%s", clrLine, fgAccent, line, reset)
 			continue
 		}
-		fmt.Fprintf(io_.out, "%s%s\r\n", clrLine, line)
+		sc.line("%s%s", clrLine, line)
 	}
 	var sum int64
 	for _, r := range rows {
@@ -165,21 +166,10 @@ func renderCloud(io_ pickerIO, rows []cloudRow, sel int, used, limit int64) {
 			sum += r.info.Bytes
 		}
 	}
-	fmt.Fprintf(io_.out, "%s\r\n", clrLine)
-	fmt.Fprintf(io_.out, "%s  已选将释放 %s\r\n", clrLine, humanBytes(sum))
-	fmt.Fprintf(io_.out, "%s%s  ↑↓ 选择 · 空格 标记删除 · Enter 删除所选（下次需重新同步） · q/esc 返回选择器%s\r\n",
+	sc.line("%s", clrLine)
+	sc.line("%s  已选将释放 %s", clrLine, humanBytes(sum))
+	sc.line("%s%s  ↑↓ 选择 · 空格 标记删除 · Enter 删除所选（下次需重新同步） · q/esc 返回选择器%s",
 		clrLine, fgDim, reset)
-}
-
-func cloudLines(n int) int {
-	if n == 0 {
-		n = 1
-	}
-	return n + 6 // 标题、配额、空行、空行、已选、按键提示
-}
-
-func clearCloud(io_ pickerIO, n int) {
-	fmt.Fprintf(io_.out, esc+"[%dA", cloudLines(n))
 }
 
 // humanBytes按截图的口径显示：B / KB / MB / GB，1024 进制。

@@ -202,3 +202,89 @@ func TestSyncRootFoldersAreProjectsWithoutRegistration(t *testing.T) {
 		t.Errorf("只有 dropped-in 该是项目，got %+v", ps)
 	}
 }
+
+// 重绘必须擦干净——**这是本轮 code review 找到的三个 bug 的共同根因**。
+//
+// 原来三处各自记账"打了 N 行、往回移 N 行"，而在行数会变的时候一定错：
+// 按 d 移出一项后新一帧少一行，旧的最后一行没人擦；按 n/t 之后输入提示
+// 又多打几行，循环末尾仍按旧行数往回移，光标停到比起点更高的位置，
+// 下一帧直接盖掉 shell 提示符。
+//
+// 现在只记"上一帧实际写了多少行"，重绘时移回去再 ESC[J 擦到屏幕末尾。
+// 这条测试直接验那个记账：写多少行，就该往回移多少行。
+func TestScreenRedrawAccounting(t *testing.T) {
+	var buf bytes.Buffer
+	sc := newScreen(&buf)
+
+	// 第一帧：3 行，且**不该有任何上移**（前面没有帧）
+	sc.begin()
+	sc.line("a")
+	sc.line("b")
+	sc.line("c")
+	if strings.Contains(buf.String(), "[3A") {
+		t.Error("第一帧不该往回移")
+	}
+
+	// 第二帧：应先上移 3 行并擦到末尾
+	buf.Reset()
+	sc.begin()
+	if !strings.Contains(buf.String(), esc+"[3A") {
+		t.Errorf("应上移 3 行，got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), esc+"[J") {
+		t.Error("必须擦到屏幕末尾，否则行数变少时旧行会留下")
+	}
+	sc.line("only-one") // 这一帧只有 1 行
+
+	// 第三帧：按 1 行回退，而不是 3
+	buf.Reset()
+	sc.begin()
+	if !strings.Contains(buf.String(), esc+"[1A") {
+		t.Errorf("应按上一帧的真实行数(1)回退，got %q", buf.String())
+	}
+
+	// external：外部又打了 2 行，下一次必须一并回退
+	sc.line("x")
+	sc.external(2)
+	buf.Reset()
+	sc.begin()
+	if !strings.Contains(buf.String(), esc+"[3A") {
+		t.Errorf("应回退 1+2=3 行，got %q", buf.String())
+	}
+}
+
+// 列表变短之后不能留下旧行。按 d 移出一项就是这个场景。
+func TestPickerShrinkingListLeavesNoStaleRow(t *testing.T) {
+	root := t.TempDir()
+	cfg := t.TempDir()
+	ext := t.TempDir()
+	if err := registerProject(cfg, ext); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(root, "stays"), 0o755)
+
+	// 光标移到外部项目那行 → d 移出 → q 退出
+	io_, out := fakeIO(kDown + "d" + "q")
+	if _, err := runPicker(io_, root, cfg, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(loadRegistered(cfg)) != 0 {
+		t.Fatal("d 应把它移出登记表")
+	}
+	s := out.String()
+	// 移出后那一帧必须先回退 2 行（旧帧 4 头 + 2 项 = 6）再擦到末尾
+	if !strings.Contains(s, esc+"[J") {
+		t.Error("重绘必须擦到屏幕末尾，否则少掉的那行会留在屏幕上")
+	}
+	// 退出时也要擦干净，别把界面留在 shell 提示符上面
+	if !strings.HasSuffix(strings.TrimRight(s, "\x1b[?25h"), esc+"[J") {
+		t.Errorf("退出前最后一个动作应是擦除，got 结尾 %q", tail(s, 24))
+	}
+}
+
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
+}

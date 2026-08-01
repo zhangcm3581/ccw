@@ -84,6 +84,7 @@ func runPicker(io_ pickerIO, root, cfgDir, cwdHint string) (pickAction, error) {
 
 	sel := 0
 	rd := bufio.NewReader(io_.in)
+	sc := newScreen(io_.out)
 	for {
 		items := listProjects(root, cfgDir)
 		rows := buildRows(items, cwdHint)
@@ -93,10 +94,12 @@ func runPicker(io_ pickerIO, root, cfgDir, cwdHint string) (pickAction, error) {
 		if sel < 0 {
 			sel = 0
 		}
-		render(io_.out, rows, sel, root)
+		sc.begin()
+		render(sc, rows, sel, root)
 
 		key, err := readKey(rd)
 		if err != nil {
+			sc.done()
 			return pickAction{Quit: true}, nil
 		}
 		switch key {
@@ -105,22 +108,25 @@ func runPicker(io_ pickerIO, root, cfgDir, cwdHint string) (pickAction, error) {
 		case keyDown:
 			sel++
 		case keyQuit:
-			clear(io_.out, len(rows))
+			sc.done()
 			return pickAction{Quit: true}, nil
 		case keyNew:
-			clear(io_.out, len(rows))
+			sc.done()
 			p, err := promptNewProject(io_, rd, root)
 			if err == nil && p.Path != "" {
 				return pickAction{Project: p}, nil
 			}
+			// 输入提示自己打了两行（前导换行 + 提示行）。不记上的话
+			// 下一帧会少往回移两行，擦不干净。
+			sc.external(2)
 		case keyOther:
-			clear(io_.out, len(rows))
+			sc.done()
 			p, err := promptRegisterPath(io_, rd, cfgDir, cwdHint)
 			if err == nil && p.Path != "" {
 				return pickAction{Project: p}, nil
 			}
 		case keyCloud:
-			clear(io_.out, len(rows))
+			sc.done()
 			return pickAction{Cloud: true}, nil
 		case keyForget:
 			if len(rows) > 0 && sel < len(rows) && !rows[sel].isAction {
@@ -131,7 +137,7 @@ func runPicker(io_ pickerIO, root, cfgDir, cwdHint string) (pickAction, error) {
 				continue
 			}
 			r := rows[sel]
-			clear(io_.out, len(rows))
+			sc.done()
 			if r.isAction { // 「登记当前目录」
 				if err := registerProject(cfgDir, cwdHint); err != nil {
 					return pickAction{}, err
@@ -143,7 +149,6 @@ func runPicker(io_ pickerIO, root, cfgDir, cwdHint string) (pickAction, error) {
 		if sel < 0 {
 			sel = 0
 		}
-		moveUp(io_.out, len(rows))
 	}
 }
 
@@ -172,15 +177,15 @@ func buildRows(items []project, cwdHint string) []row {
 	return rows
 }
 
-func render(w io.Writer, rows []row, sel int, root string) {
-	fmt.Fprintf(w, "%s%s  选择项目%s\r\n", clrLine, fgAccent, reset)
-	fmt.Fprintf(w, "%s%s  ↑/↓ 选择 · Enter 打开 · n 新建 · t 其他位置 · c 管理云端 · d 移出 · Esc/q 退出%s\r\n",
+func render(sc *screen, rows []row, sel int, root string) {
+	sc.line("%s%s  选择项目%s", clrLine, fgAccent, reset)
+	sc.line("%s%s  ↑/↓ 选择 · Enter 打开 · n 新建 · t 其他位置 · c 管理云端 · d 移出 · Esc/q 退出%s",
 		clrLine, fgDim, reset)
-	fmt.Fprintf(w, "%s%s  项目在云端运行并实时同步 · 把文件夹拖进「%s」即自动加入%s\r\n",
+	sc.line("%s%s  项目在云端运行并实时同步 · 把文件夹拖进「%s」即自动加入%s",
 		clrLine, fgDim, filepath.Base(root), reset)
-	fmt.Fprintf(w, "%s\r\n", clrLine)
+	sc.line("%s", clrLine)
 	if len(rows) == 0 {
-		fmt.Fprintf(w, "%s%s  还没有项目。按 n 新建，或把文件夹拖进桌面的「%s」。%s\r\n",
+		sc.line("%s%s  还没有项目。按 n 新建，或把文件夹拖进桌面的「%s」。%s",
 			clrLine, fgDim, filepath.Base(root), reset)
 		return
 	}
@@ -194,10 +199,10 @@ func render(w io.Writer, rows []row, sel int, root string) {
 			line += fmt.Sprintf("   %s%s%s", fgDim, r.hint, reset)
 		}
 		if i == sel {
-			fmt.Fprintf(w, "%s%s%s%s\r\n", clrLine, invert, padTo(line, 78), reset)
+			sc.line("%s%s%s%s", clrLine, invert, padTo(line, 78), reset)
 			continue
 		}
-		fmt.Fprintf(w, "%s%s\r\n", clrLine, line)
+		sc.line("%s%s", clrLine, line)
 	}
 }
 
@@ -227,15 +232,4 @@ func padTo(s string, width int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", width-w)
-}
-
-func headerLines() int { return 4 }
-
-func moveUp(w io.Writer, n int) { fmt.Fprintf(w, esc+"[%dA", n+headerLines()) }
-
-func clear(w io.Writer, n int) {
-	for i := 0; i < n+headerLines(); i++ {
-		fmt.Fprint(w, clrLine+"\r\n")
-	}
-	fmt.Fprintf(w, esc+"[%dA", n+headerLines())
 }
