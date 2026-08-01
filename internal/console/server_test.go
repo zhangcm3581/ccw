@@ -123,9 +123,17 @@ func TestDownloadPage(t *testing.T) {
 	s, f, _, _ := newTestServer(t)
 	body := get(t, s, "/download", map[string]string{"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}).Body.String()
 	for _, a := range f.arts {
-		if !strings.Contains(body, a.Filename) || !strings.Contains(body, a.SHA256) {
-			t.Errorf("下载表应含%s及其SHA256", a.Filename)
+		if !strings.Contains(body, a.Filename) {
+			t.Errorf("下载表应列出 %s", a.Filename)
 		}
+	}
+	// SHA256 不再逐行显示——那一列在页面上被截成 "88d167a6…"，既核对不了也读不懂。
+	// **校验能力必须还在**：改由 SHA256SUMS 承担，这条断言守的就是它没被一起简化掉。
+	if !strings.Contains(body, "/dist/SHA256SUMS") {
+		t.Error("必须提供 SHA256SUMS 供校验")
+	}
+	if !strings.Contains(body, "shasum -a 256 -c") {
+		t.Error("要给出校验命令，否则等于没提供校验")
 	}
 	if !strings.Contains(body, "windows/amd64") {
 		t.Error("Windows UA应得到windows/amd64推荐")
