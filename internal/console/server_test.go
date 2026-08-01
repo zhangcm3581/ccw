@@ -193,10 +193,17 @@ func TestDistServesOnlyRegistered(t *testing.T) {
 func TestConnectPageSafety(t *testing.T) {
 	s, _, _, _ := newTestServer(t)
 	body := get(t, s, "/connect", nil).Body.String()
-	for _, want := range []string{`autocomplete="off"`, "noscript", "publicIDOf", "密钥部分永不离开你的设备"} {
+	// 页面上那句隐私说明已按要求去掉（2026-08-01），但**机制必须还在**：
+	// publicIDOf 在本地切分，只有 "." 之前的公开 ID 会发出去。
+	// 这几条守的是行为，不是文案——文案可以改，行为不能悄悄变。
+	for _, want := range []string{`autocomplete="off"`, "noscript", "publicIDOf"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/connect缺少%q", want)
 		}
+	}
+	// 发出去的只能是 public_id；整串 CDK 绝不能进请求体。
+	if !strings.Contains(body, "public_id: pid") {
+		t.Error("/connect 必须只上传切分后的公开 ID")
 	}
 }
 
