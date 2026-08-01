@@ -19,6 +19,19 @@ RUN apt-get update \
 # （DEPLOY.md A7）也要吃到同一份配置。
 COPY deploy/tmux.conf /etc/tmux.conf
 
+# Claude Code 的状态行：显示本项目的内部额度。
+#
+# **放 managed-settings 而不是 ~/.claude/settings.json**：后者在 claude-shared
+# 卷里，卷已经初始化过之后镜像里的同名文件根本不会出现（空卷只在首次挂载时
+# 用镜像内容初始化）。/etc 不是卷，重建镜像即生效。
+# 代价：managed 优先级最高、用户无法覆盖自己的 statusLine——额度是这套系统的
+# 硬约束（整机共用一个上游账号），让它始终可见是有意的取舍。
+#
+# 内容由 worker-agent 每 30 秒写进容器的 /tmp/ccw-quota；文件不存在时
+# `cat` 静默失败，状态行为空而不是报错。
+RUN mkdir -p /etc/claude-code
+COPY deploy/claude-managed-settings.json /etc/claude-code/managed-settings.json
+
 RUN useradd -m -u 1001 -s /bin/bash claude
 
 # 以claude身份安装：官方脚本装进 $HOME/.local/bin，装成root的话

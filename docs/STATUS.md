@@ -159,10 +159,19 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   claude 进程改不了模式，客户端会如实提示这一点与怎么结束会话。
   客户端报上来的值经白名单收敛（`ParsePermMode`），认不出退回默认——
   它会成为容器里命令行的一部分，透传等于让客户端往 claude 的参数里塞任意东西。
-  额度显示挂在 **tmux 的 status-right**，由已有的 30 秒额度执行循环顺带写入
-  （那里本来就算好了 5h/7d 用量，不额外查库）。不让客户端画：客户端与终端之间
-  只有一条字节流，插进去会和 Claude 的 TUI 抢同一块屏幕。
-  `status-right-length` 必须设到 80——默认 40 会把 7d 那半截静默截断。
+  额度显示走 **Claude Code 的 statusLine**（2026-08-01 从 tmux status-right 改过来，
+  位置离视线更近）：worker-agent 把一行文本写进容器的 `/tmp/ccw-quota`，
+  Claude 按 `/etc/claude-code/managed-settings.json` 每 10 秒 `cat` 它，
+  渲染在自己 footer 的上一行。数据来自已有的 30 秒额度执行循环，不额外查库。
+  **配 managed-settings 而不是 `~/.claude/settings.json`**：后者在 claude-shared
+  卷里，卷初始化过之后镜像里的同名文件根本不会出现；`/etc` 不是卷，重建即生效。
+  代价是 managed 优先级最高、用户无法覆盖自己的 statusLine——额度是这套系统的
+  硬约束，让它始终可见是有意的取舍。
+  落点用 `/tmp` 而不是任何卷：它天然每容器一份（＝每项目一份），
+  而 `/home/claude` 是全部项目共享的卷，写在那里会串项目。
+  两处只有执行才发现的问题：文件不存在时 `cat` 退出码为 1（**新会话的头 30 秒
+  一定走这条路**），命令补了 `|| true`；写入不带尾部换行，否则 statusLine
+  会多渲染一条空行把界面往上顶。
   **新连接后最多 30 秒才出现**（等下一次循环），这是已知的粗糙处。
   code review 修了两处：① 状态栏原来用**项目限额**算百分比，而 `Over` 可能是
   **账号池**耗尽——那时项目自己用量很低，状态栏会同时显示"剩90%"与"受限"，

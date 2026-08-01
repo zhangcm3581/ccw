@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -92,5 +94,52 @@ func TestQuotaStatusExplainsWhyLimited(t *testing.T) {
 	g := quotaStatus(quota.Decision{Over: true, Reason: "something_new"}, 1000, 10000)
 	if strings.Contains(g, "受限·") {
 		t.Errorf("认不出的原因应只显示'受限'：%s", g)
+	}
+}
+
+// statusLine 渲染的是 Claude 自己的界面，用 ANSI 而不是 tmux 的 #[fg=] 格式。
+// 混用的表现是把 "#[fg=green]" 这几个字原样打在状态行上。
+func TestQuotaStatusUsesANSINotTmuxFormat(t *testing.T) {
+	got := quotaStatus(quota.Decision{Over: true, Reason: "pool_exhausted"}, 1000, 10000)
+	if strings.Contains(got, "#[") {
+		t.Errorf("不该再有 tmux 格式串（会被原样打出来）：%q", got)
+	}
+	if !strings.Contains(got, "\x1b[") {
+		t.Errorf("应使用 ANSI 转义上色：%q", got)
+	}
+	// 单行：statusLine 每个换行都会多渲染一行，把 Claude 的界面往上顶
+	if strings.ContainsAny(got, "\n\r") {
+		t.Errorf("状态行必须是单行：%q", got)
+	}
+}
+
+// managed-settings 里的命令在文件不存在时必须退出 0。
+// 新会话在第一次额度循环（≤30秒）之前一定没有这个文件——**每次都会走到**。
+func TestManagedSettingsStatusLineToleratesMissingFile(t *testing.T) {
+	b, err := os.ReadFile("../../deploy/claude-managed-settings.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		StatusLine struct {
+			Type            string `json:"type"`
+			Command         string `json:"command"`
+			RefreshInterval int    `json:"refreshInterval"`
+		} `json:"statusLine"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatalf("managed-settings 不是合法 JSON：%v", err)
+	}
+	if cfg.StatusLine.Type != "command" {
+		t.Errorf("type 应为 command，got %q", cfg.StatusLine.Type)
+	}
+	if !strings.Contains(cfg.StatusLine.Command, quotaFile) {
+		t.Errorf("命令应读 %s，got %q", quotaFile, cfg.StatusLine.Command)
+	}
+	if !strings.Contains(cfg.StatusLine.Command, "|| true") {
+		t.Error("文件不存在时必须退出 0；新会话的头 30 秒一定没有这个文件")
+	}
+	if cfg.StatusLine.RefreshInterval <= 0 {
+		t.Error("要定时刷新，否则空闲时额度永远停在打开那一刻")
 	}
 }

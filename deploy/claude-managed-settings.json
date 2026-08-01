@@ -1,0 +1,7 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "cat /tmp/ccw-quota 2>/dev/null || true",
+    "refreshInterval": 10
+  }
+}
