@@ -117,6 +117,19 @@ func EnsureSessionCmds(containerName, projectID, ws, term string, mode PermMode)
 	}
 }
 
+// BypassIneffectiveCmd构造一条 tmux 提示：请求了 bypass 模式但会话已存在。
+//
+// **为什么不由客户端打印**：客户端写完 stderr 之后终端立刻进 raw mode，
+// Claude 的 fullscreen 渲染进 alt screen 把整屏清掉——那句提示活不过一秒，
+// 等于没说（2026-08-01 review 发现）。tmux 的 display-message 显示在状态行上，
+// 由 tmux 自己维持，不会被应用清掉。
+func BypassIneffectiveCmd(containerName, projectID, ws string) []string {
+	socket, session := Names(projectID, ws)
+	return []string{"docker", "exec", containerName,
+		"tmux", "-L", socket, "display-message", "-t", session, "-d", "6000",
+		"已有会话在运行，本次仍是原来的权限模式；要用 -d 请先 kill-session 再重连"}
+}
+
 // AttachCmd必须带-t（审查§2.1）：容器内不分配TTY时tmux attach会直接失败；
 // 宿主机侧的TTY由creack/pty提供给docker CLI进程，两者缺一不可。
 func AttachCmd(containerName, projectID, ws, term string) []string {

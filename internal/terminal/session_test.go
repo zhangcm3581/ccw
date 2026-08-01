@@ -164,3 +164,25 @@ func TestParsePermModeIsWhitelist(t *testing.T) {
 		}
 	}
 }
+
+// 会话已存在时的提示必须走 tmux——客户端打印会被 Claude 的 alt screen 清掉。
+func TestBypassIneffectiveNoticeGoesThroughTmux(t *testing.T) {
+	got := strings.Join(BypassIneffectiveCmd("ccw-a", "pid", "code-3f9a1b7c"), " ")
+	if !strings.Contains(got, "display-message") {
+		t.Errorf("应走 tmux display-message：%s", got)
+	}
+	if !strings.Contains(got, "-L pid") {
+		t.Errorf("socket 必须是 project id，否则发到别的 tmux server：%s", got)
+	}
+	if !strings.Contains(got, "-t code-3f9a1b7c") {
+		t.Errorf("要发给本工作区的会话：%s", got)
+	}
+	// 必须说清楚怎么办，而不是只说"没生效"
+	if !strings.Contains(got, "kill-session") {
+		t.Errorf("提示要给出下一步：%s", got)
+	}
+	// 绝不能顺手把权限参数带进来——这条命令只是提示
+	if strings.Contains(got, BypassFlag) {
+		t.Errorf("提示命令不该带权限参数：%s", got)
+	}
+}

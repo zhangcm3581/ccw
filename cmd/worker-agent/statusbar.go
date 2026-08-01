@@ -33,9 +33,31 @@ func quotaStatus(d quota.Decision, fiveHourLimit, sevenDayLimit int64) string {
 	b.WriteString("  ")
 	b.WriteString(pctLeft("7d", d.SevenDayUsed, sevenDayLimit))
 	if d.Over {
-		b.WriteString("  #[fg=red,bold]受限#[default]")
+		b.WriteString("  #[fg=red,bold]受限")
+		if why := overReason(d.Reason); why != "" {
+			b.WriteString("·" + why)
+		}
+		b.WriteString("#[default]")
 	}
 	return b.String()
+}
+
+// overReason把受限原因翻成一个词。
+//
+// **必须显示原因**：账号池耗尽时项目自己的用量可能还很低，只写"受限"的话
+// 状态栏会同时说"剩90%"和"受限"，看的人无从理解——那两个数字是项目级的，
+// 而拦住他的是整机共用的那个上游账号（设计§7.3：一台机器只授权一次，
+// 全部项目共用同一个账号的额度）。
+func overReason(reason string) string {
+	switch reason {
+	case "pool_exhausted":
+		return "账号池"
+	case "five_hour_limit":
+		return "5h"
+	case "seven_day_limit":
+		return "7d"
+	}
+	return ""
 }
 
 // pctLeft渲染一段"标签 ▓▓▓░░ 剩NN%"。

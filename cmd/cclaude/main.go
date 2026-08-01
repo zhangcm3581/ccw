@@ -127,10 +127,9 @@ func main() {
 
 		if *bypass && !bypassNoticeShown {
 			bypassNoticeShown = true
-			fmt.Fprintln(os.Stderr,
-				"已请求 Bypass Permissions 模式（跳过权限确认）。\n"+
-					"注意：它只在**新建**云端会话时生效。该项目的会话若已在运行，本次仍沿用它原来的模式——\n"+
-					"要换模式，在终端里按 Ctrl-b 松开再按 : 输入 kill-session 结束会话，然后重新运行。")
+			// 只说一句：详细提示由服务端在 tmux 状态行里给。
+			// 这里打的东西会被 Claude 的 alt screen 立刻清掉，不能指望它被看到。
+			fmt.Fprintln(os.Stderr, "已请求 Bypass Permissions 模式（仅在新建云端会话时生效）")
 		}
 
 		// 正常：后台同步 + 前台终端。任一返回（断开）后回到循环重连。

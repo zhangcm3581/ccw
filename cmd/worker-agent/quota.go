@@ -19,16 +19,19 @@ type quotaLookup interface {
 // 限额组装走quota.Assemble——与control-api同一个函数、同一个数据源（accounts表）。
 // 两处各写一份的后果是门户显示"未超额"而worker已经降级为cleanup，见Assemble的注释。
 func checkProject(ctx context.Context, q quotaLookup, svc quota.Service, projectID string,
-	margins quota.Margins, now time.Time) (quota.Decision, error) {
+	margins quota.Margins, now time.Time) (quota.Decision, quota.Limits, error) {
 	p, err := q.GetProjectByID(ctx, projectID)
 	if err != nil {
-		return quota.Decision{}, err
+		return quota.Decision{}, quota.Limits{}, err
 	}
 	lim, err := quota.Assemble(ctx, q, p.AccountID, p.FiveHourLimit, p.SevenDayLimit, margins)
 	if err != nil {
-		return quota.Decision{}, err
+		return quota.Decision{}, quota.Limits{}, err
 	}
-	return svc.Check(ctx, projectID, p.AccountID, lim, now)
+	// **把限额一并返回**：调用方（状态栏）需要它才能算百分比，
+	// 而它已经在这里组装好了——再查一次库既多余，也可能与本次判定用的值不一致。
+	d, cerr := svc.Check(ctx, projectID, p.AccountID, lim, now)
+	return d, lim, cerr
 }
 
 // syncModeFor决定同步会话的模式：超额降级为cleanup（只许下载、删除、缩小）。
@@ -43,7 +46,7 @@ func checkProject(ctx context.Context, q quotaLookup, svc quota.Service, project
 //     宁可让客户暂时传不上去，也不要在闸门失灵时敞开写入。
 func syncModeFor(ctx context.Context, q quotaLookup, svc quota.Service, projectID string,
 	margins quota.Margins, now time.Time, logf func(string, ...any)) string {
-	d, err := checkProject(ctx, q, svc, projectID, margins, now)
+	d, _, err := checkProject(ctx, q, svc, projectID, margins, now)
 	if err != nil {
 		logf("额度查询失败，同步降级为cleanup（项目%s）：%v", projectID, err)
 		return "cleanup"

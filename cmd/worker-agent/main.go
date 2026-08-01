@@ -98,6 +98,13 @@ func main() {
 					return nil, err
 				}
 			}
+		} else if mode == terminal.PermBypass {
+			// 会话已经在跑：-d 这次不生效。**必须让人看见**——客户端那句提示
+			// 会被 Claude 的 alt screen 立刻清掉，而 tmux 的状态行不会。
+			n := terminal.BypassIneffectiveCmd(container, projectID, ws)
+			if err := exec.Command(n[0], n[1:]...).Run(); err != nil {
+				logln("bypass 提示发送失败 项目%s：%v", projectID, err)
+			}
 		}
 		args := terminal.AttachCmd(container, projectID, ws, termName)
 		cmd := exec.Command(args[0], args[1:]...)
@@ -177,7 +184,7 @@ func main() {
 					// 只遍历有活跃连接的项目——没有连接就没有东西可关。
 					// （采集必须遍历全部项目，那是另一个循环，见下方runUsageLoop。）
 					for _, pid := range registry.ActiveProjects() {
-						d, qerr := checkProject(ctx, st, quotaSvc, pid, cfg.PoolMargins, time.Now())
+						d, lim, qerr := checkProject(ctx, st, quotaSvc, pid, cfg.PoolMargins, time.Now())
 						if qerr != nil {
 							// 查不到额度就不敢断言"没超"，但也不能凭空关掉正在用的终端：
 							// 记日志让人看得见，实际拦截交给同步侧的fail-closed降级。
@@ -186,11 +193,9 @@ func main() {
 						}
 						// 额度写进 tmux 状态栏：数据这里本来就有，不额外查库。
 						// 失败只记日志——状态栏是锦上添花，不能拖累"超额就关终端"。
-						if p, perr := st.GetProjectByID(ctx, pid); perr == nil {
-							if serr := setStatusBar(ctx, containerFor(pid),
-								pid, quotaStatus(d, p.FiveHourLimit, p.SevenDayLimit)); serr != nil {
-								logln("状态栏更新失败 项目%s：%v", pid, serr)
-							}
+						if serr := setStatusBar(ctx, containerFor(pid), pid,
+							quotaStatus(d, lim.FiveHour, lim.SevenDay)); serr != nil {
+							logln("状态栏更新失败 项目%s：%v", pid, serr)
 						}
 						if d.Over {
 							registry.CloseProject(pid)

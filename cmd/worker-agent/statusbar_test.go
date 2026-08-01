@@ -63,3 +63,34 @@ func TestQuotaStatusBarWidthIsStable(t *testing.T) {
 		}
 	}
 }
+
+// 账号池耗尽时项目自己的用量可能还很低——只写"受限"会让状态栏同时说
+// "剩90%"和"受限"，看的人无从理解。必须写清楚是被什么拦的。
+func TestQuotaStatusExplainsWhyLimited(t *testing.T) {
+	// 项目用量很低，但账号池耗尽
+	got := quotaStatus(quota.Decision{
+		Over: true, Reason: "pool_exhausted", FiveHourUsed: 100, SevenDayUsed: 100,
+	}, 1000, 10000)
+	if !strings.Contains(got, "剩90%") {
+		t.Errorf("项目级百分比应如实显示：%s", got)
+	}
+	if !strings.Contains(got, "账号池") {
+		t.Errorf("必须说明是账号池拦的，否则和'剩90%%'自相矛盾：%s", got)
+	}
+
+	for reason, want := range map[string]string{
+		"five_hour_limit": "5h",
+		"seven_day_limit": "7d",
+		"pool_exhausted":  "账号池",
+	} {
+		g := quotaStatus(quota.Decision{Over: true, Reason: reason}, 1000, 10000)
+		if !strings.Contains(g, "受限·"+want) {
+			t.Errorf("reason=%q 应显示 受限·%s，got %s", reason, want, g)
+		}
+	}
+	// 认不出的原因不该拼出一个空的"受限·"
+	g := quotaStatus(quota.Decision{Over: true, Reason: "something_new"}, 1000, 10000)
+	if strings.Contains(g, "受限·") {
+		t.Errorf("认不出的原因应只显示'受限'：%s", g)
+	}
+}

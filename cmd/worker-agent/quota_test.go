@@ -62,7 +62,7 @@ func TestSyncModeCleanupWhenAccountPoolExhausted(t *testing.T) {
 	q := fakeQuotaLookup{p: testProject(), pool5: 5000, pool7: 50000}
 	// 项目用量10远低于自己的1000限额，但池用量5000已经等于池上限。
 	svc := quota.Service{Reader: fakeUsage{window: 10, pool: 5000}}
-	d, err := checkProject(context.Background(), q, svc, "pid", quota.Margins{}, time.Now())
+	d, _, err := checkProject(context.Background(), q, svc, "pid", quota.Margins{}, time.Now())
 	if err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
