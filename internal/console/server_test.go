@@ -302,3 +302,32 @@ func TestHealthz(t *testing.T) {
 		t.Errorf("healthz: %d %q", w.Code, w.Body.String())
 	}
 }
+
+// favicon 必须内联（data URI），不能是外链。
+// 公开站有一条"不引用任何外部资源"的规矩，一个 <link rel=icon href=http...>
+// 就会破掉它，而且那类断链平时不会报错、只是图标不见了。
+func TestFaviconIsInline(t *testing.T) {
+	s, _, _, _ := newTestServer(t)
+	body := get(t, s, "/", nil).Body.String()
+	if !strings.Contains(body, `rel="icon" href="data:image/svg+xml,`) {
+		t.Error("favicon 应内联为 data URI")
+	}
+}
+
+// 首页介绍的必须是**已经实现**的能力。这几条各自对应一处真实实现，
+// 少了任何一条都说明介绍与产品脱节了。
+func TestHomeDescribesShippedCapabilities(t *testing.T) {
+	s, _, _, _ := newTestServer(t)
+	body := get(t, s, "/", nil).Body.String()
+	for _, want := range []string{
+		"tmux", // 断线不中断
+		"冲突副本", // 三方同步的冲突处理
+		"同步目录", // 桌面同步目录与项目选择器
+		"云端",   // 云端副本管理
+		".env", // 排除清单（安全边界）
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("首页应介绍到 %q", want)
+		}
+	}
+}

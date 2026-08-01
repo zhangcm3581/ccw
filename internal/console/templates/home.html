@@ -1,17 +1,61 @@
 {{define "content"}}
-<h1>云端 Claude Code 工作空间<br>断线不中断，本地目录实时同步</h1>
-<p class="lead">Claude Code 跑在云端服务器的 tmux 里：合上笔记本、换个网络，回来会话还在原处。
-本地项目目录与云端 workspace 双向同步，本地编辑器照常用。</p>
+<h1>让 Claude Code 跑在云端<br>合上笔记本，它还在干活</h1>
+<p class="lead">Claude Code 跑在服务器的 tmux 会话里，本地只留一个 <code>cclaude</code> 客户端。
+断网、休眠、换设备都不打断正在运行的任务；本地项目目录与云端实时双向同步，你的编辑器照常用。</p>
 
 <p><a class="btn" href="/connect">开始使用</a></p>
 
-<h2>它解决什么</h2>
+<h2>怎么工作</h2>
+<ol class="steps">
+  <li><strong>一条命令装好客户端</strong><br>
+    <span class="muted">macOS / Linux / Windows 都是一行；装完 <code>cclaude</code> 全局可用。</span></li>
+  <li><strong>选一个项目</strong><br>
+    <span class="muted">桌面上有个「cclaude 同步目录」，文件夹拖进去即成为项目；
+    已有的工程也可以就地登记，文件一个都不搬。</span></li>
+  <li><strong>直接开始对话</strong><br>
+    <span class="muted">前台是云端的 Claude Code 终端，后台每 2 秒同步一轮当前项目目录。</span></li>
+</ol>
+
+<h2>特性</h2>
 <div class="grid">
-  <div class="card"><h3>断线不中断</h3><p>会话保活在云端 tmux 里；网络抖动、休眠、换设备都不打断正在运行的任务，重连即回到现场。</p></div>
-  <div class="card"><h3>本地目录双向同步</h3><p>每2秒一轮清单同步：本地改动上云，云端产出回落本地。冲突绝不静默覆盖，自动生成冲突副本。</p></div>
-  <div class="card"><h3>项目相互隔离</h3><p>每个项目独立容器、独立 workspace 与磁盘配额；CDK 只能访问自己的项目。</p></div>
-  <div class="card"><h3>内部额度闸门</h3><p>按项目计量（内部额度单位），单个项目超限会被降级限制，避免挤占同节点其他项目。</p></div>
+  <div class="card">
+    <h3>断线不中断</h3>
+    <p>会话保活在云端 tmux 里。网络抖动、合盖休眠、换一台机器，正在跑的任务都不受影响，
+      重新连上就回到原来的现场。</p>
+  </div>
+  <div class="card">
+    <h3>本地目录双向同步</h3>
+    <p>每 2 秒一轮清单比对：本地改动上云，云端产出回落本地。
+      两端同时改同一个文件时<strong>绝不静默覆盖</strong>，云端版本另存为冲突副本。</p>
+  </div>
+  <div class="card">
+    <h3>按目录隔离</h3>
+    <p>每个本地目录在云端各有一份独立工作区，互不可见。
+      在 <code>~/code</code> 与 <code>~/work</code> 里跑是两件事，不会串。</p>
+  </div>
+  <div class="card">
+    <h3>项目相互隔离</h3>
+    <p>每个项目独立容器、独立 workspace 与磁盘配额；一张 CDK 只能访问它自己的项目，
+      看不到也碰不到别人的。</p>
+  </div>
+  <div class="card">
+    <h3>云端占用自己管</h3>
+    <p>客户端里能看到云端每份副本的大小，勾掉不再用的就释放空间——
+      删的只是云端副本，本地文件一个不动。</p>
+  </div>
+  <div class="card">
+    <h3>额度始终可见</h3>
+    <p>终端底部常驻一行：上下文用量、5 小时与一周窗口的剩余比例，以及到下次重置还有多久。
+      不用猜还能干多少。</p>
+  </div>
 </div>
 
-<div class="notice">凭据类文件（<code>.env*</code>、<code>.ssh/</code> 等）与 <code>.git/</code>、<code>node_modules/</code> 默认不参与同步；符号链接不同步。</div>
+<h2>它不做什么</h2>
+<div class="notice">
+  <b>凭据类文件不参与同步</b>——<code>.env*</code>、<code>.ssh/</code>、<code>.aws/</code> 等一律排除，
+  <code>.git/</code>、<code>node_modules/</code> 与符号链接同样不同步。<br>
+  这是硬边界，不是可以关掉的选项。
+</div>
+
+<p style="margin-top:34px"><a class="btn" href="/connect">拿到 CDK 了？开始使用</a></p>
 {{end}}
