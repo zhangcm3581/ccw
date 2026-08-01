@@ -554,3 +554,45 @@ func TestHealthcheckProbesViaLoopback(t *testing.T) {
 		t.Error("失败现场应包含一次公网探测作为对照")
 	}
 }
+
+// compose-up 失败时必须把构建输出打进日志。
+//
+// 2026-08-01 真机：只看到 "Image ccw-control-api Building"——那是 docker compose
+// 进度输出的**第一行**，而 run() 的错误只带得走第一行。真正的原因在末尾，
+// 于是整条错误信息什么都没说明（与 healthcheck 那次的 `000` 同一个毛病）。
+func TestComposeUpLogsBuildOutputOnFailure(t *testing.T) {
+	buildLog := "Image ccw-control-api Building\n" +
+		strings.Repeat("...progress...\n", 50) +
+		"ERROR: failed to solve: process \"/bin/sh -c go build\" did not complete successfully: exit code: 1"
+	r := &scriptRunner{rules: []rule{
+		{contains: "compose -p", res: sshexec.Result{Stdout: buildLog, ExitCode: 1}},
+	}}
+	var logs []string
+	logf := func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+
+	err := stepByName(BootstrapSteps(baseDeps(r, &fakeDNS{})), "compose-up").Run(context.Background(), logf)
+	if err == nil {
+		t.Fatal("构建失败时步骤应失败")
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "failed to solve") {
+		t.Errorf("真正的错误必须进日志：\n%s", joined)
+	}
+	// 只取末尾，不要把 50 行进度全倒出来
+	if strings.Count(joined, "...progress...") > 40 {
+		t.Error("应只保留末尾若干行，而不是整段构建日志")
+	}
+}
+
+func TestTailLines(t *testing.T) {
+	s := "a\nb\nc\nd\ne"
+	if got := tailLines(s, 2); got != "d\ne" {
+		t.Errorf("tailLines = %q", got)
+	}
+	if got := tailLines(s, 99); got != s {
+		t.Errorf("不足n行应原样返回，got %q", got)
+	}
+	if got := tailLines("", 3); got != "" {
+		t.Errorf("空输入应为空，got %q", got)
+	}
+}

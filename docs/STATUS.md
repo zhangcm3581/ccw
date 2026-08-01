@@ -164,6 +164,11 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   真实额度与真实重置时间，比本仓库那套未校准的内部估算有用得多，而且不经过
   worker-agent——少一条要维护的链路，也少 30 秒的滞后。本仓库的内部额度闸门
   **仍在服务端执行**，只是不在这行显示。
+  **上一版有个 Dockerfile bug 导致整次部署失败**（2026-08-01 真机）：加构建阶段时
+  把 `ARG UBUNTU_TAG=24.04` 挤到了第一个 `FROM` 之后，而只有第一个 `FROM` 之前的
+  ARG 才是全局的——于是 `FROM ubuntu:${UBUNTU_TAG}` 解析成 `ubuntu:`，
+  报 "failed to parse stage name"。**不构建根本看不出来**，
+  `internal/deploy/dockerfile_test.go` 现在扫全部 Dockerfile 守住这条。
   渲染器是 `cmd/ccw-statusline`（静态二进制，编进项目镜像）：四段——模型 /
   context 已用 / 5h 剩余 + 倒计时 / 7d 剩余 + 倒计时，1/8 格精度的渐进进度条。
   **写成 Go 而不是 shell**：这几段逻辑（子格填充、倒计时格式、缺数据降级）

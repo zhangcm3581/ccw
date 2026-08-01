@@ -107,6 +107,36 @@ func run(ctx context.Context, d Deps, cmd string) (string, error) {
 	return res.Stdout, nil
 }
 
+// runCombined执行命令并返回**合并后的输出**（stdout+stderr）。
+//
+// run() 的错误只带得走第一行，而构建这类命令的真正原因在输出末尾——
+// docker compose 的第一行永远是 "Image xxx Building" 之类的进度，
+// 拿它当错误信息等于什么都没说（2026-08-01 真机上就卡在这里，
+// 与 healthcheck 那次的 `000` 是同一个毛病）。
+func runCombined(ctx context.Context, d Deps, cmd string) (string, error) {
+	res, err := d.Exec.Run(ctx, cmd)
+	if err != nil {
+		return "", err
+	}
+	out := res.Stdout
+	if res.Stderr != "" {
+		out += "\n" + res.Stderr
+	}
+	if res.ExitCode != 0 {
+		return out, &pipeline.ExitError{Code: res.ExitCode, Err: fmt.Errorf("退出码%d", res.ExitCode)}
+	}
+	return out, nil
+}
+
+// tailLines取末尾n行。构建失败的原因总在最后。
+func tailLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // ok执行命令并只看退出码（precheck用）。
 func ok(ctx context.Context, d Deps, cmd string) bool {
 	res, err := d.Exec.Run(ctx, cmd)
@@ -397,10 +427,15 @@ func stepComposeUp(d Deps) pipeline.Step {
 		Name: "compose-up",
 		Run: func(ctx context.Context, log pipeline.Logf) error {
 			log("构建镜像并启动（首次需要几分钟）")
-			_, err := run(ctx, d, fmt.Sprintf("cd %s && %sdocker compose -p %s up -d --build",
+			out, err := runCombined(ctx, d, fmt.Sprintf("cd %s && %sdocker compose -p %s up -d --build 2>&1",
 				shellQuote(d.deployDir()), d.Sudo, shellQuote(d.ComposeProjectName)))
 			if err != nil {
-				return err
+				// **先把构建输出打出来再返回错误**：真正的原因在末尾，
+				// 而错误本身只带得走一行。40 行足够覆盖一次 docker build 的失败段。
+				if s := strings.TrimSpace(out); s != "" {
+					log("构建输出（末尾 40 行）：\n%s", tailLines(s, 40))
+				}
+				return fmt.Errorf("compose up 失败（构建输出见上方日志）: %w", err)
 			}
 			// 回收build cache（§7.6：可立即回收2–5 GiB）
 			if _, perr := run(ctx, d, d.Sudo+"docker builder prune -f"); perr != nil {
