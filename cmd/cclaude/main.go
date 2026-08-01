@@ -89,7 +89,7 @@ func main() {
 	// resolveWorkDir 决定这次要同步哪个项目——已经在某个项目里就直接用它，
 	// 否则弹选择器。--dir 显式指定时一切照旧，脚本与 CI 不受影响。
 	cwd, err := resolveWorkDir(dir, *dirFlag, func() error {
-		return openCloudManager(ctx, c, sessionToken)
+		return openCloudManager(ctx, c, sessionToken, dir)
 	})
 	if err != nil {
 		if err == errUserQuit {

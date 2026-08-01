@@ -54,7 +54,7 @@ func sample() *fakeCloud {
 func TestCloudDeletesOnlyMarked(t *testing.T) {
 	f := sample()
 	io_, out := cloudIO(" " + kDown + kDown + " " + kEnt)
-	if err := runCloudManager(io_, f, "code-9f8e7d6c", 1013, 16106127360); err != nil {
+	if err := runCloudManager(io_, f, "code-9f8e7d6c", 1013, 16106127360, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.purged) != 2 {
@@ -71,7 +71,7 @@ func TestCloudDeletesOnlyMarked(t *testing.T) {
 func TestCloudEnterWithoutMarksDeletesNothing(t *testing.T) {
 	f := sample()
 	io_, _ := cloudIO(kEnt + kEnt + "q")
-	if err := runCloudManager(io_, f, "", 0, 1); err != nil {
+	if err := runCloudManager(io_, f, "", 0, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.purged) != 0 {
@@ -83,7 +83,7 @@ func TestCloudQuitDeletesNothing(t *testing.T) {
 	for _, k := range []string{"q", "\x1b"} {
 		f := sample()
 		io_, _ := cloudIO(" " + k) // 标记了但直接退出
-		if err := runCloudManager(io_, f, "", 0, 1); err != nil {
+		if err := runCloudManager(io_, f, "", 0, 1, nil); err != nil {
 			t.Fatal(err)
 		}
 		if len(f.purged) != 0 {
@@ -97,7 +97,7 @@ func TestCloudReportsPartialFailure(t *testing.T) {
 	f := sample()
 	f.failOn = "test-1a2b3c4d"
 	io_, out := cloudIO(" " + kDown + kDown + " " + kEnt)
-	if err := runCloudManager(io_, f, "", 0, 1); err != nil {
+	if err := runCloudManager(io_, f, "", 0, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	s := out.String()
@@ -113,7 +113,7 @@ func TestCloudReportsPartialFailure(t *testing.T) {
 func TestCloudMarksCurrentWorkspace(t *testing.T) {
 	f := sample()
 	io_, out := cloudIO("q")
-	runCloudManager(io_, f, "code-9f8e7d6c", 0, 1)
+	runCloudManager(io_, f, "code-9f8e7d6c", 0, 1, nil)
 	if !strings.Contains(out.String(), "（当前）") {
 		t.Error("当前副本应有标记")
 	}
@@ -134,3 +134,55 @@ func TestHumanBytes(t *testing.T) {
 }
 
 var _ = bufio.NewReader
+
+// 名字去掉哈希后缀显示；但删除用的仍是**真实的键**——显示与操作对象错开
+// 就会删错东西。
+func TestCloudShowsFriendlyNameButPurgesRealKey(t *testing.T) {
+	f := &fakeCloud{list: []syncpkg.WorkspaceInfo{
+		{WS: "og-vault-94137d17", Bytes: 143360},
+		{WS: "test01-f32221cc", Bytes: 4},
+	}}
+	io_, out := cloudIO(" " + kEnt)
+	if err := runCloudManager(io_, f, "", 143364, 16106127360, nil); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "og-vault ") && !strings.Contains(s, "og-vault  ") {
+		t.Errorf("应显示去掉哈希的名字：%s", s)
+	}
+	if strings.Contains(s, "og-vault-94137d17") {
+		t.Errorf("不该再显示哈希后缀：%s", s)
+	}
+	// 删的必须是真实的键
+	if len(f.purged) != 1 || f.purged[0] != "og-vault-94137d17" {
+		t.Errorf("删除必须用真实键，got %v", f.purged)
+	}
+}
+
+// 撞名时保留哈希——否则两行一模一样，没法判断该删哪个。
+func TestCloudKeepsHashWhenNamesCollide(t *testing.T) {
+	f := &fakeCloud{list: []syncpkg.WorkspaceInfo{
+		{WS: "code-11111111", Bytes: 100},
+		{WS: "code-22222222", Bytes: 200},
+	}}
+	io_, out := cloudIO("q")
+	runCloudManager(io_, f, "", 300, 1000, nil)
+	s := out.String()
+	for _, want := range []string{"code-11111111", "code-22222222"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("撞名时应保留哈希以便分辨，缺 %q：%s", want, s)
+		}
+	}
+}
+
+// 能对上本地目录时显示出来——决定删哪个时这比名字更有用。
+func TestCloudShowsLocalPathWhenKnown(t *testing.T) {
+	f := &fakeCloud{list: []syncpkg.WorkspaceInfo{{WS: "og-vault-94137d17", Bytes: 1}}}
+	io_, out := cloudIO("q")
+	runCloudManager(io_, f, "", 1, 100, map[string]string{
+		"og-vault-94137d17": `C:\Users\x\Desktop\cclaude 同步目录\og-vault`,
+	})
+	if !strings.Contains(out.String(), `\og-vault`) {
+		t.Errorf("应显示对应的本地目录：%s", out.String())
+	}
+}

@@ -71,3 +71,43 @@ func ValidWorkspace(ws string) bool {
 	// 缩小服务端要考虑的输入空间。
 	return !strings.Contains(ws, "--")
 }
+
+// wsHashSuffix匹配键尾部的8位哈希。
+var wsHashSuffix = regexp.MustCompile(`-[0-9a-f]{8}$`)
+
+// DisplayName把工作区键还原成可读的文件夹名：og-vault-94137d17 → og-vault。
+//
+// 哈希是给机器用的（区分 ~/a/code 与 ~/b/code），摆在界面上只是噪音。
+//
+// **只在唯一时才省**：调用方必须用 DisplayNames 处理整批，因为去掉哈希之后
+// 两个同名文件夹会变得完全一样——而这块界面是用来选删除对象的，
+// 分不清就等于让人蒙着眼睛删。
+//
+// 键只剩哈希（本地目录名全是非 ASCII 字符时会这样）时原样返回：
+// 还原出来的 "ws" 什么也没说明。
+func DisplayName(ws string) string {
+	if strings.HasPrefix(ws, "ws-") && wsHashSuffix.MatchString(ws) && len(ws) == 11 {
+		return ws
+	}
+	if s := wsHashSuffix.ReplaceAllString(ws, ""); s != "" {
+		return s
+	}
+	return ws
+}
+
+// DisplayNames给一批键算显示名：能省则省，**重名的保留哈希**。
+func DisplayNames(keys []string) map[string]string {
+	count := map[string]int{}
+	for _, k := range keys {
+		count[DisplayName(k)]++
+	}
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		if n := DisplayName(k); count[n] == 1 {
+			out[k] = n
+		} else {
+			out[k] = k // 撞名了：留着哈希，否则无法分辨该删哪个
+		}
+	}
+	return out
+}

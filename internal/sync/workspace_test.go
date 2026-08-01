@@ -158,3 +158,50 @@ func TestSameNameDifferentWorkspaces(t *testing.T) {
 		}
 	}
 }
+
+func TestDisplayNameStripsHash(t *testing.T) {
+	cases := map[string]string{
+		"og-vault-94137d17":     "og-vault",
+		"test01-f32221cc":       "test01",
+		"pm-test-ec0ef851":      "pm-test",
+		"ws-1a2b3c4d":           "ws-1a2b3c4d", // 只剩哈希：还原出 "ws" 毫无意义
+		"no-hash-here":          "no-hash-here",
+		"abc-12345678-aabbccdd": "abc-12345678",
+	}
+	for in, want := range cases {
+		if got := DisplayName(in); got != want {
+			t.Errorf("DisplayName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// **重名必须保留哈希**：这块界面是用来选删除对象的，两行长得一模一样
+// 就等于让人蒙着眼睛删。
+func TestDisplayNamesKeepsHashOnCollision(t *testing.T) {
+	keys := []string{
+		"code-11111111", // ~/a/code
+		"code-22222222", // ~/b/code —— 同名不同路径
+		"vault-33333333",
+	}
+	got := DisplayNames(keys)
+	if got["code-11111111"] != "code-11111111" || got["code-22222222"] != "code-22222222" {
+		t.Errorf("撞名时必须保留哈希，got %v", got)
+	}
+	if got["vault-33333333"] != "vault" {
+		t.Errorf("不撞名的应省掉哈希，got %q", got["vault-33333333"])
+	}
+}
+
+// 显示名与真实键必须一一对应——删除用的是键，显示错了会删错对象。
+func TestDisplayNamesCoversEveryKey(t *testing.T) {
+	keys := []string{"a-11111111", "b-22222222", "a-33333333"}
+	got := DisplayNames(keys)
+	if len(got) != len(keys) {
+		t.Fatalf("每个键都要有显示名，got %v", got)
+	}
+	for _, k := range keys {
+		if got[k] == "" {
+			t.Errorf("%q 没有显示名", k)
+		}
+	}
+}
