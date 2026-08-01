@@ -87,11 +87,11 @@ func main() {
 		return "ccw-" + projectID
 	}
 
-	startPTY := func(projectID, ws, termName string) (io.ReadWriteCloser, error) {
+	startPTY := func(projectID, ws, termName string, mode terminal.PermMode) (io.ReadWriteCloser, error) {
 		container := containerFor(projectID)
 		// 附着前先准备会话：has-session失败才建目录并new-session -d（审计§4.1）。
 		// 会话名与工作目录都跟着工作区走，与同步的落盘位置保持一致。
-		cmds := terminal.EnsureSessionCmds(container, projectID, ws, termName)
+		cmds := terminal.EnsureSessionCmds(container, projectID, ws, termName, mode)
 		if err := exec.Command(cmds[0][0], cmds[0][1:]...).Run(); err != nil {
 			for _, c := range cmds[1:] {
 				if err := exec.Command(c[0], c[1:]...).Run(); err != nil {
@@ -183,6 +183,14 @@ func main() {
 							// 记日志让人看得见，实际拦截交给同步侧的fail-closed降级。
 							logln("额度执行：项目%s额度查询失败，本轮不处理：%v", pid, qerr)
 							continue
+						}
+						// 额度写进 tmux 状态栏：数据这里本来就有，不额外查库。
+						// 失败只记日志——状态栏是锦上添花，不能拖累"超额就关终端"。
+						if p, perr := st.GetProjectByID(ctx, pid); perr == nil {
+							if serr := setStatusBar(ctx, containerFor(pid),
+								pid, quotaStatus(d, p.FiveHourLimit, p.SevenDayLimit)); serr != nil {
+								logln("状态栏更新失败 项目%s：%v", pid, serr)
+							}
 						}
 						if d.Over {
 							registry.CloseProject(pid)

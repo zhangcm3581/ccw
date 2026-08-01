@@ -37,7 +37,7 @@ type ctrlMsg struct {
 // 断开只关闭PTY附着进程与WebSocket，绝不kill tmux会话。
 // 调用方在调用本函数前必须已实时复查项目额度（审查§3.1：令牌不豁免其后发生的超额）。
 func Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, key []byte,
-	start func(projectID, ws, term string) (io.ReadWriteCloser, error)) {
+	start func(projectID, ws, term string, mode PermMode) (io.ReadWriteCloser, error)) {
 	// 令牌只从Authorization头读取（2分钟短期令牌，可重连）；
 	// URL查询参数会进代理日志，禁止使用。
 	raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -64,6 +64,8 @@ func Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, key []by
 	if !ValidTerm(termName) {
 		termName = DefaultTerm
 	}
+	// 权限模式由客户端的 -d 决定。白名单收敛，认不出退回默认（更严格的那个）。
+	mode := ParsePermMode(r.Header.Get("X-CCW-Perm-Mode"))
 
 	// 校验必须排在Upgrade之前：升级会劫持连接，之后再调http.Error写不出任何东西。
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -78,7 +80,7 @@ func Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, key []by
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
-	pty, err := start(claims.ProjectID, ws, termName)
+	pty, err := start(claims.ProjectID, ws, termName, mode)
 	if err != nil {
 		conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "pty start failed"),

@@ -151,6 +151,19 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   仍会解析出接入域名，使用者拿到域名却在 exchange 时吃 invalid_cdk。
   `rm -rf` 的目标过 `safeWipeRoot` 守卫（RepoRoot 现在写死，但接到配置上时
   空值或 `/` 就是一台机器）。**远端擦除已在真机上跑通**（2026-07-30，Node-NY-02）。
+- **`cclaude -d` 与 tmux 额度状态栏**（2026-08-01）：
+  `-d` 以 Bypass Permissions 模式启动云端 Claude（`--dangerously-skip-permissions`，
+  已查官方 CLI 文档确认，等价于 `--permission-mode bypassPermissions`）。官方说这个
+  模式只应在可随时恢复的沙箱容器里用——本项目的容器正是那种（独立容器、独立卷、
+  独立配额，坏了重建即可）。**只在新建会话时生效**：会话是持久的，已经在跑的
+  claude 进程改不了模式，客户端会如实提示这一点与怎么结束会话。
+  客户端报上来的值经白名单收敛（`ParsePermMode`），认不出退回默认——
+  它会成为容器里命令行的一部分，透传等于让客户端往 claude 的参数里塞任意东西。
+  额度显示挂在 **tmux 的 status-right**，由已有的 30 秒额度执行循环顺带写入
+  （那里本来就算好了 5h/7d 用量，不额外查库）。不让客户端画：客户端与终端之间
+  只有一条字节流，插进去会和 Claude 的 TUI 抢同一块屏幕。
+  `status-right-length` 必须设到 80——默认 40 会把 7d 那半截静默截断。
+  **新连接后最多 30 秒才出现**（等下一次循环），这是已知的粗糙处。
 - **云端副本显示可读名**（2026-08-01）：`og-vault-94137d17` → `og-vault`。
   哈希是给机器用的（区分 `~/a/code` 与 `~/b/code`），摆在界面上只是噪音。
   **撞名时保留哈希**——这块界面用来选删除对象，两行长得一模一样等于让人

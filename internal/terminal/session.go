@@ -62,9 +62,46 @@ func workdir(ws string) string {
 	return "/workspace/" + ws
 }
 
+// BypassFlag是 Claude Code 跳过权限确认的参数。
+//
+// 等价于 `--permission-mode bypassPermissions`（官方 CLI 文档）。官方明确说这个
+// 模式"只应在受限网络、可随时恢复的沙箱容器/VM 里用"——**本项目的容器正好是
+// 那种环境**：每个项目独立容器、独立卷、独立磁盘配额，坏了重建即可。
+//
+// **只在建会话时生效**。会话是持久的（断线不中断正是它的意义），已经在跑的
+// claude 进程改不了权限模式；调用方要如实告诉用户这一点，而不是让人以为
+// 加了参数就一定生效。
+const BypassFlag = "--dangerously-skip-permissions"
+
+// PermMode是允许的权限模式。**白名单而不是透传字符串**：这个值会成为容器里
+// 命令行的一部分，放开等于让客户端往 claude 的参数里塞任意东西。
+type PermMode string
+
+const (
+	PermDefault PermMode = ""
+	PermBypass  PermMode = "bypass"
+)
+
+// ParsePermMode把客户端报上来的值收敛到白名单。认不出的一律当默认——
+// **不报错**：权限模式认不出就退回更严格的那个，比拒绝连接更合适。
+func ParsePermMode(s string) PermMode {
+	if s == string(PermBypass) {
+		return PermBypass
+	}
+	return PermDefault
+}
+
+// claudeArgs返回容器里要执行的 claude 命令。
+func claudeArgs(mode PermMode) []string {
+	if mode == PermBypass {
+		return []string{"claude", BypassFlag}
+	}
+	return []string{"claude"}
+}
+
 // EnsureSessionCmds：附着前必须依次尝试的命令（第一条失败时才执行第二条）。
 // 不使用new-session -A的前台形式：容器PID 1不是tmux，会话一律detached创建。
-func EnsureSessionCmds(containerName, projectID, ws, term string) [][]string {
+func EnsureSessionCmds(containerName, projectID, ws, term string, mode PermMode) [][]string {
 	socket, session := Names(projectID, ws)
 	base := append([]string{"docker", "exec", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8"}, termEnv(term)...)
 	with := func(rest ...string) []string {
@@ -75,7 +112,8 @@ func EnsureSessionCmds(containerName, projectID, ws, term string) [][]string {
 		// -c 指定的目录必须先存在，否则 tmux 会在 $HOME 起会话而不报错——
 		// 表现是"终端里看不到任何同步过来的文件"。mkdir -p 是幂等的。
 		with("sh", "-c", "mkdir -p "+shellQuote(workdir(ws))),
-		with("tmux", "-L", socket, "new-session", "-d", "-s", session, "-c", workdir(ws), "claude"),
+		with(append([]string{"tmux", "-L", socket, "new-session", "-d", "-s", session, "-c", workdir(ws)},
+			claudeArgs(mode)...)...),
 	}
 }
 

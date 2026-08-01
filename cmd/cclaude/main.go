@@ -35,6 +35,9 @@ func main() {
 	apiFlag := flag.String("api", "", "服务端API地址（如 https://api-01.example.com）；显式指定时写入本地配置")
 	// --dir 跳过选择器直接同步某个目录：脚本、CI 与"我就是要同步这里"的用法。
 	dirFlag := flag.String("dir", "", "直接同步指定目录，跳过项目选择器")
+	// -d：以 Bypass Permissions 模式启动云端的 Claude（跳过权限确认）。
+	// 官方说这个模式只应在可随时恢复的沙箱容器里用——本项目的容器正是那种。
+	bypass := flag.Bool("d", false, "以 Bypass Permissions 模式启动（跳过权限确认；仅在新建云端会话时生效）")
 	showVersion := flag.Bool("version", false, "输出版本号后退出")
 	flag.Parse()
 	if *showVersion {
@@ -99,6 +102,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	bypassNoticeShown := false
 	for ctx.Err() == nil {
 		conn, err := c.Connection(ctx, sessionToken)
 		if err != nil {
@@ -121,10 +125,18 @@ func main() {
 			continue
 		}
 
+		if *bypass && !bypassNoticeShown {
+			bypassNoticeShown = true
+			fmt.Fprintln(os.Stderr,
+				"已请求 Bypass Permissions 模式（跳过权限确认）。\n"+
+					"注意：它只在**新建**云端会话时生效。该项目的会话若已在运行，本次仍沿用它原来的模式——\n"+
+					"要换模式，在终端里按 Ctrl-b 松开再按 : 输入 kill-session 结束会话，然后重新运行。")
+		}
+
 		// 正常：后台同步 + 前台终端。任一返回（断开）后回到循环重连。
 		syncDone := make(chan struct{})
 		go func() { defer close(syncDone); runSync(ctx, cwd, c, cdk, sessionToken, conn) }()
-		if err := runTerminal(ctx, conn, syncpkg.WorkspaceKey(cwd)); err != nil {
+		if err := runTerminal(ctx, conn, syncpkg.WorkspaceKey(cwd), permMode(*bypass)); err != nil {
 			fmt.Fprintln(os.Stderr, "terminal:", err)
 		}
 		<-syncDone
@@ -173,7 +185,15 @@ func wsDialError(err error, resp *http.Response) error {
 
 // runTerminal附着云端PTY：令牌放Authorization头（无?token=），raw mode双向转发，
 // GetSize轮询发resize。断开即返回，由外层循环重连。
-func runTerminal(ctx context.Context, conn control.ConnectionResponse, wsKey string) error {
+// permMode把 -d 翻成协议里的取值。
+func permMode(bypass bool) string {
+	if bypass {
+		return "bypass"
+	}
+	return ""
+}
+
+func runTerminal(ctx context.Context, conn control.ConnectionResponse, wsKey, mode string) error {
 	// 工作区键随连接一起报上去：云端据此决定 tmux 会话名与工作目录，
 	// 与同步的落盘位置保持一致。不放URL参数——那会进反代日志。
 	header := http.Header{
@@ -183,6 +203,9 @@ func runTerminal(ctx context.Context, conn control.ConnectionResponse, wsKey str
 		// tmux 据此低估外层终端的能力，重绘会留残影。
 		// Windows 上通常没有 TERM 这个环境变量，用默认值兜住。
 		"X-CCW-Term": {clientTerm()},
+	}
+	if mode != "" {
+		header.Set("X-CCW-Perm-Mode", mode)
 	}
 	ws, resp, err := websocket.DefaultDialer.DialContext(ctx, conn.TerminalURL, header)
 	if err != nil {

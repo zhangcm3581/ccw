@@ -35,7 +35,7 @@ func TestAttachCmdNeverKills(t *testing.T) {
 }
 
 func TestEnsureSessionCmdsOrder(t *testing.T) {
-	cmds := EnsureSessionCmds("ccw-project-a", "pid-1", "code-3f9a1b7c", "xterm-256color")
+	cmds := EnsureSessionCmds("ccw-project-a", "pid-1", "code-3f9a1b7c", "xterm-256color", PermDefault)
 	if len(cmds) != 3 {
 		t.Fatalf("want has-session / mkdir / new-session, got %d cmds", len(cmds))
 	}
@@ -97,7 +97,7 @@ func TestTermIsPassedToContainer(t *testing.T) {
 		t.Errorf("attach 未传 TERM：%s", joined)
 	}
 	// 建会话那条也要传：会话建立时的 TERM 决定 tmux server 的初始判断
-	for i, c := range EnsureSessionCmds("ccw-a", "pid", "code-3f9a1b7c", "screen-256color") {
+	for i, c := range EnsureSessionCmds("ccw-a", "pid", "code-3f9a1b7c", "screen-256color", PermDefault) {
 		if !strings.Contains(strings.Join(c, " "), "-e TERM=screen-256color") {
 			t.Errorf("第%d条命令未传 TERM：%v", i, c)
 		}
@@ -123,6 +123,44 @@ func TestValidTerm(t *testing.T) {
 	for _, bad := range []string{"", "a b", "x;y", "$TERM", "x\ny", strings.Repeat("x", 65)} {
 		if ValidTerm(bad) {
 			t.Errorf("%q 应被拒", bad)
+		}
+	}
+}
+
+// -d 只该改建会话那一条命令，而且只加官方那个参数。
+func TestBypassModeOnlyAffectsSessionCreation(t *testing.T) {
+	normal := EnsureSessionCmds("ccw-a", "pid", "code-3f9a1b7c", "xterm-256color", PermDefault)
+	bypass := EnsureSessionCmds("ccw-a", "pid", "code-3f9a1b7c", "xterm-256color", PermBypass)
+	if len(normal) != len(bypass) {
+		t.Fatalf("命令条数不该变：%d vs %d", len(normal), len(bypass))
+	}
+	// 前两条（has-session、mkdir）必须一字不差
+	for i := 0; i < 2; i++ {
+		if strings.Join(normal[i], " ") != strings.Join(bypass[i], " ") {
+			t.Errorf("第%d条不该受权限模式影响：\n  %v\n  %v", i, normal[i], bypass[i])
+		}
+	}
+	last := strings.Join(bypass[len(bypass)-1], " ")
+	if !strings.HasSuffix(last, "claude "+BypassFlag) {
+		t.Errorf("建会话应以 claude %s 结尾，got %q", BypassFlag, last)
+	}
+	if strings.Contains(strings.Join(normal[len(normal)-1], " "), BypassFlag) {
+		t.Error("默认模式绝不能带上跳过权限的参数")
+	}
+	// 附着命令与权限模式无关——会话已经在跑了
+	if strings.Contains(strings.Join(AttachCmd("ccw-a", "pid", "code-3f9a1b7c", "xterm-256color"), " "), BypassFlag) {
+		t.Error("attach 不该带权限参数")
+	}
+}
+
+// 客户端报上来的值必须收敛到白名单：它会成为容器里命令行的一部分。
+func TestParsePermModeIsWhitelist(t *testing.T) {
+	if ParsePermMode("bypass") != PermBypass {
+		t.Error("bypass 应被识别")
+	}
+	for _, s := range []string{"", "BYPASS", "bypassPermissions", "; rm -rf /", "--dangerously-skip-permissions", "default"} {
+		if got := ParsePermMode(s); got != PermDefault {
+			t.Errorf("ParsePermMode(%q) = %q，认不出的一律应退回默认", s, got)
 		}
 	}
 }
