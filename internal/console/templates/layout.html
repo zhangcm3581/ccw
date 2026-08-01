@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{block "title" .}}ccw · 云端 Claude Code 工作空间{{end}}</title>
+<title>{{block "title" .}}cclaude · 云端 Claude Code 工作空间{{end}}</title>
 <style>
 /* 公开站：落地页 + 开始使用（/connect）。
    自包含样式，不引用任何外部CDN（设计§3.3——下载页不应因第三方不可达而挂掉）。
@@ -59,10 +59,7 @@ header .brand{
 }
 header .brand:hover{text-decoration:none}
 header .brand .mark{
-  width:28px;height:28px;border-radius:9px;flex:none;
-  background:var(--accent);color:var(--accent-ink);
-  display:flex;align-items:center;justify-content:center;
-  font-family:var(--mono);font-size:12.5px;font-weight:700;letter-spacing:-.03em;
+  width:26px;height:26px;flex:none;fill:var(--accent);
 }
 header nav{display:flex;gap:22px;font-size:14.5px}
 header nav a{color:var(--ink-2)}
@@ -154,7 +151,7 @@ input[type=text]:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 
 <body>
 <header>
   <div class="wrap">
-    <a class="brand" href="/"><span class="mark">cc</span>ccw</a>
+    <a class="brand" href="/"><svg class="mark" viewBox="0 0 100 100" aria-hidden="true"><path d="M56.2 50.0 Q55.6 35.9 50.0 3.0 Q44.4 35.9 43.8 50.0 Z M55.4 53.1 Q59.8 44.2 66.5 21.4 Q50.1 38.6 44.6 46.9 Z M53.1 55.4 Q64.2 48.2 88.1 28.0 Q58.6 38.6 46.9 44.6 Z M50.0 56.2 Q59.0 55.6 80.0 50.0 Q59.0 44.4 50.0 43.8 Z M46.9 55.4 Q59.2 61.7 89.8 73.0 Q64.7 52.1 53.1 44.6 Z M44.6 53.1 Q50.0 61.1 66.0 77.7 Q59.6 55.5 55.4 46.9 Z M43.8 50.0 Q44.4 63.5 50.0 95.0 Q55.6 63.5 56.2 50.0 Z M44.6 46.9 Q40.5 55.3 34.5 76.8 Q50.2 60.8 55.4 53.1 Z M46.9 44.6 Q35.0 52.2 9.3 73.5 Q40.6 61.9 53.1 55.4 Z M50.0 43.8 Q39.8 44.4 16.0 50.0 Q39.8 55.6 50.0 56.2 Z M53.1 44.6 Q41.6 38.7 12.8 28.5 Q36.0 48.4 46.9 55.4 Z M55.4 46.9 Q50.3 39.4 35.0 24.0 Q40.7 45.0 44.6 53.1 Z"/></svg>cclaude</a>
     <nav>
       <a href="/connect">开始使用</a>
     </nav>
@@ -163,6 +160,6 @@ input[type=text]:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 
 <main><div class="wrap">
 {{template "content" .}}
 </div></main>
-<footer><div class="wrap">ccw · 远程 Claude Code 工作空间。用量计量为内部额度单位（内部估算口径）。</div></footer>
+<footer><div class="wrap">cclaude · 远程 Claude Code 工作空间。用量计量为内部额度单位（内部估算口径）。</div></footer>
 </body>
 </html>{{end}}
