@@ -45,7 +45,7 @@ func TestCurrentDirHintRefusesDangerousDirs(t *testing.T) {
 func TestResolveWorkDirHonorsFlag(t *testing.T) {
 	cfg := t.TempDir()
 	want := t.TempDir()
-	got, err := resolveWorkDir(cfg, want)
+	got, err := resolveWorkDir(cfg, want, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestResolveWorkDirHonorsFlag(t *testing.T) {
 	// 指向文件而不是目录时要明确报错，而不是默默同步它的父目录
 	f := filepath.Join(want, "x.txt")
 	os.WriteFile(f, []byte("x"), 0o644)
-	if _, err := resolveWorkDir(cfg, f); err == nil {
+	if _, err := resolveWorkDir(cfg, f, nil); err == nil {
 		t.Error("--dir 指向文件应报错")
 	}
 }
@@ -78,7 +78,7 @@ func TestResolveWorkDirUsesEnclosingProject(t *testing.T) {
 	if err := os.Chdir(sub); err != nil {
 		t.Fatal(err)
 	}
-	got, err := resolveWorkDir(cfg, "")
+	got, err := resolveWorkDir(cfg, "", nil)
 	if err != nil {
 		t.Fatalf("不该弹选择器：%v", err)
 	}

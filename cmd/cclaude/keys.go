@@ -23,6 +23,7 @@ const (
 	keyNew
 	keyOther
 	keyForget
+	keyCloud
 )
 
 // readKey读一个按键。方向键是 ESC [ A/B 三字节序列。
@@ -46,6 +47,8 @@ func readKey(r *bufio.Reader) (key, error) {
 		return keyOther, nil
 	case 'd', 'D':
 		return keyForget, nil
+	case 'c', 'C':
+		return keyCloud, nil
 	case 'k':
 		return keyUp, nil
 	case 'j':

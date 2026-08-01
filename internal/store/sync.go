@@ -67,3 +67,24 @@ func (s *Store) TotalSize(ctx context.Context, projectID string) (int64, error) 
 		projectID).Scan(&n)
 	return n, err
 }
+
+// PurgeWorkspace硬删除一个工作区的全部索引行，返回释放的字节数。
+//
+// **硬删除而不是写墓碑**（sync/workspaces.go 有完整理由）：墓碑会把"这个文件
+// 被删了"同步给用户的其他设备，把他们本地的文件也删掉；而删云端副本要的恰恰
+// 相反——本地原样保留，下次连上来重新上传。
+//
+// ws 由调用方保证已过 ValidWorkspace（只有小写字母、数字与连字符），
+// 因此不含 LIKE 的通配符；这里仍然用参数化查询，不拼字符串。
+func (s *Store) PurgeWorkspace(ctx context.Context, projectID, ws string) (int64, error) {
+	var freed int64
+	err := s.Pool.QueryRow(ctx, `
+		WITH gone AS (
+			DELETE FROM file_index
+			WHERE project_id = $1 AND path LIKE $2 || '/%'
+			RETURNING size_bytes, deleted
+		)
+		SELECT COALESCE(SUM(size_bytes) FILTER (WHERE NOT deleted), 0) FROM gone`,
+		projectID, ws).Scan(&freed)
+	return freed, err
+}

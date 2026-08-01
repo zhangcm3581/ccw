@@ -21,7 +21,7 @@ var errUserQuit = errors.New("cclaude: 用户取消")
 //
 // 非交互终端（管道/CI/重定向）走不到选择器，回退到当前目录——
 // 与改造前的行为一致，不会让既有脚本忽然卡住等按键。
-func resolveWorkDir(cfgDir, dirFlag string) (string, error) {
+func resolveWorkDir(cfgDir, dirFlag string, openCloud func() error) (string, error) {
 	if dirFlag != "" {
 		abs, err := filepath.Abs(dirFlag)
 		if err != nil {
@@ -44,21 +44,37 @@ func resolveWorkDir(cfgDir, dirFlag string) (string, error) {
 	}
 
 	io_ := stdPickerIO()
-	act, err := runPicker(io_, root, cfgDir, currentDirHint(root, cwd))
-	if err != nil {
-		if errors.Is(err, errNotTTY) {
-			return cwd, nil // 非交互：维持旧行为
+	for {
+		act, err := runPicker(io_, root, cfgDir, currentDirHint(root, cwd))
+		if err != nil {
+			if errors.Is(err, errNotTTY) {
+				return cwd, nil // 非交互：维持旧行为
+			}
+			return "", err
 		}
+		if act.Cloud {
+			// 管理云端是一段插曲：回来继续选项目，而不是退出。
+			if openCloud != nil {
+				if err := openCloud(); err != nil {
+					fmt.Fprintf(os.Stderr, "管理云端：%v\n", err)
+				}
+			}
+			continue
+		}
+		if act.Quit || act.Project.Path == "" {
+			return "", errUserQuit
+		}
+		return openProject(act.Project)
+	}
+}
+
+// openProject建好本地目录并返回它。登记过但被删的项目在这里长回来，
+// 随后的同步会把云端文件拉下来。
+func openProject(p project) (string, error) {
+	if err := os.MkdirAll(p.Path, 0o755); err != nil {
 		return "", err
 	}
-	if act.Quit || act.Project.Path == "" {
-		return "", errUserQuit
-	}
-	// 本地目录不在了（登记过但被删）——建回来，随后的同步会把云端文件拉下来。
-	if err := os.MkdirAll(act.Project.Path, 0o755); err != nil {
-		return "", err
-	}
-	return act.Project.Path, nil
+	return p.Path, nil
 }
 
 // currentDirHint决定要不要在选择器里预置「登记当前目录」。

@@ -70,25 +70,30 @@ func main() {
 
 	c := control.Client{Base: base}
 
-	// 同步根目录（2026-07-31）：不再同步"你碰巧所在的那个目录"。
-	// resolveWorkDir 决定这次要同步哪个项目——已经在某个项目里就直接用它，
-	// 否则弹选择器。--dir 显式指定时一切照旧，脚本与 CI 不受影响。
-	cwd, err := resolveWorkDir(dir, *dirFlag)
-	if err != nil {
-		if err == errUserQuit {
-			return
-		}
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-
 	// session token在内存中随时可用CDK重新换取（审查§5.3）；CDK不入日志。
+	//
+	// **排在选择器之前**：选择器里的「管理云端」要连服务端列副本，
+	// 没有令牌就开不了那一屏。认证失败也该在弹界面之前就说清楚。
 	sessionToken, err := exchangeSession(ctx, c, cdk)
 	if err != nil {
 		// 缓存的CDK可能已失效（如被轮换/撤销）：清CDK但保留API，下次只需重输CDK。
 		// 环境变量提供的CDK不动本地缓存。
 		if os.Getenv("CCW_CDK") == "" {
 			clearCDKField(dir)
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	// 同步根目录（2026-07-31）：不再同步"你碰巧所在的那个目录"。
+	// resolveWorkDir 决定这次要同步哪个项目——已经在某个项目里就直接用它，
+	// 否则弹选择器。--dir 显式指定时一切照旧，脚本与 CI 不受影响。
+	cwd, err := resolveWorkDir(dir, *dirFlag, func() error {
+		return openCloudManager(ctx, c, sessionToken)
+	})
+	if err != nil {
+		if err == errUserQuit {
+			return
 		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

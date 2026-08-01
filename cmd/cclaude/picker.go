@@ -36,6 +36,10 @@ type pickAction struct {
 	Project project
 	// Quit为true表示用户按了 Esc/q。
 	Quit bool
+	// Cloud为true表示用户按了 c：要进「管理云端」。
+	// 选择器本身不联网——连接、令牌与额度都在 main 那边，
+	// 让它去开那一屏，回来再接着选。
+	Cloud bool
 }
 
 // pickerIO把选择器要用的终端能力抽出来，便于测试。
@@ -115,6 +119,9 @@ func runPicker(io_ pickerIO, root, cfgDir, cwdHint string) (pickAction, error) {
 			if err == nil && p.Path != "" {
 				return pickAction{Project: p}, nil
 			}
+		case keyCloud:
+			clear(io_.out, len(rows))
+			return pickAction{Cloud: true}, nil
 		case keyForget:
 			if len(rows) > 0 && sel < len(rows) && !rows[sel].isAction {
 				_ = forgetProject(cfgDir, rows[sel].proj.Path)
@@ -167,7 +174,7 @@ func buildRows(items []project, cwdHint string) []row {
 
 func render(w io.Writer, rows []row, sel int, root string) {
 	fmt.Fprintf(w, "%s%s  选择项目%s\r\n", clrLine, fgAccent, reset)
-	fmt.Fprintf(w, "%s%s  ↑/↓ 选择 · Enter 打开 · n 新建 · t 其他位置 · d 移出列表 · Esc/q 退出%s\r\n",
+	fmt.Fprintf(w, "%s%s  ↑/↓ 选择 · Enter 打开 · n 新建 · t 其他位置 · c 管理云端 · d 移出 · Esc/q 退出%s\r\n",
 		clrLine, fgDim, reset)
 	fmt.Fprintf(w, "%s%s  项目在云端运行并实时同步 · 把文件夹拖进「%s」即自动加入%s\r\n",
 		clrLine, fgDim, filepath.Base(root), reset)

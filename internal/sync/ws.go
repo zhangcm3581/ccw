@@ -2,6 +2,7 @@ package sync
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -31,13 +32,17 @@ type wsReq struct {
 }
 
 type wsResp struct {
-	Op       string      `json:"op"`
-	Mode     string      `json:"mode,omitempty"`
-	Entries  []FileEntry `json:"entries,omitempty"`
-	Entry    *FileEntry  `json:"entry,omitempty"`
-	Path     string      `json:"path,omitempty"`
-	Revision int64       `json:"revision,omitempty"`
-	Reason   string      `json:"reason,omitempty"`
+	Op      string      `json:"op"`
+	Mode    string      `json:"mode,omitempty"`
+	Entries []FileEntry `json:"entries,omitempty"`
+	// Workspaces供「管理云端」列出本项目的全部副本及其大小。
+	Workspaces []WorkspaceInfo `json:"workspaces,omitempty"`
+	// Freed是purge释放的字节数。
+	Freed    int64      `json:"freed,omitempty"`
+	Entry    *FileEntry `json:"entry,omitempty"`
+	Path     string     `json:"path,omitempty"`
+	Revision int64      `json:"revision,omitempty"`
+	Reason   string     `json:"reason,omitempty"`
 }
 
 // SessionFactory由worker注入：按project+device+mode构造SyncSession（绑定PG store、DirStore、配额）。
@@ -150,6 +155,36 @@ func ServeSync(w http.ResponseWriter, r *http.Request, key []byte, maxMessage in
 		case "delete":
 			res := sess.HandleDelete(r.Context(), req.Entry.Path, req.BaseRevision)
 			writeSyncJSON(conn, putResp(req.Entry.Path, res))
+
+		// ---- 云端副本管理（2026-08-01）----
+		// 只在本项目范围内：会话已由令牌绑定 projectID，客户端无法看到或删掉
+		// 别的项目的副本。
+
+		case "workspaces":
+			ws, err := ListWorkspaces(r.Context(), sess.Store, sess.ProjectID)
+			if err != nil {
+				writeSyncJSON(conn, wsResp{Op: "reject", Reason: "internal"})
+				continue
+			}
+			writeSyncJSON(conn, wsResp{Op: "workspaces", Workspaces: ws})
+
+		case "purge":
+			// **cleanup 模式下照样允许**：它只减不增，正是额度用尽时该能做的事。
+			ps, ok := sess.Store.(PurgeStore)
+			if !ok {
+				writeSyncJSON(conn, wsResp{Op: "reject", Reason: "unsupported"})
+				continue
+			}
+			freed, err := PurgeWorkspace(r.Context(), ps, sess.ProjectID, sess.Root, req.WS)
+			if err != nil {
+				reason := "internal"
+				if errors.Is(err, ErrUnsafePath) {
+					reason = "unsafe_path"
+				}
+				writeSyncJSON(conn, wsResp{Op: "reject", Reason: reason})
+				continue
+			}
+			writeSyncJSON(conn, wsResp{Op: "purged", Freed: freed})
 		}
 	}
 }

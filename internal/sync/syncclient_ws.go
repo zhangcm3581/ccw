@@ -18,6 +18,8 @@ type wsTransport struct {
 	mode string
 }
 
+var errAuthHandshake = errors.New("sync: auth handshake failed")
+
 // DialSync连接同步端点：令牌放Authorization头（禁URL参数），读首帧auth_ok拿mode。
 func DialSync(ctx context.Context, url, token string) (*wsTransport, error) {
 	header := http.Header{"Authorization": {"Bearer " + token}}
@@ -39,12 +41,42 @@ func DialSync(ctx context.Context, url, token string) (*wsTransport, error) {
 	var resp wsResp
 	if err := conn.ReadJSON(&resp); err != nil || resp.Op != "auth_ok" {
 		conn.Close()
-		return nil, errors.New("sync: auth handshake failed")
+		return nil, errAuthHandshake
 	}
 	return &wsTransport{conn: conn, mode: resp.Mode}, nil
 }
 
 func (t *wsTransport) Close() error { return t.conn.Close() }
+
+// Workspaces列出本项目在云端的全部副本（「管理云端」用）。
+func (t *wsTransport) Workspaces() ([]WorkspaceInfo, error) {
+	if err := t.conn.WriteJSON(wsReq{Op: "workspaces"}); err != nil {
+		return nil, err
+	}
+	var resp wsResp
+	if err := t.conn.ReadJSON(&resp); err != nil {
+		return nil, err
+	}
+	if resp.Op != "workspaces" {
+		return nil, fmt.Errorf("sync: 服务端拒绝列出云端副本（%s）", resp.Reason)
+	}
+	return resp.Workspaces, nil
+}
+
+// Purge删掉一个云端副本，返回释放的字节数。
+func (t *wsTransport) Purge(ws string) (int64, error) {
+	if err := t.conn.WriteJSON(wsReq{Op: "purge", WS: ws}); err != nil {
+		return 0, err
+	}
+	var resp wsResp
+	if err := t.conn.ReadJSON(&resp); err != nil {
+		return 0, err
+	}
+	if resp.Op != "purged" {
+		return 0, fmt.Errorf("sync: 删除云端副本失败（%s）", resp.Reason)
+	}
+	return resp.Freed, nil
+}
 
 func (t *wsTransport) Hello(device, ws string) (string, error) {
 	if err := t.conn.WriteJSON(wsReq{Op: "hello", Device: device, WS: ws}); err != nil {
