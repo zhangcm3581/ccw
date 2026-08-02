@@ -87,8 +87,22 @@ func main() {
 		return "ccw-" + projectID
 	}
 
+	// 每次接受连接都实时查库，不信任令牌里的模式——连接令牌2分钟有效且允许重连，
+	// 只看令牌会让刚超额的项目在窗口内继续上传。查询失败按超额处理（fail closed）。
+	quotaSvc := quota.Service{Reader: st}
+
 	startPTY := func(projectID, ws, termName string, mode terminal.PermMode) (io.ReadWriteCloser, error) {
 		container := containerFor(projectID)
+
+		// **连接时就把本项目的额度写进容器**，不等 30 秒那一轮。
+		// 不写的话，新会话头 30 秒里状态行读不到本项目额度，会退回显示账号级
+		// （标签写着「账号5h」），过一会儿又自己变成本项目——看着像界面在抽风。
+		// 容器重建后 /tmp 是空的，所以每次新连接都会经过这个窗口。
+		if d, lim, qerr := checkProject(ctx, st, quotaSvc, projectID, cfg.PoolMargins, time.Now()); qerr == nil {
+			if werr := writeProjectQuota(ctx, container, d, lim); werr != nil {
+				logln("连接时写入项目额度失败 项目%s：%v", projectID, werr)
+			}
+		}
 		// 附着前先准备会话：has-session失败才建目录并new-session -d（审计§4.1）。
 		// 会话名与工作目录都跟着工作区走，与同步的落盘位置保持一致。
 		cmds := terminal.EnsureSessionCmds(container, projectID, ws, termName, mode)
@@ -142,9 +156,6 @@ func main() {
 		}
 	}
 	// 同步模式：超额降级为 cleanup（只许下载、删除、缩小）。
-	// 每次接受连接都实时查库，不信任令牌里的模式——连接令牌2分钟有效且允许重连，
-	// 只看令牌会让刚超额的项目在窗口内继续上传。查询失败按超额处理（fail closed）。
-	quotaSvc := quota.Service{Reader: st}
 	modeFor := func(projectID string) string {
 		return syncModeFor(ctx, st, quotaSvc, projectID, cfg.PoolMargins, time.Now(), logln)
 	}
