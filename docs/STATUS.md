@@ -169,6 +169,13 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   ARG 才是全局的——于是 `FROM ubuntu:${UBUNTU_TAG}` 解析成 `ubuntu:`，
   报 "failed to parse stage name"。**不构建根本看不出来**，
   `internal/deploy/dockerfile_test.go` 现在扫全部 Dockerfile 守住这条。
+  **账号级与项目级必须分清**（2026-08-02）：状态行的 5h/7d 来自 Claude 的
+  `rate_limits`，那是**整个账号**的用量（同节点全部项目共用一个上游账号），
+  所以标签是「账号5h/账号7d」。而真正会关掉终端的是**本项目**的内部额度闸门，
+  两者可以完全不一致（账号还剩 80%，项目却已到顶）。worker-agent 每 30 秒把
+  本项目的受限状态写进容器的 `/tmp/ccw-project-quota`，状态行读它——
+  **只在受限时多出一段**（`本项目5h已满`/`本项目7d已满`/`账号池已满`），
+  平时不占宽度；读不到文件一律当未受限，宁可不提示也不凭空说人受限。
   渲染器是 `cmd/ccw-statusline`（静态二进制，编进项目镜像）：四段——模型 /
   context 已用 / 5h 剩余 + 倒计时 / 7d 剩余 + 倒计时，1/8 格精度的渐进进度条。
   **写成 Go 而不是 shell**：这几段逻辑（子格填充、倒计时格式、缺数据降级）

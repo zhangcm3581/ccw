@@ -7,8 +7,14 @@
 // 数据缺失时的降级，用 shell 写既难读也难验；写成 Go 才能对这几段逻辑做单测。
 // 顺带省掉往镜像里装 jq。
 //
-// **数据全部来自 Claude 自己**（rate_limits 是上游账号的真实额度与真实重置时间），
-// 不是本仓库那套内部额度估算——后者仍在服务端执行闸门，只是不在这行显示。
+// **5h/7d 来自 Claude 自己**（rate_limits 是上游账号的真实额度与真实重置时间）。
+// 注意那是**整个账号**的用量：同一节点上全部项目共用一个上游账号，
+// 所以标签写成「账号5h/账号7d」——不标清楚的话，看的人会以为那是自己项目的额度。
+//
+// 而真正会关掉终端的是**本项目**的内部额度闸门，与账号用量可以完全不一致
+// （账号还剩 80%，你的项目却已经到顶）。worker-agent 每 30 秒把本项目的受限状态
+// 写进容器的 /tmp/ccw-project-quota，这里读它——**只在受限时多出一段**，
+// 平时不占宽度。
 package main
 
 import (
@@ -70,11 +76,47 @@ func render(p payload, now time.Time) string {
 	segs := []string{
 		bold(modelName(p.Model.DisplayName)),
 		contextSeg(p),
-		limitSeg("5h", winOf(p, false), colMagenta, now, false),
-		limitSeg("7d", winOf(p, true), colAqua, now, true),
+		limitSeg("账号5h", winOf(p, false), colMagenta, now, false),
+		limitSeg("账号7d", winOf(p, true), colAqua, now, true),
+	}
+	// 本项目受限时才追加一段。读不到文件（新会话的头 30 秒、或没启用闸门）
+	// 一律当作未受限——**宁可不提示，也不能凭空说人受限了**。
+	if seg := projectLimitSeg(readProjectQuota()); seg != "" {
+		segs = append(segs, seg)
 	}
 	sep := fmt.Sprintf(" \x1b[38;5;%dm│\x1b[0m ", colGray)
 	return strings.Join(segs, sep)
+}
+
+// projectQuotaPath是 worker-agent 写入本项目受限状态的位置。
+const projectQuotaPath = "/tmp/ccw-project-quota"
+
+func readProjectQuota() string {
+	b, err := os.ReadFile(projectQuotaPath)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// projectLimitSeg把 "over=1 reason=xxx" 翻成一段提示；未受限返回空。
+//
+// **原因必须显示**：pool_exhausted 是账号池被别的项目吃光了，
+// five_hour_limit 是你自己这个项目到顶了——两者该找谁、怎么办完全不同。
+func projectLimitSeg(raw string) string {
+	if !strings.Contains(raw, "over=1") {
+		return ""
+	}
+	label := "本项目受限"
+	switch {
+	case strings.Contains(raw, "reason=five_hour_limit"):
+		label = "本项目5h已满"
+	case strings.Contains(raw, "reason=seven_day_limit"):
+		label = "本项目7d已满"
+	case strings.Contains(raw, "reason=pool_exhausted"):
+		label = "账号池已满"
+	}
+	return "\x1b[1;31m" + label + "\x1b[0m"
 }
 
 func winOf(p payload, seven bool) *window {

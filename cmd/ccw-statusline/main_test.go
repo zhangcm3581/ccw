@@ -221,7 +221,25 @@ func TestCountdownRejectsAbsurdValues(t *testing.T) {
 	}
 }
 
-// 整行长度要可控——状态行被截断的话反而什么都看不清。
+// displayWidth按终端列数算宽度：CJK 占两列。
+// 之前这里用 rune 数，把中文标签少算了一半——量错了的守卫不如没有。
+func displayWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		if r > 0x2e80 {
+			w += 2
+		} else {
+			w++
+		}
+	}
+	return w
+}
+
+// 整行宽度要可控——状态行被截断的话反而什么都看不清。
+//
+// 阈值按真实终端取：120 列是常见的宽终端，留出余量到 110。
+// 这条守的是**失控增长**（比如坏的 resets_at 曾渲染出 "2281787h 22m"），
+// 不是逐字节抠——为省几列去改用户指定的格式不值得。
 func TestRenderStaysReasonablyShort(t *testing.T) {
 	now := time.Unix(1738400000, 0)
 	p := parse(t, `{
@@ -232,7 +250,58 @@ func TestRenderStaysReasonablyShort(t *testing.T) {
 	    "seven_day":{"used_percentage":9,"resets_at":1738900000}
 	  }}`)
 	v := visible(render(p, now))
-	if n := len([]rune(v)); n > 90 {
-		t.Errorf("整行 %d 字符，太长会被截断：%s", n, v)
+	if n := displayWidth(v); n > 110 {
+		t.Errorf("整行 %d 列，太宽会被截断：%s", n, v)
+	}
+	// 受限提示是额外一段，加上它也不能失控
+	full := v + " │ " + visible(projectLimitSeg("over=1 reason=five_hour_limit"))
+	if n := displayWidth(full); n > 130 {
+		t.Errorf("带受限提示时 %d 列，过宽：%s", n, full)
+	}
+}
+
+// 账号级与项目级是两回事，标签必须说清楚。
+//
+// 状态行上的 5h/7d 来自 Claude 的 rate_limits——那是**整个账号**的用量，
+// 同节点全部项目共用。不标"账号"的话，看的人会以为那是自己项目的额度，
+// 于是出现"明明还剩 80%，终端却被关了"这种无法理解的现象。
+func TestLimitSegmentsAreLabelledAsAccountLevel(t *testing.T) {
+	p := parse(t, `{"rate_limits":{"five_hour":{"used_percentage":20},"seven_day":{"used_percentage":30}}}`)
+	v := visible(render(p, time.Now()))
+	for _, want := range []string{"账号5h", "账号7d"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("应标明是账号级用量，缺 %q：%s", want, v)
+		}
+	}
+}
+
+// 只在本项目受限时多出一段；平时不占宽度。
+func TestProjectLimitSegment(t *testing.T) {
+	if got := projectLimitSeg(""); got != "" {
+		t.Errorf("读不到文件应视为未受限，got %q", got)
+	}
+	if got := projectLimitSeg("over=0 reason="); got != "" {
+		t.Errorf("未受限不该有提示，got %q", got)
+	}
+	// **原因要分清**：账号池被别人吃光，和自己项目到顶，处理方式完全不同
+	cases := map[string]string{
+		"over=1 reason=five_hour_limit": "本项目5h已满",
+		"over=1 reason=seven_day_limit": "本项目7d已满",
+		"over=1 reason=pool_exhausted":  "账号池已满",
+		"over=1 reason=":                "本项目受限",
+	}
+	for raw, want := range cases {
+		if got := visible(projectLimitSeg(raw)); got != want {
+			t.Errorf("projectLimitSeg(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// 坏内容不能被当成"受限"——凭空说人受限比不提示更糟。
+func TestProjectLimitSegIgnoresGarbage(t *testing.T) {
+	for _, raw := range []string{"garbage", "over=", "overover", "\x00\x01"} {
+		if got := projectLimitSeg(raw); got != "" {
+			t.Errorf("%q 不该判成受限，got %q", raw, got)
+		}
 	}
 }

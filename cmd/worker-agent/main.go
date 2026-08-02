@@ -191,9 +191,13 @@ func main() {
 							logln("额度执行：项目%s额度查询失败，本轮不处理：%v", pid, qerr)
 							continue
 						}
-						// 状态行不再由这里推送：额度显示改用 Claude 自己的 rate_limits
-						// （见 cmd/ccw-statusline），不经过 worker-agent。
-						// lim 仍要拿——checkProject 用它做判定。
+						// 状态行上的 5h/7d 来自 Claude 的 rate_limits，那是**账号级**的；
+						// 这里额外把"本项目是否受限"写进容器，让状态行能在项目自己的
+						// 闸门触顶时提示——两者可以完全不一致。
+						// 失败只记日志：提示是锦上添花，不能拖累"超额就关终端"。
+						if qerr := writeProjectQuota(ctx, containerFor(pid), d); qerr != nil {
+							logln("项目额度状态写入失败 项目%s：%v", pid, qerr)
+						}
 						_ = lim
 						if d.Over {
 							registry.CloseProject(pid)
