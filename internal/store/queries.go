@@ -1,6 +1,7 @@
 package store
 
 import (
+	"ccw/internal/quota"
 	"context"
 	"fmt"
 	"time"
@@ -141,4 +142,36 @@ func (s *Store) ProjectTierShare(ctx context.Context, projectID string) (int, bo
 		return 0, false, nil
 	}
 	return *bp, true, nil
+}
+
+// AccountWindows返回账号当前窗口的**起点**（对齐 Claude 的 resets_at）。
+//
+// resets_at 是下一次重置的时刻，窗口起点 = 它减去窗口长度。
+// 没拿到过快照（NULL）或时间已经过期时返回零值，调用方据此退回滚动窗口。
+func (s *Store) AccountWindows(ctx context.Context, accountID string, now time.Time) (quota.Windows, error) {
+	var r5, r7 *time.Time
+	err := s.Pool.QueryRow(ctx,
+		`SELECT five_hour_resets_at, seven_day_resets_at FROM accounts WHERE id=$1`, accountID).
+		Scan(&r5, &r7)
+	if err != nil {
+		return quota.Windows{}, err
+	}
+	var w quota.Windows
+	// **过期的边界不能用**：resets_at 已经过去说明快照旧了，那时用它算出的
+	// 窗口起点在更早的过去，会把本该滑出的用量重新算进来。退回滚动窗口。
+	if r5 != nil && r5.After(now) {
+		w.FiveHourStart = r5.Add(-5 * time.Hour)
+	}
+	if r7 != nil && r7.After(now) {
+		w.SevenDayStart = r7.Add(-7 * 24 * time.Hour)
+	}
+	return w, nil
+}
+
+// SetAccountWindows写回 Claude 报的下次重置时刻。
+func (s *Store) SetAccountWindows(ctx context.Context, accountID string, five, seven time.Time) error {
+	_, err := s.Pool.Exec(ctx,
+		`UPDATE accounts SET five_hour_resets_at=$2, seven_day_resets_at=$3 WHERE id=$1`,
+		accountID, five, seven)
+	return err
 }

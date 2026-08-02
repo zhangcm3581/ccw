@@ -104,6 +104,8 @@ type poolCalibrator interface {
 	AccountPoolLimits(ctx context.Context, accountID string) (int64, int64, error)
 	PoolUsed(ctx context.Context, accountID string, since time.Time) (int64, error)
 	SetAccountPoolLimits(ctx context.Context, accountID string, fiveHour, sevenDay int64) error
+	// SetAccountWindows存 Claude 报的下次重置时刻，闸门据此对齐窗口。
+	SetAccountWindows(ctx context.Context, accountID string, five, seven time.Time) error
 }
 
 // calibratePool用一份快照校准账号窗口容量。
@@ -112,15 +114,37 @@ type poolCalibrator interface {
 // **返回值而不是布尔**：日志要打得出"调到了多少"，只说"调了"没有用。
 func calibratePool(ctx context.Context, st poolCalibrator, accountID string,
 	snap accountSnapshot, now time.Time) (int64, int64, error) {
+	// **先存窗口边界**：它与校准是否发生无关——即使这一轮因为百分比太低
+	// 不做校准，边界本身也是有效信息，闸门要靠它对齐 Claude 的重置点。
+	if snap.FiveHourReset > 0 && snap.SevenDayReset > 0 {
+		if werr := st.SetAccountWindows(ctx, accountID,
+			time.Unix(snap.FiveHourReset, 0), time.Unix(snap.SevenDayReset, 0)); werr != nil {
+			return 0, 0, fmt.Errorf("写回窗口边界失败: %w", werr)
+		}
+	}
+
 	cur5, cur7, err := st.AccountPoolLimits(ctx, accountID)
 	if err != nil {
 		return 0, 0, err
 	}
-	used5, err := st.PoolUsed(ctx, accountID, now.Add(-5*time.Hour))
+	// 池累计也用**同一个窗口**：校准是"我们的累计 ÷ Claude 的百分比"，
+	// 两边量的不是同一段时间的话，跨过重置点时比值会失真。
+	win := quota.Windows{}
+	if snap.FiveHourReset > 0 {
+		if t := time.Unix(snap.FiveHourReset, 0); t.After(now) {
+			win.FiveHourStart = t.Add(-5 * time.Hour)
+		}
+	}
+	if snap.SevenDayReset > 0 {
+		if t := time.Unix(snap.SevenDayReset, 0); t.After(now) {
+			win.SevenDayStart = t.Add(-7 * 24 * time.Hour)
+		}
+	}
+	used5, err := st.PoolUsed(ctx, accountID, win.Start(now, false))
 	if err != nil {
 		return 0, 0, err
 	}
-	used7, err := st.PoolUsed(ctx, accountID, now.Add(-7*24*time.Hour))
+	used7, err := st.PoolUsed(ctx, accountID, win.Start(now, true))
 	if err != nil {
 		return 0, 0, err
 	}

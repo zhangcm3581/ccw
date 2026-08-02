@@ -17,6 +17,32 @@ type Limits struct {
 	Reserve, SafetyMargin      int64
 }
 
+// Windows是两个窗口的**起点**。
+//
+// 零值表示不知道边界（还没拿到过账号快照），此时退回滚动窗口
+// （now-5h / now-7d）——那是 2026-08-02 之前的行为，安全的降级。
+//
+// 有值时用 Claude 自己的窗口：项目额度跟着账号一起在 resets_at 归零，
+// 而不是慢慢滑出去。校准的两边也因此量的是同一段时间。
+type Windows struct {
+	FiveHourStart time.Time
+	SevenDayStart time.Time
+}
+
+// Start返回该用的窗口起点。
+func (w Windows) Start(now time.Time, sevenDay bool) time.Time {
+	if sevenDay {
+		if !w.SevenDayStart.IsZero() {
+			return w.SevenDayStart
+		}
+		return now.Add(-7 * 24 * time.Hour)
+	}
+	if !w.FiveHourStart.IsZero() {
+		return w.FiveHourStart
+	}
+	return now.Add(-5 * time.Hour)
+}
+
 type Decision struct {
 	Over                       bool
 	Reason                     string
@@ -101,13 +127,13 @@ func Assemble(ctx context.Context, r PoolLimitReader, accountID string,
 
 type Service struct{ Reader UsageReader }
 
-func (s Service) Check(ctx context.Context, projectID, accountID string, l Limits, now time.Time) (Decision, error) {
+func (s Service) Check(ctx context.Context, projectID, accountID string, l Limits, now time.Time, win Windows) (Decision, error) {
 	var d Decision
 	var err error
-	if d.FiveHourUsed, err = s.Reader.WindowUsed(ctx, projectID, now.Add(-5*time.Hour)); err != nil {
+	if d.FiveHourUsed, err = s.Reader.WindowUsed(ctx, projectID, win.Start(now, false)); err != nil {
 		return d, err
 	}
-	if d.SevenDayUsed, err = s.Reader.WindowUsed(ctx, projectID, now.Add(-7*24*time.Hour)); err != nil {
+	if d.SevenDayUsed, err = s.Reader.WindowUsed(ctx, projectID, win.Start(now, true)); err != nil {
 		return d, err
 	}
 	switch {
@@ -117,11 +143,11 @@ func (s Service) Check(ctx context.Context, projectID, accountID string, l Limit
 		d.Over, d.Reason = true, "seven_day_limit"
 	default:
 		// 池保护同时看5小时与7天窗口（审查§9.3：只看5小时不足以保护周额度）
-		pool5h, err := s.Reader.PoolUsed(ctx, accountID, now.Add(-5*time.Hour))
+		pool5h, err := s.Reader.PoolUsed(ctx, accountID, win.Start(now, false))
 		if err != nil {
 			return d, err
 		}
-		pool7d, err := s.Reader.PoolUsed(ctx, accountID, now.Add(-7*24*time.Hour))
+		pool7d, err := s.Reader.PoolUsed(ctx, accountID, win.Start(now, true))
 		if err != nil {
 			return d, err
 		}

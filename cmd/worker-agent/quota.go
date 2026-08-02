@@ -10,6 +10,8 @@ import (
 
 // quotaLookup抽象worker需要的两次查库，便于单测注入假实现。
 type quotaLookup interface {
+	// AccountWindows返回对齐 Claude 的窗口起点；拿不到时零值＝退回滚动窗口。
+	AccountWindows(ctx context.Context, accountID string, now time.Time) (quota.Windows, error)
 	// ProjectTierShare返回项目所属档位的比例（万分之一）；未挂档位时 ok=false。
 	ProjectTierShare(ctx context.Context, projectID string) (int, bool, error)
 	GetProjectByID(ctx context.Context, id string) (project.Project, error)
@@ -38,7 +40,14 @@ func checkProject(ctx context.Context, q quotaLookup, svc quota.Service, project
 	}
 	// **把限额一并返回**：调用方（状态栏）需要它才能算百分比，
 	// 而它已经在这里组装好了——再查一次库既多余，也可能与本次判定用的值不一致。
-	d, cerr := svc.Check(ctx, projectID, p.AccountID, lim, now)
+	// **窗口对齐 Claude**：项目额度跟着账号一起在 resets_at 归零，
+	// 而不是靠滚动窗口慢慢滑出去。拿不到边界时 Windows 是零值，
+	// Check 会退回滚动窗口——那是安全的降级。
+	win, werr := q.AccountWindows(ctx, p.AccountID, now)
+	if werr != nil {
+		win = quota.Windows{}
+	}
+	d, cerr := svc.Check(ctx, projectID, p.AccountID, lim, now, win)
 	return d, lim, cerr
 }
 

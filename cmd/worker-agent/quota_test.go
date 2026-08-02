@@ -18,6 +18,11 @@ type fakeQuotaLookup struct {
 	poolErr      error
 	tierBP       int
 	hasTier      bool
+	win          quota.Windows
+}
+
+func (f fakeQuotaLookup) AccountWindows(_ context.Context, _ string, _ time.Time) (quota.Windows, error) {
+	return f.win, nil
 }
 
 func (f fakeQuotaLookup) ProjectTierShare(context.Context, string) (int, bool, error) {

@@ -49,7 +49,11 @@ type Server struct {
 	// LimitsFor返回error：池上限来自数据库，读不到时不能假装拿到了限额。
 	// 此前它无error且从环境变量读，与worker-agent的口径不一致（见quota.Assemble的说明）。
 	LimitsFor func(context.Context, project.Project) (quota.Limits, error)
-	AgentBase string
+	// WindowsFor返回该账号当前的窗口起点（对齐 Claude 的 resets_at）。
+	// **可为 nil**：那时用零值 Windows，Check 会退回滚动窗口——
+	// 与 2026-08-02 之前的行为一致，是安全的降级。
+	WindowsFor func(context.Context, string) quota.Windows
+	AgentBase  string
 
 	MaxAuthAttempts int // 每分钟每客户端的exchange尝试上限（0=默认20）
 
@@ -123,6 +127,14 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// windowsFor取窗口起点；未注入时返回零值＝滚动窗口。
+func (s *Server) windowsFor(ctx context.Context, accountID string) quota.Windows {
+	if s.WindowsFor == nil {
+		return quota.Windows{}
+	}
+	return s.WindowsFor(ctx, accountID)
+}
+
 func (s *Server) authed(r *http.Request) (project.Project, bool) {
 	h := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	c, err := token.Verify(s.Key, h, token.AudSession, time.Now())
@@ -147,7 +159,7 @@ func (s *Server) connection(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	d, err := s.Quota.Check(r.Context(), p.ID, p.AccountID, lim, now)
+	d, err := s.Quota.Check(r.Context(), p.ID, p.AccountID, lim, now, s.windowsFor(r.Context(), p.AccountID))
 	if err != nil {
 		httpErr(w, http.StatusInternalServerError, "internal")
 		return
@@ -187,7 +199,7 @@ func (s *Server) usagePage(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	d, _ := s.Quota.Check(r.Context(), p.ID, p.AccountID, lim, time.Now())
+	d, _ := s.Quota.Check(r.Context(), p.ID, p.AccountID, lim, time.Now(), s.windowsFor(r.Context(), p.AccountID))
 	disk, _ := s.Index.DiskUsed(r.Context(), p.ID)
 	t.Execute(w, map[string]any{"Project": p, "Decision": d, "DiskUsed": disk})
 }

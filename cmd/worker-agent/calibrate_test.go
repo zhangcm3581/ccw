@@ -61,6 +61,7 @@ type fakeCalStore struct {
 	used5, used7   int64
 	wrote5, wrote7 int64
 	writes         int
+	win5, win7     time.Time
 }
 
 func (f *fakeCalStore) AccountPoolLimits(context.Context, string) (int64, int64, error) {
@@ -73,6 +74,11 @@ func (f *fakeCalStore) PoolUsed(_ context.Context, _ string, since time.Time) (i
 	}
 	return f.used5, nil
 }
+func (f *fakeCalStore) SetAccountWindows(_ context.Context, _ string, five, seven time.Time) error {
+	f.win5, f.win7 = five, seven
+	return nil
+}
+
 func (f *fakeCalStore) SetAccountPoolLimits(_ context.Context, _ string, a, b int64) error {
 	f.wrote5, f.wrote7, f.writes = a, b, f.writes+1
 	return nil
