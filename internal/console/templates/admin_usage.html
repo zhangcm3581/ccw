@@ -43,6 +43,19 @@
     <span class="spacer"></span>
     <span class="meta">项目限额 = 档位比例 × 这个 Claude 账号的窗口额度</span></div>
   <div class="card-bd">
+    {{if .Calibrated}}
+    <div class="kv" style="margin-bottom:16px">
+      <div><span>账号 5 小时窗口容量</span><b>{{.Cap5}} 单位</b></div>
+      <div><span>账号 7 天窗口容量</span><b>{{.Cap7}} 单位</b></div>
+      <div><span>校准状态</span><b>已按真实账号用量校准</b></div>
+    </div>
+    {{else}}
+    <div class="alert">
+      <b>账号窗口容量还没校准，档位暂不生效</b>——挂了档位的项目仍按绝对限额判定。<br>
+      校准的原料是 Claude 报的真实用量，它由<b>活跃会话</b>的状态行回传：
+      开一次终端跑几句，worker-agent 下一轮（约 30 秒）就会校准，这里随即显示容量。
+    </div>
+    {{end}}
     <div class="scroll">
     <table>
       <tr><th>档位</th><th>占账号额度</th><th>调整</th></tr>

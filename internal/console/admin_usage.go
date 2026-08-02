@@ -169,6 +169,8 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess console
 	var errs []string
 	var tiers []provision.QuotaTier
 	var account provision.ClaudeAccount
+	var cap5, cap7 int64
+	var calibrated bool
 	if s.Fleet.Orchestrator != nil {
 		if ts, terr := s.Fleet.Orchestrator.NodeTiers(ctx, node.ID); terr == nil {
 			tiers = ts
@@ -178,6 +180,13 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess console
 			errs = append(errs, uerr.Error())
 		}
 		var containers []string
+		if len(us) > 0 {
+			// 账号窗口容量是档位的分母，全节点共用一个值，取任一项目的即可。
+			// **未校准时它是 MaxInt64 哨兵**——那时档位不生效，页面上必须说清楚，
+			// 否则只能去节点上 grep worker-agent 的日志才知道。
+			cap5, cap7 = us[0].PoolFiveHour, us[0].PoolSevenDay
+			calibrated = cap5 > 0 && cap5 < math.MaxInt64 && cap7 > 0 && cap7 < math.MaxInt64
+		}
 		for _, u := range us {
 			row := makeUsageRow(u, node.Name, node.ID, time.Now())
 			row.TierOpts = tierOptionsFor(u, tiers)
@@ -195,6 +204,7 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess console
 			"Node": node, "Rows": rows, "Errors": errs,
 			"NoOrchestrator": s.Fleet.Orchestrator == nil,
 			"Tiers":          tiers, "NodeID": node.ID,
+			"Cap5": cap5, "Cap7": cap7, "Calibrated": calibrated,
 			"Account":    account,
 			"AccountAge": humanWhen(&account.SnapshotAt),
 			"Notice":     r.URL.Query().Get("ok"), "Error": r.URL.Query().Get("err"),

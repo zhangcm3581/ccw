@@ -221,3 +221,17 @@ func readUsageTemplate(t *testing.T) string {
 	}
 	return string(b)
 }
+
+// 校准状态必须在页面上看得到。
+//
+// 它是档位生不生效的前提，而原本只能去节点上 grep worker-agent 的日志——
+// 用户已经两次跑到 Console 主机上找 ccw-worker-agent 容器了（它在节点上）。
+// 需要登机才能回答的问题，就是后台缺的功能。
+func TestUsagePageShowsCalibrationState(t *testing.T) {
+	tpl := readUsageTemplate(t)
+	for _, want := range []string{"账号 5 小时窗口容量", "还没校准", "活跃会话"} {
+		if !strings.Contains(tpl, want) {
+			t.Errorf("用量页应显示校准状态，缺 %q", want)
+		}
+	}
+}
