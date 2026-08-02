@@ -111,14 +111,21 @@
       <div><span>7 天窗口</span><b>{{.SevenDay.Weighted}} / {{.SevenDayLim}} 单位（{{.SevenDPct}}%）</b></div>
     </div>
 
+    {{if and .Tier (not .TierOpts)}}
+    <div class="alert">已指派档位 <code>{{.Tier}}</code>，但<b>账号窗口容量还没校准</b>，
+      所以当前仍按上面的绝对限额判定。等 worker-agent 用真实账号用量校准之后，
+      档位才会开始生效。</div>
+    {{end}}
+
     {{if $.Tiers}}
     <form method="POST" action="/admin/usage/assign" style="display:flex;gap:8px;align-items:center;margin:14px 0">
       <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
       <input type="hidden" name="node" value="{{.NodeID}}">
       <input type="hidden" name="slug" value="{{.Slug}}">
       <span class="muted">档位</span>
+      {{$row := .}}
       <select name="tier">
-        <option value="">不用档位（沿用绝对限额）</option>
+        <option value=""{{if not $row.Tier}} selected{{end}}>不用档位（沿用绝对限额）</option>
         {{if .TierOpts}}
           {{range .TierOpts}}
           <option value="{{.Name}}"{{if .Selected}} selected{{end}}>
@@ -126,7 +133,9 @@
           </option>
           {{end}}
         {{else}}
-          {{range $.Tiers}}<option value="{{.Name}}">{{.Name}} · {{printf "%.2f" (pct .ShareBP)}}%（账号容量未校准，暂不生效）</option>{{end}}
+          {{/* 容量未校准：算不出各档等于多少单位，但**当前挂的是哪一档必须照实显示**。
+               漏了 selected 会让页面说"不用档位"，而实际上挂着——那是在说假话。 */}}
+          {{range $.Tiers}}<option value="{{.Name}}"{{if eq $row.Tier .Name}} selected{{end}}>{{.Name}} · {{printf "%.2f" (pct .ShareBP)}}%</option>{{end}}
         {{end}}
       </select>
       <button class="btn ghost" type="submit">指派</button>

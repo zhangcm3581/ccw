@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -190,4 +191,33 @@ func TestTierOptionsEmptyWhenUncalibrated(t *testing.T) {
 			t.Errorf("容量=%d 时不该给出档位数字，got %+v", pool, got)
 		}
 	}
+}
+
+// 指派了档位就必须显示出来——哪怕容量还没校准、档位暂时不生效。
+//
+// 页面上写着"不用档位"而实际挂着，是在说假话；管理员会以为没指派成功，
+// 于是重复指派或去别处找原因。
+func TestAssignedTierIsShownEvenWhenNotYetEffective(t *testing.T) {
+	tpl := readUsageTemplate(t)
+	// 未校准的降级分支里也必须有 selected 判定
+	if !strings.Contains(tpl, `{{if eq $row.Tier .Name}} selected{{end}}`) {
+		t.Error("容量未校准时也要标出当前挂的档位，否则页面会显示成「不用档位」")
+	}
+	// 「不用档位」只在真的没挂时才是选中态
+	if !strings.Contains(tpl, `{{if not $row.Tier}} selected{{end}}`) {
+		t.Error("「不用档位」应仅在未指派时选中")
+	}
+	// 挂了档位但算不出限额时，要明说"暂未生效"
+	if !strings.Contains(tpl, "账号窗口容量还没校准") {
+		t.Error("挂了档位却不生效时，必须说明原因")
+	}
+}
+
+func readUsageTemplate(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("templates/admin_usage.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
