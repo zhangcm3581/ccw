@@ -20,23 +20,23 @@ func TestUsageRowFlagsStaleCollection(t *testing.T) {
 	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 
 	// 从没采集到 → 一定是 stale
-	r := makeUsageRow(provision.NodeProjectUsage{Slug: "a"}, "n1", now)
+	r := makeUsageRow(provision.NodeProjectUsage{Slug: "a"}, "n1", "nid", now)
 	if !r.Stale || r.LastSeen != "从未采集到" {
 		t.Errorf("无数据应标为 stale，got %+v", r)
 	}
 
 	// 刚采到 → 正常
-	r = makeUsageRow(provision.NodeProjectUsage{Slug: "a", LastEventAt: ts(now.Add(-time.Hour))}, "n1", now)
+	r = makeUsageRow(provision.NodeProjectUsage{Slug: "a", LastEventAt: ts(now.Add(-time.Hour))}, "n1", "nid", now)
 	if r.Stale {
 		t.Error("1 小时前有数据不该算 stale")
 	}
 
 	// **周末没人用不该报警**：阈值取 24 小时，正常空闲不会误报
-	r = makeUsageRow(provision.NodeProjectUsage{Slug: "a", LastEventAt: ts(now.Add(-20 * time.Hour))}, "n1", now)
+	r = makeUsageRow(provision.NodeProjectUsage{Slug: "a", LastEventAt: ts(now.Add(-20 * time.Hour))}, "n1", "nid", now)
 	if r.Stale {
 		t.Error("20 小时前有数据仍不该算 stale（正常空闲）")
 	}
-	r = makeUsageRow(provision.NodeProjectUsage{Slug: "a", LastEventAt: ts(now.Add(-30 * time.Hour))}, "n1", now)
+	r = makeUsageRow(provision.NodeProjectUsage{Slug: "a", LastEventAt: ts(now.Add(-30 * time.Hour))}, "n1", "nid", now)
 	if !r.Stale {
 		t.Error("超过 24 小时应标为 stale")
 	}
@@ -108,5 +108,21 @@ func TestTierFormsRequireCSRF(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Errorf("%s 无CSRF应403，got %d", path, w.Code)
 		}
+	}
+}
+
+// 每行的档位指派必须发到**这一行所属的节点**。
+//
+// quota_tiers 与 projects 都在节点本地的库里；用全页共用的一个 node 去指派，
+// 多节点时会把项目挂到另一台机器上——那台要么没这个 slug（报错），
+// 要么恰好有同名项目（**改错了人，还不报错**）。
+func TestUsageRowCarriesItsOwnNodeID(t *testing.T) {
+	a := makeUsageRow(provision.NodeProjectUsage{Slug: "alice"}, "node-1", "id-1", time.Now())
+	b := makeUsageRow(provision.NodeProjectUsage{Slug: "bob"}, "node-2", "id-2", time.Now())
+	if a.NodeID != "id-1" || b.NodeID != "id-2" {
+		t.Errorf("每行应带自己的节点 ID，got %q %q", a.NodeID, b.NodeID)
+	}
+	if a.NodeID == b.NodeID {
+		t.Error("不同节点的行不该共用一个 node ID")
 	}
 }

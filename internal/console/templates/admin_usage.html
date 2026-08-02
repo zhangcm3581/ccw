@@ -38,7 +38,8 @@
 
 {{if .Tiers}}
 <div class="card">
-  <div class="card-hd"><h2>额度档位</h2><span class="spacer"></span>
+  <div class="card-hd"><h2>额度档位</h2><span class="meta">{{.TierNode}}</span>
+    <span class="spacer"></span>
     <span class="meta">项目限额 = 档位比例 × 账号池上限</span></div>
   <div class="card-bd">
     <div class="scroll">
@@ -62,8 +63,9 @@
       {{end}}
     </table>
     </div>
-    <p class="muted">改动立刻影响全部挂该档位的项目——限额是推导出来的，
-      闸门下一轮（约 30 秒内）就按新值判定。</p>
+    <p class="muted">改动立刻影响<b>这台节点上</b>全部挂该档位的项目——限额是推导出来的，
+      闸门下一轮（约 30 秒内）就按新值判定。<br>
+      档位表存在各节点自己的库里，多台机器需要分别设置。</p>
   </div>
 </div>
 {{end}}
@@ -110,7 +112,7 @@
     {{if $.Tiers}}
     <form method="POST" action="/admin/usage/assign" style="display:flex;gap:8px;align-items:center;margin:14px 0">
       <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
-      <input type="hidden" name="node" value="{{$.NodeID}}">
+      <input type="hidden" name="node" value="{{.NodeID}}">
       <input type="hidden" name="slug" value="{{.Slug}}">
       <span class="muted">档位</span>
       <select name="tier">

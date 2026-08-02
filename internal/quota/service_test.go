@@ -2,6 +2,7 @@ package quota
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 )
@@ -141,5 +142,70 @@ func TestDefaultTiersLeaveHeadroom(t *testing.T) {
 	total := 1000 + 2500 + 3300 // 2x + 5x + 7x
 	if total > 10000 {
 		t.Errorf("默认档位合计 %d bp 已超过账号池，超卖时闸门会同时拦住多个项目", total)
+	}
+}
+
+// **全新安装的默认状态就会触发这个 bug**：迁移 002 把 pool_*_limit 的默认值
+// 设成 MaxInt64 当"无限制"哨兵，而 MaxInt64 × 3300 回绕之后 /10000 得 0——
+// 挂个档位就把项目限额变成 0，立刻永久受限，且发生在校准还没跑起来的时候。
+func TestApplyTierRefusesUncalibratedPool(t *testing.T) {
+	base := Limits{FiveHour: 1_000_000, SevenDay: 10_000_000}
+
+	// 未校准（MaxInt64 哨兵）
+	l := base
+	l.PoolFiveHour, l.PoolSevenDay = math.MaxInt64, math.MaxInt64
+	got := ApplyTier(l, 3300, true)
+	if got.FiveHour != base.FiveHour || got.SevenDay != base.SevenDay {
+		t.Errorf("池未校准时应沿用绝对限额，got 5h=%d 7d=%d", got.FiveHour, got.SevenDay)
+	}
+
+	// 池为 0 或负数
+	for _, pool := range []int64{0, -1} {
+		l = base
+		l.PoolFiveHour, l.PoolSevenDay = pool, pool
+		if got := ApplyTier(l, 3300, true); got.FiveHour != base.FiveHour {
+			t.Errorf("池=%d 时应沿用绝对限额，got %d", pool, got.FiveHour)
+		}
+	}
+
+	// 只有一个窗口算不出来时，**整个不套用**——只换一半会得到一组自相矛盾的
+	// 限额（5h 按档位、7d 按绝对值），排查时极难看懂。
+	l = base
+	l.PoolFiveHour, l.PoolSevenDay = 9_600_000, math.MaxInt64
+	if got := ApplyTier(l, 3300, true); got.FiveHour != base.FiveHour {
+		t.Errorf("任一窗口算不出来就该整个不套用，got 5h=%d", got.FiveHour)
+	}
+
+	// 正常校准过的池仍要正确套用
+	l = base
+	l.PoolFiveHour, l.PoolSevenDay = 9_600_000, 60_000_000
+	if got := ApplyTier(l, 3300, true); got.FiveHour != 3_168_000 {
+		t.Errorf("正常池应套用档位，got %d", got.FiveHour)
+	}
+}
+
+// 溢出可能回绕成**正数**——那样得到的限额看着合法，实际是一个毫无关系的数。
+//
+// 不变式：一份份额永远不可能大于整个池，也不可能是 0。
+// 用一批大到会溢出的池值扫一遍，比盯住某个具体输入更靠得住。
+func TestApplyTierNeverExceedsPool(t *testing.T) {
+	base := Limits{FiveHour: 1_000_000, SevenDay: 10_000_000}
+	for _, pool := range []int64{
+		math.MaxInt64, math.MaxInt64 / 2, math.MaxInt64 / 3,
+		3_000_000_000_000_000_000, 1 << 62, 1 << 55, 9_600_000,
+	} {
+		for _, bp := range []int{1, 1000, 3300, 10000} {
+			l := base
+			l.PoolFiveHour, l.PoolSevenDay = pool, pool
+			got := ApplyTier(l, bp, true)
+			// 要么原样沿用绝对限额（算不出来），要么是一个不超过池的正数
+			if got.FiveHour == base.FiveHour && got.SevenDay == base.SevenDay {
+				continue
+			}
+			if got.FiveHour <= 0 || got.FiveHour > pool {
+				t.Errorf("pool=%d bp=%d 算出 5h=%d：份额不能为0、也不能大于整个池",
+					pool, bp, got.FiveHour)
+			}
+		}
 	}
 }

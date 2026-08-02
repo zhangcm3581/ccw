@@ -2,6 +2,7 @@ package quota
 
 import (
 	"context"
+	"math"
 	"time"
 )
 
@@ -42,9 +43,41 @@ func ApplyTier(l Limits, shareBP int, hasTier bool) Limits {
 	if !hasTier || shareBP <= 0 {
 		return l
 	}
-	l.FiveHour = l.PoolFiveHour * int64(shareBP) / 10000
-	l.SevenDay = l.PoolSevenDay * int64(shareBP) / 10000
+	five, ok5 := tierLimit(l.PoolFiveHour, shareBP)
+	seven, ok7 := tierLimit(l.PoolSevenDay, shareBP)
+	// **任一窗口算不出来就整个不套用**：只换一半会得到一组自相矛盾的限额
+	// （5h 按档位、7d 按绝对值），排查时极难看懂。
+	if !ok5 || !ok7 {
+		return l
+	}
+	l.FiveHour, l.SevenDay = five, seven
 	return l
+}
+
+// tierLimit算 pool × shareBP / 10000，算不出来时返回 ok=false。
+//
+// **两个必须挡住的输入**，它们都会让项目限额变成 0，也就是立刻永久受限：
+//
+//  1. pool <= 0：没有可分的池。
+//  2. pool 大到乘法会溢出——**这正是全新安装的默认状态**：迁移 002 把
+//     pool_*_limit 的默认值设成 MaxInt64 当"无限制"哨兵，而
+//     MaxInt64 × 3300 回绕之后 /10000 得 0。挂个档位就把人锁死，
+//     而且发生在校准还没跑起来的时候。
+//
+// 这两种情况一律沿用绝对限额：宁可暂时不按档位分，也不能把人锁在门外。
+//
+// 溢出那条是**纵深防御**：实测采样下来，回绕的结果都落在 <=0，会被下面
+// 那条 `v <= 0` 兜住。留着它是为了让正确性不依赖"回绕恰好落在哪一侧"
+// ——那不是一条能指望的性质。
+func tierLimit(pool int64, shareBP int) (int64, bool) {
+	if pool <= 0 || pool > math.MaxInt64/int64(shareBP) {
+		return 0, false
+	}
+	v := pool * int64(shareBP) / 10000
+	if v <= 0 {
+		return 0, false
+	}
+	return v, true
 }
 
 // Assemble组装项目级 + 账号级的双层限额。

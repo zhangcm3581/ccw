@@ -28,6 +28,10 @@ import (
 type usageRow struct {
 	provision.NodeProjectUsage
 	Node string
+	// NodeID是这一行所属的节点。**每行各带一个**：档位表与 quota_tiers 都是
+	// 节点本地的，用全页共用的一个 node 去指派，多节点时会把项目挂到
+	// 另一台机器上——那台要么没这个 slug（报错），要么有同名项目（改错人）。
+	NodeID string
 	// Stale为true表示很久没有新用量了。**这是判断采集有没有在工作的唯一线索**：
 	// 采集链路断掉（最常见是 compose 里那个只读挂载漏了）的表现不是报错，
 	// 而是"一切正常、表永远是空的"。
@@ -107,15 +111,18 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess console
 	var rows []usageRow
 	var errs []string
 	var tiers []provision.QuotaTier
+	var tierNode string
 	var account provision.ClaudeAccount
 	var accountNode string
 	for _, n := range nodes {
 		if s.Fleet.Orchestrator == nil {
 			break
 		}
+		// **档位表是节点本地的**（quota_tiers 在节点库里），这里只取一台的。
+		// 页面上要标出是哪台，否则看着像全机队设置，改了却只对一台生效。
 		if tiers == nil {
-			if ts, terr := s.Fleet.Orchestrator.NodeTiers(ctx, n.ID); terr == nil {
-				tiers = ts
+			if ts, terr := s.Fleet.Orchestrator.NodeTiers(ctx, n.ID); terr == nil && len(ts) > 0 {
+				tiers, tierNode, nodeID = ts, n.Name, n.ID
 			}
 		}
 		us, uerr := s.Fleet.Orchestrator.NodeUsage(ctx, n.ID)
@@ -126,7 +133,7 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess console
 		}
 		var containers []string
 		for _, u := range us {
-			rows = append(rows, makeUsageRow(u, n.Name, time.Now()))
+			rows = append(rows, makeUsageRow(u, n.Name, n.ID, time.Now()))
 			containers = append(containers, "ccw-"+u.Slug)
 		}
 		if !account.LoggedIn && len(containers) > 0 {
@@ -134,14 +141,11 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess console
 				account, accountNode = a, n.Name
 			}
 		}
-		if nodeID == "" {
-			nodeID = n.ID
-		}
 	}
 	s.renderAdmin(w, "admin_usage.html", "usage", sess, s.Auth.issueCSRF(w, r), len(nodes),
 		map[string]any{
 			"Rows": rows, "Errors": errs, "NoOrchestrator": s.Fleet.Orchestrator == nil,
-			"Tiers": tiers, "NodeID": nodeID,
+			"Tiers": tiers, "NodeID": nodeID, "TierNode": tierNode,
 			"Account": account, "AccountNode": accountNode,
 			"AccountAge": humanWhen(&account.SnapshotAt),
 			"Notice":     r.URL.Query().Get("ok"), "Error": r.URL.Query().Get("err"),
@@ -155,8 +159,8 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess console
 // 真的断链时它会一直亮着，而正常的空闲不会误报太久。
 const staleAfter = 24 * time.Hour
 
-func makeUsageRow(u provision.NodeProjectUsage, node string, now time.Time) usageRow {
-	row := usageRow{NodeProjectUsage: u, Node: node, LastSeen: "从未采集到", Stale: true}
+func makeUsageRow(u provision.NodeProjectUsage, node, nodeID string, now time.Time) usageRow {
+	row := usageRow{NodeProjectUsage: u, Node: node, NodeID: nodeID, LastSeen: "从未采集到", Stale: true}
 	if u.LastEventAt != nil {
 		row.LastSeen = humanWhen(u.LastEventAt)
 		row.Stale = now.Sub(*u.LastEventAt) > staleAfter
