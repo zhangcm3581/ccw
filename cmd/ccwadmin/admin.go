@@ -38,10 +38,17 @@ type adminStore interface {
 var _ adminStore = (*store.Store)(nil)
 
 const (
-	defaultDiskGiB  = 15 // 设计§7.6：单项目磁盘配额默认值与上限均为15 GiB
-	maxDiskGiB      = 15
-	defaultFiveHour = 1_000_000
-	defaultSevenDay = 10_000_000
+	defaultDiskGiB = 15 // 设计§7.6：单项目磁盘配额默认值与上限均为15 GiB
+	maxDiskGiB     = 15
+	// **2026-08-02 按真机数据放大。**旧值（100万/1000万）在真实使用下，
+	// Claude 账号 5 小时窗口才到 11% 就把项目判超了——尺子和刻度都不对。
+	// 系数已按定价比例重标（见 deploy/.env.example），单位量级随之变化，
+	// 默认限额一并放大到"一个项目大致可以独占账号一个窗口"的量级。
+	//
+	// 这仍是**起点不是结论**：真正的限额要按 /admin/usage 上的实际分布来定，
+	// 尤其是多人共用一台机器时，每人应当只拿到其中一份。
+	defaultFiveHour = 200_000_000
+	defaultSevenDay = 1_000_000_000
 )
 
 func writeJSON(w io.Writer, v any) {
