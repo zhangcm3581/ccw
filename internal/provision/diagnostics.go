@@ -3,7 +3,9 @@ package provision
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -277,4 +279,122 @@ func (o *Orchestrator) NodeUsage(ctx context.Context, nodeID string) ([]NodeProj
 		return nil, fmt.Errorf("节点返回的用量数据无法解析")
 	}
 	return rows, nil
+}
+
+// QuotaTier是节点上的一个额度档位。ShareBP是万分之一（3300 = 33%）。
+type QuotaTier struct {
+	Name    string `json:"name"`
+	ShareBP int    `json:"share_bp"`
+	Order   int    `json:"sort_order"`
+}
+
+// NodeTiers读节点上的档位表。
+func (o *Orchestrator) NodeTiers(ctx context.Context, nodeID string) ([]QuotaTier, error) {
+	out, err := o.RunAdmin(ctx, nodeID, "tiers", "--json")
+	if err != nil {
+		return nil, err
+	}
+	i, j := strings.IndexByte(out, '['), strings.LastIndexByte(out, ']')
+	if i < 0 || j <= i {
+		return nil, nil
+	}
+	var rows []QuotaTier
+	if err := json.Unmarshal([]byte(out[i:j+1]), &rows); err != nil {
+		return nil, fmt.Errorf("节点返回的档位数据无法解析")
+	}
+	return rows, nil
+}
+
+// SetNodeTier改一个档位的百分比。pct是百分数（33 表示 33%）。
+func (o *Orchestrator) SetNodeTier(ctx context.Context, nodeID, name string, pct float64) error {
+	_, err := o.RunAdmin(ctx, nodeID, "tiers", "--set", name, "--percent", strconv.FormatFloat(pct, 'f', -1, 64))
+	return err
+}
+
+// AssignNodeTier把项目挂到档位；tier为空表示改回绝对限额。
+func (o *Orchestrator) AssignNodeTier(ctx context.Context, nodeID, slug, tier string) error {
+	args := []string{"tiers", "--assign", slug}
+	if tier != "" {
+		args = append(args, "--tier", tier)
+	}
+	_, err := o.RunAdmin(ctx, nodeID, args...)
+	return err
+}
+
+// ClaudeAccount是容器里 Claude 的账号信息 + 最近一次真实额度快照。
+type ClaudeAccount struct {
+	Container string
+	// AuthRaw是 `claude auth status --json` 的原文。
+	// **不解析成结构体**：官方文档没写返回哪些字段，写死解析等于把后台绑死在
+	// 某个版本上（与诊断页同款理由）。原文照显，判断交给看的人。
+	AuthRaw  string
+	LoggedIn bool
+	// 以下来自状态行写的快照；没有活跃会话时可能是旧的或缺失。
+	HasUsage    bool
+	FiveHourPct float64
+	SevenDayPct float64
+	SnapshotAt  time.Time
+}
+
+// ClaudeAccountInfo取账号信息与最近一次额度快照。
+//
+// **额度只能这么拿**：官方 CLI 没有 usage 命令，rate_limits 只随会话的
+// statusline JSON 送进来。所以快照的新鲜度取决于有没有人在用——
+// 页面上必须标出"截至什么时候"，否则会被当成实时值。
+func (o *Orchestrator) ClaudeAccountInfo(ctx context.Context, nodeID string, containers []string) (ClaudeAccount, error) {
+	cli, sudo, err := o.dialNode(ctx, nodeID)
+	if err != nil {
+		return ClaudeAccount{}, err
+	}
+	defer cli.Close()
+
+	var best ClaudeAccount
+	for _, c := range containers {
+		res, rerr := cli.Run(ctx, fmt.Sprintf("%sdocker exec %s claude auth status --json 2>&1; echo '%s'; %sdocker exec %s cat /tmp/ccw-account-usage 2>/dev/null",
+			sudo, shellQuote(c), diagMarker, sudo, shellQuote(c)))
+		if rerr != nil {
+			continue
+		}
+		auth, snap, _ := strings.Cut(res.Stdout, diagMarker)
+		acc := ClaudeAccount{Container: c, AuthRaw: strings.TrimSpace(auth)}
+		low := strings.ToLower(acc.AuthRaw)
+		acc.LoggedIn = strings.Contains(low, `"loggedin":true`) || strings.Contains(low, "loggedin: true")
+		if at, pct5, pct7, ok := parseSnapshotLine(strings.TrimSpace(snap)); ok {
+			acc.HasUsage, acc.SnapshotAt, acc.FiveHourPct, acc.SevenDayPct = true, at, pct5, pct7
+		}
+		// 取快照最新的那一个容器：账号是全机共用的，谁的快照新就用谁的。
+		if best.Container == "" || (acc.HasUsage && acc.SnapshotAt.After(best.SnapshotAt)) {
+			best = acc
+		}
+	}
+	if best.Container == "" {
+		return ClaudeAccount{}, errors.New("没有可用的项目容器")
+	}
+	return best, nil
+}
+
+// parseSnapshotLine解析状态行写的账号快照。
+func parseSnapshotLine(raw string) (at time.Time, five, seven float64, ok bool) {
+	var haveAt, h5, h7 bool
+	for _, kv := range strings.Fields(raw) {
+		k, v, cut := strings.Cut(kv, "=")
+		if !cut {
+			continue
+		}
+		switch k {
+		case "at":
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				at, haveAt = time.Unix(n, 0), true
+			}
+		case "five_hour_pct":
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				five, h5 = f, true
+			}
+		case "seven_day_pct":
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				seven, h7 = f, true
+			}
+		}
+	}
+	return at, five, seven, haveAt && h5 && h7
 }

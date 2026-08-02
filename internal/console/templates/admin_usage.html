@@ -4,6 +4,70 @@
   <p class="sub">各项目的真实 token 消耗与内部额度占用。数据来自各节点，实时拉取。</p>
 </div>
 
+{{if .Notice}}<div class="note ok">{{.Notice}}</div>{{end}}
+{{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
+
+{{if .Account.Container}}
+<div class="card">
+  <div class="card-hd"><h2>Claude 账号</h2><span class="meta">{{.AccountNode}}</span>
+    <span class="spacer"></span>
+    {{if .Account.LoggedIn}}<span class="st ok">已登录</span>{{else}}<span class="st bad">未登录</span>{{end}}
+  </div>
+  <div class="card-bd">
+    {{if .Account.HasUsage}}
+    <div class="kv">
+      <div><span>账号 5 小时窗口</span><b>已用 {{printf "%.1f" .Account.FiveHourPct}}%</b></div>
+      <div><span>账号 7 天窗口</span><b>已用 {{printf "%.1f" .Account.SevenDayPct}}%</b></div>
+      <div><span>数据截至</span><b>{{.AccountAge}}</b></div>
+    </div>
+    <p class="muted">这是<b>整个账号</b>的真实用量，全部项目共用。它由活跃会话回传——
+      官方命令行没有查用量的接口，所以没人在用时这个数会停在最后一次会话的时刻。
+      账号池上限正是按它自动校准的，各档位的百分比才对应现实。</p>
+    {{else}}
+    <div class="alert">还没有账号用量快照。它由 Claude 会话的状态行回传，
+      需要有人打开过终端；如果一直没有，检查项目镜像是否已更新到带
+      <code>ccw-statusline</code> 的版本。</div>
+    {{end}}
+    <details style="margin-top:14px">
+      <summary class="muted">claude auth status 原文</summary>
+      <pre class="cmdbox">{{.Account.AuthRaw}}</pre>
+    </details>
+  </div>
+</div>
+{{end}}
+
+{{if .Tiers}}
+<div class="card">
+  <div class="card-hd"><h2>额度档位</h2><span class="spacer"></span>
+    <span class="meta">项目限额 = 档位比例 × 账号池上限</span></div>
+  <div class="card-bd">
+    <div class="scroll">
+    <table>
+      <tr><th>档位</th><th>占账号池</th><th>调整</th></tr>
+      {{range .Tiers}}
+      <tr>
+        <td><code>{{.Name}}</code></td>
+        <td>{{printf "%.2f" (pct .ShareBP)}}%</td>
+        <td>
+          <form method="POST" action="/admin/usage/tier" style="display:flex;gap:8px;align-items:center">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+            <input type="hidden" name="node" value="{{$.NodeID}}">
+            <input type="hidden" name="name" value="{{.Name}}">
+            <input type="number" name="percent" step="0.01" min="0.01" max="100"
+                   value="{{printf "%.2f" (pct .ShareBP)}}" style="width:90px">
+            <button class="btn ghost" type="submit">保存</button>
+          </form>
+        </td>
+      </tr>
+      {{end}}
+    </table>
+    </div>
+    <p class="muted">改动立刻影响全部挂该档位的项目——限额是推导出来的，
+      闸门下一轮（约 30 秒内）就按新值判定。</p>
+  </div>
+</div>
+{{end}}
+
 {{if .NoOrchestrator}}
 <div class="alert">机队编排器未启用，无法从节点取用量。</div>
 {{end}}
@@ -21,7 +85,7 @@
   <p class="muted">还没有任何用量记录。</p>
 </div></div>
 {{else}}
-{{range .Rows}}
+{{range $.Rows}}
 <div class="card">
   <div class="card-hd">
     <h2>{{.Slug}}</h2>
@@ -42,6 +106,20 @@
       <div><span>5 小时窗口</span><b>{{.FiveHour.Weighted}} / {{.FiveHourLim}} 单位（{{.FiveHrPct}}%）</b></div>
       <div><span>7 天窗口</span><b>{{.SevenDay.Weighted}} / {{.SevenDayLim}} 单位（{{.SevenDPct}}%）</b></div>
     </div>
+
+    {{if $.Tiers}}
+    <form method="POST" action="/admin/usage/assign" style="display:flex;gap:8px;align-items:center;margin:14px 0">
+      <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+      <input type="hidden" name="node" value="{{$.NodeID}}">
+      <input type="hidden" name="slug" value="{{.Slug}}">
+      <span class="muted">档位</span>
+      <select name="tier">
+        <option value="">不用档位（沿用绝对限额）</option>
+        {{range $.Tiers}}<option value="{{.Name}}">{{.Name}} · {{printf "%.2f" (pct .ShareBP)}}%</option>{{end}}
+      </select>
+      <button class="btn ghost" type="submit">指派</button>
+    </form>
+    {{end}}
 
     <h3 style="margin-top:22px">真实 token（7 天窗口）</h3>
     <div class="scroll">

@@ -22,22 +22,26 @@ import (
 const projectQuotaFile = "/tmp/ccw-project-quota"
 
 // projectQuotaLine渲染写进容器的那一行。格式刻意简单到不需要 JSON 解析。
-func projectQuotaLine(d quota.Decision) string {
+//
+// 带上 used/limit：状态行要显示的是**分配给这个项目的那一份**用了多少，
+// 而不是整个账号的用量——后者是全机共用的数，看的人分不出哪部分是自己的。
+func projectQuotaLine(d quota.Decision, lim quota.Limits) string {
 	over := 0
 	if d.Over {
 		over = 1
 	}
-	return fmt.Sprintf("over=%d reason=%s", over, d.Reason)
+	return fmt.Sprintf("over=%d reason=%s five_used=%d five_limit=%d seven_used=%d seven_limit=%d",
+		over, d.Reason, d.FiveHourUsed, lim.FiveHour, d.SevenDayUsed, lim.SevenDay)
 }
 
 // writeProjectQuota把状态写进容器。
 //
 // **每轮都写，包括没受限的时候**：只在受限时写的话，额度恢复之后那行提示
 // 会一直留在屏幕上，反而更糟。
-func writeProjectQuota(ctx context.Context, container string, d quota.Decision) error {
+func writeProjectQuota(ctx context.Context, container string, d quota.Decision, lim quota.Limits) error {
 	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", container,
 		"sh", "-c", "cat > "+projectQuotaFile)
-	cmd.Stdin = strings.NewReader(projectQuotaLine(d))
+	cmd.Stdin = strings.NewReader(projectQuotaLine(d, lim))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))

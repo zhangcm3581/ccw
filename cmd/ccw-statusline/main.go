@@ -23,6 +23,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -112,14 +113,26 @@ func writeAccountSnapshot(p payload, now time.Time) {
 
 // render拼出整行。
 func render(p payload, now time.Time) string {
+	// **显示的是分配给本项目的那一份**，不是整个账号的用量：
+	// 账号百分比是全机共用的数，看的人分不出哪部分是自己的，
+	// 也解释不了"账号还剩 80% 而我被关了"。
+	//
+	// 拿不到本项目额度时（新会话的头 30 秒、没启用闸门）退回账号级——
+	// 有个数总比一片"--"强，标签会如实写成「账号」。
+	pq, hasPQ := parseProjectQuota(readProjectQuota())
 	segs := []string{
 		bold(modelName(p.Model.DisplayName)),
 		contextSeg(p),
-		limitSeg("账号5h", winOf(p, false), colMagenta, now, false),
-		limitSeg("账号7d", winOf(p, true), colAqua, now, true),
 	}
-	// 本项目受限时才追加一段。读不到文件（新会话的头 30 秒、或没启用闸门）
-	// 一律当作未受限——**宁可不提示，也不能凭空说人受限了**。
+	if hasPQ {
+		segs = append(segs,
+			allocSeg("5h", pq.FiveUsed, pq.FiveLimit, colMagenta, winOf(p, false), now, false),
+			allocSeg("7d", pq.SevenUsed, pq.SevenLimit, colAqua, winOf(p, true), now, true))
+	} else {
+		segs = append(segs,
+			limitSeg("账号5h", winOf(p, false), colMagenta, now, false),
+			limitSeg("账号7d", winOf(p, true), colAqua, now, true))
+	}
 	if seg := projectLimitSeg(readProjectQuota()); seg != "" {
 		segs = append(segs, seg)
 	}
@@ -130,12 +143,63 @@ func render(p payload, now time.Time) string {
 // projectQuotaPath是 worker-agent 写入本项目受限状态的位置。
 const projectQuotaPath = "/tmp/ccw-project-quota"
 
+// projectQuotaPathVar让测试改写落点；生产恒为上面那个常量。
+var projectQuotaPathVar = projectQuotaPath
+
 func readProjectQuota() string {
-	b, err := os.ReadFile(projectQuotaPath)
+	b, err := os.ReadFile(projectQuotaPathVar)
 	if err != nil {
 		return ""
 	}
 	return string(b)
+}
+
+// projectQuota是本项目那一份额度的用量。
+type projectQuota struct {
+	FiveUsed, FiveLimit   int64
+	SevenUsed, SevenLimit int64
+}
+
+// parseProjectQuota解析 worker-agent 写进容器的那一行。
+// 限额为 0（未配置/未启用闸门）视为拿不到——画一条 0 分母的进度条没有意义。
+func parseProjectQuota(raw string) (projectQuota, bool) {
+	var q projectQuota
+	got := map[string]int64{}
+	for _, kv := range strings.Fields(raw) {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			continue
+		}
+		got[k] = n
+	}
+	q.FiveUsed, q.FiveLimit = got["five_used"], got["five_limit"]
+	q.SevenUsed, q.SevenLimit = got["seven_used"], got["seven_limit"]
+	if q.FiveLimit <= 0 || q.SevenLimit <= 0 {
+		return q, false
+	}
+	return q, true
+}
+
+// allocSeg渲染"本项目这一份"的剩余比例。
+//
+// 倒计时仍取自 Claude 的 rate_limits——窗口什么时候重置是账号级的事实，
+// 与分给谁多少无关。拿不到就不显示，不编一个。
+func allocSeg(label string, used, limit int64, accent int, w *window, now time.Time, allowDays bool) string {
+	left := float64(limit-used) / float64(limit)
+	if left < 0 {
+		left = 0
+	}
+	out := fmt.Sprintf("%s %s %d%%", label, bar(left, accent), int(math.Round(left*100)))
+	if w != nil && w.ResetsAt != nil {
+		if cd := countdown(time.Unix(*w.ResetsAt, 0).Sub(now), allowDays); cd != "" {
+			out += " " + cd
+		}
+	}
+	return out
 }
 
 // projectLimitSeg把 "over=1 reason=xxx" 翻成一段提示；未受限返回空。

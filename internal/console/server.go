@@ -71,10 +71,16 @@ func New(store SiteStore, distDir string, logf func(string, ...any)) *Server {
 	for _, page := range []string{"home.html", "connect.html"} {
 		s.tmpl[page] = template.Must(template.ParseFS(tmplFS, "templates/layout.html", "templates/"+page))
 	}
+	// pct把万分之一转成百分数。档位比例存整数 bp（限额要参与 ">=" 比较，
+	// 浮点会带来边界抖动），但界面上必须显示成人看的百分比。
+	adminFuncs := template.FuncMap{
+		"pct": func(bp int) float64 { return float64(bp) / 100 },
+	}
 	for _, page := range []string{"admin_dashboard.html", "admin_nodes.html",
 		"admin_node_new.html", "admin_node.html", "admin_run.html",
 		"admin_cdks.html", "admin_domains.html", "admin_audit.html", "admin_usage.html"} {
-		s.tmpl[page] = template.Must(template.ParseFS(tmplFS, "templates/admin_layout.html", "templates/"+page))
+		s.tmpl[page] = template.Must(template.New("admin_layout.html").Funcs(adminFuncs).
+			ParseFS(tmplFS, "templates/admin_layout.html", "templates/"+page))
 	}
 	// 登录页没有侧边栏（此时还没登录），自带完整文档结构。
 	s.tmpl["admin_login.html"] = template.Must(template.ParseFS(tmplFS, "templates/admin_login.html"))

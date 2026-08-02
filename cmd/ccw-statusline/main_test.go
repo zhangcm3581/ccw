@@ -362,3 +362,80 @@ func TestAccountSnapshotSkipsIncomplete(t *testing.T) {
 		}
 	}
 }
+
+// 状态行显示的必须是**分配给本项目的那一份**，不是整个账号的用量。
+//
+// 账号百分比是全机共用的数，看的人分不出哪部分是自己的，
+// 也解释不了"账号还剩 80% 而我被关了"。
+func TestShowsProjectAllocationWhenAvailable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pq")
+	old := projectQuotaPathVar
+	projectQuotaPathVar = path
+	defer func() { projectQuotaPathVar = old }()
+
+	// 本项目：5h 用了 25%，7d 用了 10%
+	os.WriteFile(path, []byte("over=0 reason= five_used=250000 five_limit=1000000 "+
+		"seven_used=1000000 seven_limit=10000000"), 0o644)
+
+	// 账号那边的百分比完全不同（80% / 90%），不该出现在行里
+	p := parse(t, `{"rate_limits":{"five_hour":{"used_percentage":80},"seven_day":{"used_percentage":90}}}`)
+	v := visible(render(p, time.Now()))
+
+	if strings.Contains(v, "账号") {
+		t.Errorf("有本项目额度时不该显示账号级：%s", v)
+	}
+	if !strings.Contains(v, "75%") {
+		t.Errorf("5h 应显示本项目剩余 75%%，got %s", v)
+	}
+	if !strings.Contains(v, "90%") {
+		t.Errorf("7d 应显示本项目剩余 90%%，got %s", v)
+	}
+	// 账号的 20%/10% 剩余不该出现
+	if strings.Contains(v, "20%") {
+		t.Errorf("不该显示账号级剩余：%s", v)
+	}
+}
+
+// 拿不到本项目额度时退回账号级——有个数总比一片 "--" 强，
+// 但标签要如实写成「账号」，不能把账号的数冒充成项目的。
+func TestFallsBackToAccountWhenNoAllocation(t *testing.T) {
+	dir := t.TempDir()
+	projectQuotaPathVar = filepath.Join(dir, "missing")
+	defer func() { projectQuotaPathVar = projectQuotaPath }()
+
+	p := parse(t, `{"rate_limits":{"five_hour":{"used_percentage":20},"seven_day":{"used_percentage":30}}}`)
+	v := visible(render(p, time.Now()))
+	if !strings.Contains(v, "账号5h") || !strings.Contains(v, "账号7d") {
+		t.Errorf("退回账号级时标签必须写明「账号」：%s", v)
+	}
+}
+
+func TestParseProjectQuota(t *testing.T) {
+	q, ok := parseProjectQuota("over=0 reason= five_used=1 five_limit=10 seven_used=2 seven_limit=20")
+	if !ok || q.FiveUsed != 1 || q.FiveLimit != 10 || q.SevenUsed != 2 || q.SevenLimit != 20 {
+		t.Errorf("解析错：%+v %v", q, ok)
+	}
+	// 限额为 0（未配置/闸门未启用）视为拿不到——0 分母的进度条没有意义
+	for _, raw := range []string{
+		"", "garbage",
+		"five_used=1 five_limit=0 seven_used=2 seven_limit=20",
+		"five_used=1 five_limit=10 seven_used=2 seven_limit=0",
+		"over=1 reason=x", // 只有受限标记、没有额度数
+	} {
+		if _, ok := parseProjectQuota(raw); ok {
+			t.Errorf("%q 不该被当成可用额度", raw)
+		}
+	}
+}
+
+// 用超了不能显示负剩余。
+func TestAllocSegClampsOverrun(t *testing.T) {
+	got := visible(allocSeg("5h", 5_000_000, 1_000_000, colMagenta, nil, time.Now(), false))
+	if strings.Contains(got, "-") {
+		t.Errorf("用超时不该出现负数：%s", got)
+	}
+	if !strings.Contains(got, "0%") {
+		t.Errorf("用超应显示剩余 0%%：%s", got)
+	}
+}

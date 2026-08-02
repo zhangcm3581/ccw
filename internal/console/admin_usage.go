@@ -1,8 +1,11 @@
 package console
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"ccw/internal/consolestore"
@@ -36,6 +39,61 @@ type usageRow struct {
 
 func (s *Server) registerUsage(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/usage", s.Auth.requireAdmin(s.adminUsage))
+	mux.HandleFunc("POST /admin/usage/tier", s.Auth.requireAdmin(s.adminSetTier))
+	mux.HandleFunc("POST /admin/usage/assign", s.Auth.requireAdmin(s.adminAssignTier))
+}
+
+// adminSetTier改一个档位的百分比。
+//
+// **改完立刻影响全部挂该档位的项目**——限额是推导出来的，闸门下一轮（30秒内）
+// 就按新值判。所以要审计。
+func (s *Server) adminSetTier(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	s.tierAction(w, r, sess, "quota.tier.set", func(nodeID string) error {
+		name := strings.TrimSpace(r.PostFormValue("name"))
+		pct, err := strconv.ParseFloat(strings.TrimSpace(r.PostFormValue("percent")), 64)
+		if err != nil || pct <= 0 || pct > 100 {
+			return errBadPercent
+		}
+		return s.Fleet.Orchestrator.SetNodeTier(r.Context(), nodeID, name, pct)
+	})
+}
+
+// adminAssignTier把项目挂到档位；tier 为空表示改回绝对限额。
+func (s *Server) adminAssignTier(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
+	s.tierAction(w, r, sess, "quota.tier.assign", func(nodeID string) error {
+		return s.Fleet.Orchestrator.AssignNodeTier(r.Context(), nodeID,
+			strings.TrimSpace(r.PostFormValue("slug")), strings.TrimSpace(r.PostFormValue("tier")))
+	})
+}
+
+var errBadPercent = errors.New("百分比需在 (0,100]——0 会让该档位的项目立刻全员受限")
+
+func (s *Server) tierAction(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession,
+	action string, do func(nodeID string) error) {
+	if !s.Auth.checkCSRF(r) {
+		http.Error(w, "csrf", http.StatusForbidden)
+		return
+	}
+	nodeID := strings.TrimSpace(r.PostFormValue("node"))
+	if s.Fleet.Orchestrator == nil || nodeID == "" {
+		http.Redirect(w, r, "/admin/usage?err="+urlQueryEscape("机队编排器未启用或未指定节点"), http.StatusFound)
+		return
+	}
+	if aerr := s.Auth.audit(r.Context(), consolestore.AuditEntry{
+		Actor: sess.UserID, Action: action, Target: nodeID, Result: "ok",
+		Detail: map[string]any{"name": r.PostFormValue("name"), "slug": r.PostFormValue("slug"),
+			"tier": r.PostFormValue("tier"), "percent": r.PostFormValue("percent")},
+		ClientIP: clientIP(r),
+	}); aerr != nil {
+		s.Logf("console: 审计写入失败，档位改动中止: %v", aerr)
+		http.Redirect(w, r, "/admin/usage?err="+urlQueryEscape("服务暂时不可用"), http.StatusFound)
+		return
+	}
+	if err := do(nodeID); err != nil {
+		http.Redirect(w, r, "/admin/usage?err="+urlQueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/usage?ok="+urlQueryEscape("已更新；闸门在下一轮（约30秒内）按新值判定"), http.StatusFound)
 }
 
 func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
@@ -45,11 +103,20 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess console
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	var nodeID string
 	var rows []usageRow
 	var errs []string
+	var tiers []provision.QuotaTier
+	var account provision.ClaudeAccount
+	var accountNode string
 	for _, n := range nodes {
 		if s.Fleet.Orchestrator == nil {
 			break
+		}
+		if tiers == nil {
+			if ts, terr := s.Fleet.Orchestrator.NodeTiers(ctx, n.ID); terr == nil {
+				tiers = ts
+			}
 		}
 		us, uerr := s.Fleet.Orchestrator.NodeUsage(ctx, n.ID)
 		if uerr != nil {
@@ -57,12 +124,28 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess console
 			errs = append(errs, fmt.Sprintf("%s：%v", n.Name, uerr))
 			continue
 		}
+		var containers []string
 		for _, u := range us {
 			rows = append(rows, makeUsageRow(u, n.Name, time.Now()))
+			containers = append(containers, "ccw-"+u.Slug)
+		}
+		if !account.LoggedIn && len(containers) > 0 {
+			if a, aerr := s.Fleet.Orchestrator.ClaudeAccountInfo(ctx, n.ID, containers); aerr == nil {
+				account, accountNode = a, n.Name
+			}
+		}
+		if nodeID == "" {
+			nodeID = n.ID
 		}
 	}
 	s.renderAdmin(w, "admin_usage.html", "usage", sess, s.Auth.issueCSRF(w, r), len(nodes),
-		map[string]any{"Rows": rows, "Errors": errs, "NoOrchestrator": s.Fleet.Orchestrator == nil})
+		map[string]any{
+			"Rows": rows, "Errors": errs, "NoOrchestrator": s.Fleet.Orchestrator == nil,
+			"Tiers": tiers, "NodeID": nodeID,
+			"Account": account, "AccountNode": accountNode,
+			"AccountAge": humanWhen(&account.SnapshotAt),
+			"Notice":     r.URL.Query().Get("ok"), "Error": r.URL.Query().Get("err"),
+		})
 }
 
 // staleAfter是"多久没有新用量就算可疑"。

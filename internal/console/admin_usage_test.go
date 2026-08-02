@@ -1,11 +1,14 @@
 package console
 
 import (
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"ccw/internal/consolestore"
 	"ccw/internal/provision"
 )
 
@@ -79,5 +82,31 @@ func TestUsagePageSeparatesRealFromEstimated(t *testing.T) {
 	// 这一页是给管理员看的，真正要保证的是"两套数分得清"，即上面那几条正向断言。
 	if !strings.Contains(body, "不是") {
 		t.Error("必须明确否定'内部单位＝官方额度'这个误解，而不是只摆数字")
+	}
+}
+
+// 档位百分比越界要拒绝：0 会让该档位的项目立刻全员受限，>100 是超卖账号池。
+func TestSetTierRejectsOutOfRangePercent(t *testing.T) {
+	s, fs, sess, csrf := newFleetServer(t)
+	fs.nodes["n1"] = consolestore.Node{ID: "n1", Name: "node-1"}
+	for _, p := range []string{"0", "-1", "101", "abc", ""} {
+		form := url.Values{"csrf_token": {csrf.Value}, "node": {"n1"}, "name": {"7x"}, "percent": {p}}
+		w := postForm(t, s, "/admin/usage/tier", form, []*http.Cookie{sess, csrf}, "203.0.113.5")
+		dec, _ := url.QueryUnescape(w.Header().Get("Location"))
+		if !strings.Contains(dec, "百分比") && !strings.Contains(dec, "编排器") {
+			t.Errorf("percent=%q 应被拒绝，got %s", p, dec)
+		}
+	}
+}
+
+func TestTierFormsRequireCSRF(t *testing.T) {
+	s, fs, sess, _ := newFleetServer(t)
+	fs.nodes["n1"] = consolestore.Node{ID: "n1", Name: "node-1"}
+	for _, path := range []string{"/admin/usage/tier", "/admin/usage/assign"} {
+		form := url.Values{"node": {"n1"}, "name": {"7x"}, "percent": {"33"}}
+		w := postForm(t, s, path, form, []*http.Cookie{sess}, "203.0.113.5")
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s 无CSRF应403，got %d", path, w.Code)
+		}
 	}
 }
