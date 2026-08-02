@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,10 +81,10 @@ func (f *fakeCalStore) SetAccountPoolLimits(_ context.Context, _ string, a, b in
 func TestCalibratePoolWritesBack(t *testing.T) {
 	now := time.Now()
 	st := &fakeCalStore{used5: 1_052_098, used7: 3_053_579}
-	ok, err := calibratePool(context.Background(), st, "acct",
+	got5, _, err := calibratePool(context.Background(), st, "acct",
 		accountSnapshot{At: now, FiveHourPct: 11, SevenDayPct: 51}, now)
-	if err != nil || !ok {
-		t.Fatalf("应写回：%v %v", ok, err)
+	if err != nil || got5 == 0 {
+		t.Fatalf("应写回：%v %v", got5, err)
 	}
 	// 首次标定直接采用估计值：1052098/0.11 ≈ 9.56M
 	if st.wrote5 < 9_500_000 || st.wrote5 > 9_600_000 {
@@ -97,12 +99,12 @@ func TestCalibratePoolWritesBack(t *testing.T) {
 func TestCalibratePoolSkipsWhenUnreliable(t *testing.T) {
 	now := time.Now()
 	st := &fakeCalStore{five: 10_000_000, seven: 10_000_000, used5: 10, used7: 10}
-	ok, err := calibratePool(context.Background(), st, "acct",
+	got5, _, err := calibratePool(context.Background(), st, "acct",
 		accountSnapshot{At: now, FiveHourPct: 1, SevenDayPct: 1}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok || st.writes != 0 {
+	if got5 != 0 || st.writes != 0 {
 		t.Errorf("数据不可信时不该写库，writes=%d", st.writes)
 	}
 }
@@ -124,4 +126,23 @@ func itoa64(n int64) string {
 		return "-" + string(b)
 	}
 	return string(b)
+}
+
+// 写快照的（状态行）与读快照的（worker-agent、Console）必须用同一个路径。
+// 不一致的表现是"状态行明明写了、校准永远不发生"，而且两边都不报错。
+func TestSnapshotPathMatchesWriter(t *testing.T) {
+	b, err := os.ReadFile("../ccw-statusline/main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `accountSnapshotPath = "`+snapshotPath+`"`) {
+		t.Errorf("状态行写的路径与这里读的 %q 不一致", snapshotPath)
+	}
+	c, err := os.ReadFile("../../internal/provision/diagnostics.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(c), snapshotPath) {
+		t.Errorf("Console 读的路径与 %q 不一致", snapshotPath)
+	}
 }

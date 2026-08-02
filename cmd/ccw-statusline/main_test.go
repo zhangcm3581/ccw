@@ -439,3 +439,23 @@ func TestAllocSegClampsOverrun(t *testing.T) {
 		t.Errorf("用超应显示剩余 0%%：%s", got)
 	}
 }
+
+// 账号快照必须写在**持久卷**里，不能是 /tmp。
+//
+// 2026-08-02 真机：重建容器之后 /tmp/ccw-account-usage 没了，而重建正是部署的
+// 常规动作——后果是每次部署后校准都要等下一次会话，后台的账号卡也跟着空白。
+// 这份数据是账号级的（同节点全部项目共用一个上游账号），
+// claude-shared 卷恰好也是节点级且持久的。
+func TestAccountSnapshotGoesToPersistentVolume(t *testing.T) {
+	if strings.HasPrefix(accountSnapshotPath, "/tmp/") {
+		t.Errorf("账号快照不该落在 /tmp（容器重建即丢）：%s", accountSnapshotPath)
+	}
+	if !strings.HasPrefix(accountSnapshotPath, "/home/claude/") {
+		t.Errorf("应落在 claude-shared 卷里（节点级、持久）：%s", accountSnapshotPath)
+	}
+	// 本项目额度仍在 /tmp：它是**每项目一份**，而 /home/claude 是共享卷，
+	// 写在那里会让 A 项目读到 B 的额度。
+	if !strings.HasPrefix(projectQuotaPath, "/tmp/") {
+		t.Errorf("本项目额度必须每容器一份，不能进共享卷：%s", projectQuotaPath)
+	}
+}

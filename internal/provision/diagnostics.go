@@ -353,7 +353,7 @@ func (o *Orchestrator) ClaudeAccountInfo(ctx context.Context, nodeID string, con
 
 	var best ClaudeAccount
 	for _, c := range containers {
-		res, rerr := cli.Run(ctx, fmt.Sprintf("%sdocker exec %s claude auth status --json 2>&1; echo '%s'; %sdocker exec %s cat /tmp/ccw-account-usage 2>/dev/null",
+		res, rerr := cli.Run(ctx, fmt.Sprintf("%sdocker exec %s claude auth status --json 2>&1; echo '%s'; %sdocker exec %s cat /home/claude/.ccw-account-usage 2>/dev/null",
 			sudo, shellQuote(c), diagMarker, sudo, shellQuote(c)))
 		if rerr != nil {
 			continue

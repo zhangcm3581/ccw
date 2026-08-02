@@ -194,11 +194,14 @@ func main() {
 						if perr != nil {
 							continue
 						}
-						if wrote, cerr := calibratePool(ctx, st, p.AccountID, snap, now); cerr != nil {
-							logln("池上限校准失败：%v", cerr)
-						} else if wrote {
-							logln("池上限已按真实账号用量校准（5h=%.1f%% 7d=%.1f%%）",
-								snap.FiveHourPct, snap.SevenDayPct)
+						// **日志要打结果，不是输入**：原来打的是账号百分比，
+						// 而它在收敛过程中基本不变，于是同一行重复十几遍，
+						// 看不出到底调没调、调到了多少。
+						if new5, new7, cerr := calibratePool(ctx, st, p.AccountID, snap, now); cerr != nil {
+							logln("窗口容量校准失败：%v", cerr)
+						} else if new5 > 0 || new7 > 0 {
+							logln("账号窗口容量已校准：5h=%d 7d=%d 单位（依据真实用量 5h=%.1f%% 7d=%.1f%%）",
+								new5, new7, snap.FiveHourPct, snap.SevenDayPct)
 						}
 						break // 一份快照足够，不必遍历其余容器
 					}

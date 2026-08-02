@@ -21,11 +21,18 @@ import (
 //
 // **快照只在有人开着会话时更新**——官方 CLI 没有 usage 命令，这是唯一的入口。
 // 所以太旧的快照要丢掉：拿一周前的百分比去除以今天的累计量，结果毫无意义。
+//
+// 快照写在 claude-shared 卷里（不是 /tmp）：容器重建不会丢，
+// 否则每次部署后校准都要等下一次会话才能恢复。
 
 // snapshotMaxAge是快照的有效期。
 //
 // 取 10 分钟：状态行每 10 秒写一次，会话开着时永远新鲜；
 // 会话一关就迅速过期，不会拿旧数据去校准。
+// snapshotPath是账号快照在容器里的位置。**必须与状态行写入的路径一致**，
+// 不一致的表现是"明明写了、校准永远不发生"，两边都不报错。
+const snapshotPath = "/home/claude/.ccw-account-usage"
+
 const snapshotMaxAge = 10 * time.Minute
 
 // accountSnapshot是从容器里读回来的一份账号用量快照。
@@ -39,7 +46,7 @@ type accountSnapshot struct {
 
 // readAccountSnapshot从容器里取快照。取不到（文件不存在、格式不对、太旧）返回 false。
 func readAccountSnapshot(ctx context.Context, container string, now time.Time) (accountSnapshot, bool) {
-	cmd := exec.CommandContext(ctx, "docker", "exec", container, "cat", "/tmp/ccw-account-usage")
+	cmd := exec.CommandContext(ctx, "docker", "exec", container, "cat", snapshotPath)
 	out, err := cmd.Output()
 	if err != nil {
 		return accountSnapshot{}, false
@@ -99,28 +106,31 @@ type poolCalibrator interface {
 	SetAccountPoolLimits(ctx context.Context, accountID string, fiveHour, sevenDay int64) error
 }
 
-// calibratePool用一份快照校准账号池上限。返回是否写了库。
+// calibratePool用一份快照校准账号窗口容量。
+//
+// 返回新的两个容量值；未发生调整时返回 0,0——调用方据此决定要不要记日志。
+// **返回值而不是布尔**：日志要打得出"调到了多少"，只说"调了"没有用。
 func calibratePool(ctx context.Context, st poolCalibrator, accountID string,
-	snap accountSnapshot, now time.Time) (bool, error) {
+	snap accountSnapshot, now time.Time) (int64, int64, error) {
 	cur5, cur7, err := st.AccountPoolLimits(ctx, accountID)
 	if err != nil {
-		return false, err
+		return 0, 0, err
 	}
 	used5, err := st.PoolUsed(ctx, accountID, now.Add(-5*time.Hour))
 	if err != nil {
-		return false, err
+		return 0, 0, err
 	}
 	used7, err := st.PoolUsed(ctx, accountID, now.Add(-7*24*time.Hour))
 	if err != nil {
-		return false, err
+		return 0, 0, err
 	}
 	new5, ok5 := quota.CalibratePool(quota.CalibrateInput{Current: cur5, PoolUsed: used5, AccountPct: snap.FiveHourPct})
 	new7, ok7 := quota.CalibratePool(quota.CalibrateInput{Current: cur7, PoolUsed: used7, AccountPct: snap.SevenDayPct})
 	if !ok5 && !ok7 {
-		return false, nil
+		return 0, 0, nil
 	}
 	if err := st.SetAccountPoolLimits(ctx, accountID, new5, new7); err != nil {
-		return false, fmt.Errorf("写回池上限失败: %w", err)
+		return 0, 0, fmt.Errorf("写回窗口容量失败: %w", err)
 	}
-	return true, nil
+	return new5, new7, nil
 }

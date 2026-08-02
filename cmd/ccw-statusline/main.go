@@ -81,10 +81,13 @@ func main() {
 //
 // **这是这套系统唯一能拿到 Claude 真实用量的地方**：官方 CLI 没有 usage 命令，
 // 而 rate_limits 只随会话的 statusline JSON 送进来。写一份出来，
-// worker-agent 才能用它反推账号池上限（否则档位百分比只能靠猜）。
+// worker-agent 才能用它反推账号窗口容量（否则档位百分比只能靠猜）。
 //
-// 落 /tmp：每容器一份，不进任何卷。
-const accountSnapshotPath = "/tmp/ccw-account-usage"
+// **落在 claude-shared 卷里而不是 /tmp**（2026-08-02 改）：/tmp 每重建一次容器
+// 就没，而重建是部署的常规动作——后果是每次部署后校准都要等下一次会话，
+// 后台的账号卡也会跟着变空白。这份数据是**账号级**的（同节点全部项目共用
+// 一个上游账号），而 claude-shared 恰好也是节点级且持久的，位置正好对上。
+const accountSnapshotPath = "/home/claude/.ccw-account-usage"
 
 // accountSnapshotPathVar让测试改写落点；生产恒为上面那个常量。
 var accountSnapshotPathVar = accountSnapshotPath
