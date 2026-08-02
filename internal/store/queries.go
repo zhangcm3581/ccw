@@ -157,15 +157,37 @@ func (s *Store) AccountWindows(ctx context.Context, accountID string, now time.T
 		return quota.Windows{}, err
 	}
 	var w quota.Windows
-	// **过期的边界不能用**：resets_at 已经过去说明快照旧了，那时用它算出的
-	// 窗口起点在更早的过去，会把本该滑出的用量重新算进来。退回滚动窗口。
-	if r5 != nil && r5.After(now) {
-		w.FiveHourStart = r5.Add(-5 * time.Hour)
-	}
-	if r7 != nil && r7.After(now) {
-		w.SevenDayStart = r7.Add(-7 * 24 * time.Hour)
-	}
+	w.FiveHourStart = windowStart(r5, now, 5*time.Hour)
+	w.SevenDayStart = windowStart(r7, now, 7*24*time.Hour)
 	return w, nil
+}
+
+// windowStart由 Claude 报的下次重置时刻算出当前窗口的起点。
+//
+// 三种情形，第二种是关键：
+//
+//  1. resets_at 在未来 → 当前窗口起点 = resets_at - 窗口长度。
+//  2. **resets_at 已经过去** → 说明窗口已经重置过了，而重置发生在那一刻。
+//     那之前的用量属于上一个窗口，一律不该再算。所以起点就取 resets_at 本身。
+//     这一条专治"项目被断开之后没人回传新快照"：被断的项目没有会话，
+//     拿不到新的 resets_at，但**旧的那个已经足够说明"重置已经发生"**——
+//     不用它的话，项目要等自己那 5 小时慢慢滑完才恢复，而不是在重置那一刻。
+//  3. 快照太旧（resets_at 早于一个窗口长度之前）→ 取 now-窗口长度。
+//     否则会把好几天的用量塞进一个"5 小时"窗口，比滚动窗口还糟。
+//
+// 合起来就是 max(resets_at, now-窗口长度)，两个方向都安全。
+func windowStart(resetsAt *time.Time, now time.Time, length time.Duration) time.Time {
+	rolling := now.Add(-length)
+	if resetsAt == nil {
+		return time.Time{} // 没拿到过快照：零值＝调用方退回滚动窗口
+	}
+	if resetsAt.After(now) {
+		return resetsAt.Add(-length)
+	}
+	if resetsAt.After(rolling) {
+		return *resetsAt
+	}
+	return rolling
 }
 
 // SetAccountWindows写回 Claude 报的下次重置时刻。
