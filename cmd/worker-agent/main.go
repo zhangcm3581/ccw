@@ -180,6 +180,30 @@ func main() {
 				return
 			case <-t.C:
 				// guard：panic不分goroutine，这里不recover的话一次意外会连采集一起带走。
+				// 池上限校准：从任意一个活跃项目的容器里读一份账号快照就够——
+				// 快照是**账号级**的，同一台机器上全部项目看到的是同一个数。
+				// 只在有活跃项目时做：快照本来也只有会话开着时才更新。
+				guard("池上限校准", logln, func() {
+					now := time.Now()
+					for _, pid := range registry.ActiveProjects() {
+						snap, ok := readAccountSnapshot(ctx, containerFor(pid), now)
+						if !ok {
+							continue // 这个容器没有新鲜快照，试下一个
+						}
+						p, perr := st.GetProjectByID(ctx, pid)
+						if perr != nil {
+							continue
+						}
+						if wrote, cerr := calibratePool(ctx, st, p.AccountID, snap, now); cerr != nil {
+							logln("池上限校准失败：%v", cerr)
+						} else if wrote {
+							logln("池上限已按真实账号用量校准（5h=%.1f%% 7d=%.1f%%）",
+								snap.FiveHourPct, snap.SevenDayPct)
+						}
+						break // 一份快照足够，不必遍历其余容器
+					}
+				})
+
 				guard("额度执行", logln, func() {
 					// 只遍历有活跃连接的项目——没有连接就没有东西可关。
 					// （采集必须遍历全部项目，那是另一个循环，见下方runUsageLoop。）

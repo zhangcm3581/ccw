@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -302,6 +304,61 @@ func TestProjectLimitSegIgnoresGarbage(t *testing.T) {
 	for _, raw := range []string{"garbage", "over=", "overover", "\x00\x01"} {
 		if got := projectLimitSeg(raw); got != "" {
 			t.Errorf("%q 不该判成受限，got %q", raw, got)
+		}
+	}
+}
+
+// 账号快照是这套系统唯一能拿到 Claude 真实用量的地方——官方 CLI 没有
+// usage 命令，rate_limits 只随会话的 statusline JSON 送进来。
+// worker-agent 靠它反推账号池上限，没有它档位百分比只能靠猜。
+func TestAccountSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap")
+	old := accountSnapshotPathVar
+	accountSnapshotPathVar = path
+	defer func() { accountSnapshotPathVar = old }()
+
+	now := time.Unix(1738400000, 0)
+	p := parse(t, `{"rate_limits":{
+	  "five_hour":{"used_percentage":11.5,"resets_at":1738425600},
+	  "seven_day":{"used_percentage":51,"resets_at":1738857600}}}`)
+	writeAccountSnapshot(p, now)
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	for _, want := range []string{"at=1738400000", "five_hour_pct=11.50", "seven_day_pct=51.00",
+		"five_hour_resets=1738425600", "seven_day_resets=1738857600"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("快照缺 %q：%s", want, got)
+		}
+	}
+	if strings.ContainsAny(got, "\n\r") {
+		t.Errorf("快照应是单行：%q", got)
+	}
+}
+
+// **数据不全时不写**：留着上一份旧快照，比写一份半截的更有用——
+// 读的一方靠 at= 判新鲜度，缺字段的快照会让它误以为拿到了新数据。
+func TestAccountSnapshotSkipsIncomplete(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap")
+	accountSnapshotPathVar = path
+	defer func() { accountSnapshotPathVar = accountSnapshotPath }()
+
+	os.WriteFile(path, []byte("at=1 five_hour_pct=9.00 seven_day_pct=9.00"), 0o644)
+	for _, raw := range []string{
+		`{}`,
+		`{"rate_limits":{}}`,
+		`{"rate_limits":{"five_hour":{"used_percentage":5}}}`,                // 缺 7d
+		`{"rate_limits":{"five_hour":{},"seven_day":{"used_percentage":5}}}`, // 缺 5h 的百分比
+	} {
+		writeAccountSnapshot(parse(t, raw), time.Unix(999, 0))
+		b, _ := os.ReadFile(path)
+		if !strings.Contains(string(b), "at=1") {
+			t.Errorf("输入 %s 不该覆盖旧快照，现在是：%s", raw, b)
 		}
 	}
 }

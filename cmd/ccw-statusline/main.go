@@ -68,7 +68,46 @@ func main() {
 	// **解析失败也要出一行**：状态行是常驻 UI，因为一次坏输入就整行消失
 	// 比显示"--"更让人摸不着头脑。
 	_ = json.Unmarshal(b, &p)
-	fmt.Print(render(p, time.Now()))
+	now := time.Now()
+	// 顺手把账号的真实额度落一份快照。**先渲染再写**——写失败绝不能影响状态行，
+	// 它是每 10 秒都在跑的常驻 UI。
+	line := render(p, now)
+	fmt.Print(line)
+	writeAccountSnapshot(p, now)
+}
+
+// accountSnapshotPath是账号真实额度快照的落点。
+//
+// **这是这套系统唯一能拿到 Claude 真实用量的地方**：官方 CLI 没有 usage 命令，
+// 而 rate_limits 只随会话的 statusline JSON 送进来。写一份出来，
+// worker-agent 才能用它反推账号池上限（否则档位百分比只能靠猜）。
+//
+// 落 /tmp：每容器一份，不进任何卷。
+const accountSnapshotPath = "/tmp/ccw-account-usage"
+
+// accountSnapshotPathVar让测试改写落点；生产恒为上面那个常量。
+var accountSnapshotPathVar = accountSnapshotPath
+
+// writeAccountSnapshot把账号级 rate_limits 写成一行。
+//
+// 数据不全时**不写**：留着上一份旧快照，比写一份半截的更有用——
+// 读的一方靠 at= 判断新鲜度，而一份缺字段的快照会让它误以为拿到了新数据。
+func writeAccountSnapshot(p payload, now time.Time) {
+	five, seven := winOf(p, false), winOf(p, true)
+	if five == nil || five.UsedPercentage == nil || seven == nil || seven.UsedPercentage == nil {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "at=%d five_hour_pct=%.2f seven_day_pct=%.2f",
+		now.Unix(), clampPct(*five.UsedPercentage), clampPct(*seven.UsedPercentage))
+	if five.ResetsAt != nil {
+		fmt.Fprintf(&b, " five_hour_resets=%d", *five.ResetsAt)
+	}
+	if seven.ResetsAt != nil {
+		fmt.Fprintf(&b, " seven_day_resets=%d", *seven.ResetsAt)
+	}
+	// 写失败就算了：状态行不该因为写不了一个临时文件而报错或变形。
+	_ = os.WriteFile(accountSnapshotPathVar, []byte(b.String()), 0o644)
 }
 
 // render拼出整行。

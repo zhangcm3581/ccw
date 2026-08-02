@@ -62,3 +62,15 @@ func (s *Store) PoolUsed(ctx context.Context, accountID string, since time.Time)
 		WHERE p.account_id=$1 AND u.occurred_at > $2`, accountID, since).Scan(&n)
 	return n, err
 }
+
+// SetAccountPoolLimits写回账号池上限（自动校准的落点）。
+//
+// 这个值是全部档位的基准，所以**只由校准逻辑改**，而校准本身有防呆
+// （见 internal/quota/calibrate.go）：百分比过低、累计量过小时一律不动，
+// 有值时每次只朝估计值移动 20%。
+func (s *Store) SetAccountPoolLimits(ctx context.Context, accountID string, fiveHour, sevenDay int64) error {
+	_, err := s.Pool.Exec(ctx,
+		`UPDATE accounts SET pool_five_hour_limit=$2, pool_seven_day_limit=$3 WHERE id=$1`,
+		accountID, fiveHour, sevenDay)
+	return err
+}
