@@ -264,6 +264,11 @@ type NodeProjectUsage struct {
 	PoolFiveHour int64        `json:"pool_five_hour"`
 	PoolSevenDay int64        `json:"pool_seven_day"`
 	Tier         string       `json:"tier"`
+	// TierEffective为true表示限额确实是按档位算出来的（而不是沿用绝对限额）。
+	// **上一轮漏加了这个字段**：模板里引用不存在的字段只在运行时炸，
+	// 而且只有在 {{if .Tier}} 为真时才走到——于是构建通过、测试全绿，
+	// 真机上一挂档位就把整页渲染截断在那一行。
+	TierEffective bool `json:"tier_effective"`
 }
 
 // NodeUsage取节点上各项目的真实用量。
