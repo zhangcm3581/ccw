@@ -64,8 +64,9 @@ func TestPctOf(t *testing.T) {
 // 混在一起最容易让人把估算值当成账号的实际消耗，而 spec §10 明令不得
 // 把内部计量标成官方订阅百分比。
 func TestUsagePageSeparatesRealFromEstimated(t *testing.T) {
-	s, _, sess, csrf := newFleetServer(t)
-	req := httptest.NewRequest("GET", "/admin/usage", nil)
+	s, fs, sess, csrf := newFleetServer(t)
+	fs.nodes["n1"] = consolestore.Node{ID: "n1", Name: "node-1"}
+	req := httptest.NewRequest("GET", "/admin/nodes/n1/usage", nil)
 	req.AddCookie(sess)
 	req.AddCookie(csrf)
 	w := httptest.NewRecorder()
@@ -124,5 +125,29 @@ func TestUsageRowCarriesItsOwnNodeID(t *testing.T) {
 	}
 	if a.NodeID == b.NodeID {
 		t.Error("不同节点的行不该共用一个 node ID")
+	}
+}
+
+// 用量挂在节点下面：项目、档位表、Claude 账号全是节点本地的东西。
+// 平铺成一页会让"这个设置对哪台生效"变得含糊——之前那两个 bug
+// （档位指派发到错节点、档位表看着像全机队设置）正是从平铺结构来的。
+func TestUsageIsScopedToNode(t *testing.T) {
+	s, fs, sess, csrf := newFleetServer(t)
+	fs.nodes["n1"] = consolestore.Node{ID: "n1", Name: "node-1"}
+
+	// 不存在的节点应 404，而不是渲染一个空页面
+	req := httptest.NewRequest("GET", "/admin/nodes/nope/usage", nil)
+	req.AddCookie(sess)
+	req.AddCookie(csrf)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("不存在的节点应 404，got %d", w.Code)
+	}
+
+	// 旧的平铺地址重定向到机队列表，不留死链
+	w = get(t, s, "/admin/usage", nil)
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/admin/nodes" {
+		t.Errorf("/admin/usage 应重定向到 /admin/nodes，got %d %s", w.Code, w.Header().Get("Location"))
 	}
 }

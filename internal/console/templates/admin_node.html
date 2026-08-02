@@ -3,6 +3,7 @@
 {{define "pagesub"}}<span class="st st-{{.Tone}}">{{.StatusText}}</span>
   <span class="sub">{{.Node.SSHUser}}@{{.Node.Host}}:{{.Node.SSHPort}}</span>{{end}}
 {{define "pageactions"}}
+<a class="btn ghost" href="/admin/nodes/{{.Node.ID}}/usage">用量与档位</a>
 <form method="POST" action="/admin/nodes/{{.Node.ID}}/resume">
   <input type="hidden" name="csrf_token" value="{{.CSRF}}">
   <button class="btn ghost" type="submit"{{if not .CanResume}} disabled{{end}}>继续 / 重新部署</button>

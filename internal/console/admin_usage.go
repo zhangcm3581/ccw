@@ -2,7 +2,6 @@ package console
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -42,7 +41,15 @@ type usageRow struct {
 }
 
 func (s *Server) registerUsage(mux *http.ServeMux) {
-	mux.HandleFunc("GET /admin/usage", s.Auth.requireAdmin(s.adminUsage))
+	// **用量挂在节点下面**：项目、档位表（quota_tiers）、Claude 账号全都是
+	// 节点本地的东西，平铺成一页会让"这个设置对哪台生效"变得含糊——
+	// 之前那两个 bug（档位指派发到错的节点、档位表看着像全机队设置）
+	// 正是从那个平铺结构来的。按节点分开之后，页面上只有一台，不会指错。
+	mux.HandleFunc("GET /admin/nodes/{id}/usage", s.Auth.requireAdmin(s.adminUsage))
+	// 旧地址仍指过来：导航与书签不该变死链。
+	mux.HandleFunc("GET /admin/usage", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin/nodes", http.StatusFound)
+	})
 	mux.HandleFunc("POST /admin/usage/tier", s.Auth.requireAdmin(s.adminSetTier))
 	mux.HandleFunc("POST /admin/usage/assign", s.Auth.requireAdmin(s.adminAssignTier))
 }
@@ -70,6 +77,8 @@ func (s *Server) adminAssignTier(w http.ResponseWriter, r *http.Request, sess co
 	})
 }
 
+func usageURL(nodeID string) string { return "/admin/nodes/" + nodeID + "/usage" }
+
 var errBadPercent = errors.New("百分比需在 (0,100]——0 会让该档位的项目立刻全员受限")
 
 func (s *Server) tierAction(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession,
@@ -80,7 +89,7 @@ func (s *Server) tierAction(w http.ResponseWriter, r *http.Request, sess console
 	}
 	nodeID := strings.TrimSpace(r.PostFormValue("node"))
 	if s.Fleet.Orchestrator == nil || nodeID == "" {
-		http.Redirect(w, r, "/admin/usage?err="+urlQueryEscape("机队编排器未启用或未指定节点"), http.StatusFound)
+		http.Redirect(w, r, "/admin/nodes?err="+urlQueryEscape("机队编排器未启用或未指定节点"), http.StatusFound)
 		return
 	}
 	if aerr := s.Auth.audit(r.Context(), consolestore.AuditEntry{
@@ -90,63 +99,54 @@ func (s *Server) tierAction(w http.ResponseWriter, r *http.Request, sess console
 		ClientIP: clientIP(r),
 	}); aerr != nil {
 		s.Logf("console: 审计写入失败，档位改动中止: %v", aerr)
-		http.Redirect(w, r, "/admin/usage?err="+urlQueryEscape("服务暂时不可用"), http.StatusFound)
+		http.Redirect(w, r, usageURL(nodeID)+"?err="+urlQueryEscape("服务暂时不可用"), http.StatusFound)
 		return
 	}
 	if err := do(nodeID); err != nil {
-		http.Redirect(w, r, "/admin/usage?err="+urlQueryEscape(err.Error()), http.StatusFound)
+		http.Redirect(w, r, usageURL(nodeID)+"?err="+urlQueryEscape(err.Error()), http.StatusFound)
 		return
 	}
-	http.Redirect(w, r, "/admin/usage?ok="+urlQueryEscape("已更新；闸门在下一轮（约30秒内）按新值判定"), http.StatusFound)
+	http.Redirect(w, r, usageURL(nodeID)+"?ok="+urlQueryEscape("已更新；闸门在下一轮（约30秒内）按新值判定"), http.StatusFound)
 }
 
 func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess consolestore.AdminSession) {
 	ctx := r.Context()
-	nodes, err := s.Fleet.Store.ListNodes(ctx)
+	node, err := s.Fleet.Store.GetNode(ctx, r.PathValue("id"))
 	if err != nil {
-		http.Error(w, "internal", http.StatusInternalServerError)
+		http.NotFound(w, r)
 		return
 	}
-	var nodeID string
+	nodes, _ := s.Fleet.Store.ListNodes(ctx)
+
 	var rows []usageRow
 	var errs []string
 	var tiers []provision.QuotaTier
-	var tierNode string
 	var account provision.ClaudeAccount
-	var accountNode string
-	for _, n := range nodes {
-		if s.Fleet.Orchestrator == nil {
-			break
+	if s.Fleet.Orchestrator != nil {
+		if ts, terr := s.Fleet.Orchestrator.NodeTiers(ctx, node.ID); terr == nil {
+			tiers = ts
 		}
-		// **档位表是节点本地的**（quota_tiers 在节点库里），这里只取一台的。
-		// 页面上要标出是哪台，否则看着像全机队设置，改了却只对一台生效。
-		if tiers == nil {
-			if ts, terr := s.Fleet.Orchestrator.NodeTiers(ctx, n.ID); terr == nil && len(ts) > 0 {
-				tiers, tierNode, nodeID = ts, n.Name, n.ID
-			}
-		}
-		us, uerr := s.Fleet.Orchestrator.NodeUsage(ctx, n.ID)
+		us, uerr := s.Fleet.Orchestrator.NodeUsage(ctx, node.ID)
 		if uerr != nil {
-			// 一个节点取不到不该让整页空白——如实列出是哪台、什么原因。
-			errs = append(errs, fmt.Sprintf("%s：%v", n.Name, uerr))
-			continue
+			errs = append(errs, uerr.Error())
 		}
 		var containers []string
 		for _, u := range us {
-			rows = append(rows, makeUsageRow(u, n.Name, n.ID, time.Now()))
+			rows = append(rows, makeUsageRow(u, node.Name, node.ID, time.Now()))
 			containers = append(containers, "ccw-"+u.Slug)
 		}
-		if !account.LoggedIn && len(containers) > 0 {
-			if a, aerr := s.Fleet.Orchestrator.ClaudeAccountInfo(ctx, n.ID, containers); aerr == nil {
-				account, accountNode = a, n.Name
+		if len(containers) > 0 {
+			if a, aerr := s.Fleet.Orchestrator.ClaudeAccountInfo(ctx, node.ID, containers); aerr == nil {
+				account = a
 			}
 		}
 	}
-	s.renderAdmin(w, "admin_usage.html", "usage", sess, s.Auth.issueCSRF(w, r), len(nodes),
+	s.renderAdmin(w, "admin_usage.html", "nodes", sess, s.Auth.issueCSRF(w, r), len(nodes),
 		map[string]any{
-			"Rows": rows, "Errors": errs, "NoOrchestrator": s.Fleet.Orchestrator == nil,
-			"Tiers": tiers, "NodeID": nodeID, "TierNode": tierNode,
-			"Account": account, "AccountNode": accountNode,
+			"Node": node, "Rows": rows, "Errors": errs,
+			"NoOrchestrator": s.Fleet.Orchestrator == nil,
+			"Tiers":          tiers, "NodeID": node.ID,
+			"Account":    account,
 			"AccountAge": humanWhen(&account.SnapshotAt),
 			"Notice":     r.URL.Query().Get("ok"), "Error": r.URL.Query().Get("err"),
 		})

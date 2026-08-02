@@ -1,7 +1,8 @@
 {{define "content"}}
 <div class="page-hd">
-  <h1>用量</h1>
-  <p class="sub">各项目的真实 token 消耗与内部额度占用。数据来自各节点，实时拉取。</p>
+  <h1>用量与档位</h1>
+  <p class="sub"><a href="/admin/nodes/{{.Node.ID}}">{{.Node.Name}}</a> ·
+    这台节点上各项目的真实 token 消耗与额度分配，实时从节点拉取。</p>
 </div>
 
 {{if .Notice}}<div class="note ok">{{.Notice}}</div>{{end}}
@@ -9,7 +10,7 @@
 
 {{if .Account.Container}}
 <div class="card">
-  <div class="card-hd"><h2>Claude 账号</h2><span class="meta">{{.AccountNode}}</span>
+  <div class="card-hd"><h2>Claude 账号</h2>
     <span class="spacer"></span>
     {{if .Account.LoggedIn}}<span class="st ok">已登录</span>{{else}}<span class="st bad">未登录</span>{{end}}
   </div>
@@ -38,7 +39,7 @@
 
 {{if .Tiers}}
 <div class="card">
-  <div class="card-hd"><h2>额度档位</h2><span class="meta">{{.TierNode}}</span>
+  <div class="card-hd"><h2>额度档位</h2>
     <span class="spacer"></span>
     <span class="meta">项目限额 = 档位比例 × 账号池上限</span></div>
   <div class="card-bd">
@@ -63,9 +64,9 @@
       {{end}}
     </table>
     </div>
-    <p class="muted">改动立刻影响<b>这台节点上</b>全部挂该档位的项目——限额是推导出来的，
-      闸门下一轮（约 30 秒内）就按新值判定。<br>
-      档位表存在各节点自己的库里，多台机器需要分别设置。</p>
+    <p class="muted">改动立刻影响这台节点上全部挂该档位的项目——限额是推导出来的，
+      闸门下一轮（约 30 秒内）就按新值判定。档位表存在节点自己的库里，
+      别的机器需要各自设置。</p>
   </div>
 </div>
 {{end}}
@@ -91,7 +92,6 @@
 <div class="card">
   <div class="card-hd">
     <h2>{{.Slug}}</h2>
-    <span class="meta">{{.Node}}</span>
     <span class="spacer"></span>
     {{if .Stale}}<span class="st bad">最近无采集 · {{.LastSeen}}</span>
     {{else}}<span class="st ok">{{.LastSeen}}</span>{{end}}
