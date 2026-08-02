@@ -1,6 +1,7 @@
 package store
 
 import (
+	"ccw/internal/quota"
 	"context"
 	"errors"
 	"time"
@@ -123,6 +124,10 @@ type ProjectUsage struct {
 	PoolFiveHour int64  `json:"pool_five_hour"`
 	PoolSevenDay int64  `json:"pool_seven_day"`
 	Tier         string `json:"tier"`
+	// TierEffective为true表示限额确实是按档位算出来的。
+	// 挂了档位但账号容量未校准时它是 false——那时闸门沿用绝对限额，
+	// 页面要说清楚，否则"挂了却没变化"看不出原因。
+	TierEffective bool `json:"tier_effective"`
 }
 
 // ProjectUsageReport汇总全部项目的用量。
@@ -133,6 +138,7 @@ func (s *Store) ProjectUsageReport(ctx context.Context) ([]ProjectUsage, error) 
 	rows, err := s.Pool.Query(ctx, `
 		SELECT p.slug, p.id::text, p.five_hour_limit, p.seven_day_limit,
 		       a.pool_five_hour_limit, a.pool_seven_day_limit, COALESCE(p.tier, ''),
+		       COALESCE(t.share_bp, 0),
 		       COALESCE(SUM(u.input_tokens)       FILTER (WHERE u.occurred_at >= now() - interval '5 hours'), 0),
 		       COALESCE(SUM(u.output_tokens)      FILTER (WHERE u.occurred_at >= now() - interval '5 hours'), 0),
 		       COALESCE(SUM(u.cache_read_tokens)  FILTER (WHERE u.occurred_at >= now() - interval '5 hours'), 0),
@@ -151,9 +157,10 @@ func (s *Store) ProjectUsageReport(ctx context.Context) ([]ProjectUsage, error) 
 		       MAX(u.occurred_at)
 		FROM projects p
 		JOIN accounts a ON a.id = p.account_id
+		LEFT JOIN quota_tiers t ON t.name = p.tier
 		LEFT JOIN usage_events u ON u.project_id = p.id
 		GROUP BY p.id, p.slug, p.five_hour_limit, p.seven_day_limit,
-		         a.pool_five_hour_limit, a.pool_seven_day_limit, p.tier
+		         a.pool_five_hour_limit, a.pool_seven_day_limit, p.tier, t.share_bp
 		ORDER BY p.slug`)
 	if err != nil {
 		return nil, err
@@ -163,8 +170,9 @@ func (s *Store) ProjectUsageReport(ctx context.Context) ([]ProjectUsage, error) 
 	var out []ProjectUsage
 	for rows.Next() {
 		var u ProjectUsage
+		var shareBP int
 		if err := rows.Scan(&u.Slug, &u.ProjectID, &u.FiveHourLim, &u.SevenDayLim,
-			&u.PoolFiveHour, &u.PoolSevenDay, &u.Tier,
+			&u.PoolFiveHour, &u.PoolSevenDay, &u.Tier, &shareBP,
 			&u.FiveHour.Input, &u.FiveHour.Output, &u.FiveHour.CacheRead, &u.FiveHour.CacheWrite,
 			&u.FiveHour.Weighted, &u.FiveHour.Events,
 			&u.SevenDay.Input, &u.SevenDay.Output, &u.SevenDay.CacheRead, &u.SevenDay.CacheWrite,
@@ -173,6 +181,20 @@ func (s *Store) ProjectUsageReport(ctx context.Context) ([]ProjectUsage, error) 
 			&u.Total.Weighted, &u.Total.Events, &u.LastEventAt); err != nil {
 			return nil, err
 		}
+		// **报的是实际生效的限额，不是 projects 表里那一列。**
+		// 档位是闸门在运行时算的（quota.ApplyTier），从不写回该列——
+		// 直接报那一列会让页面显示一个根本没被用到的数字，
+		// 而用户据此判断"档位没生效"（2026-08-02 真机上就是这样）。
+		abs := quota.Limits{
+			FiveHour: u.FiveHourLim, SevenDay: u.SevenDayLim,
+			PoolFiveHour: u.PoolFiveHour, PoolSevenDay: u.PoolSevenDay,
+		}
+		lim := quota.ApplyTier(abs, shareBP, u.Tier != "")
+		// 档位真正被套用时 ApplyTier 会改掉限额；容量未校准（或会溢出）时它
+		// 原样返回，那就说明档位挂着但没生效。用"变没变"判断，而不是把
+		// ApplyTier 的判定条件在这里再抄一遍——抄一遍就会有两套规则。
+		u.TierEffective = lim.FiveHour != abs.FiveHour || lim.SevenDay != abs.SevenDay
+		u.FiveHourLim, u.SevenDayLim = lim.FiveHour, lim.SevenDay
 		out = append(out, u)
 	}
 	if err := rows.Err(); err != nil {

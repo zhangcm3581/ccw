@@ -124,10 +124,14 @@
       <div><span>7 天窗口</span><b>{{.SevenDay.Weighted}} / {{.SevenDayLim}} 单位（{{.SevenDPct}}%）</b></div>
     </div>
 
-    {{if and .Tier (not .TierOpts)}}
-    <div class="alert">已指派档位 <code>{{.Tier}}</code>，但<b>账号窗口容量还没校准</b>，
-      所以当前仍按上面的绝对限额判定。等 worker-agent 用真实账号用量校准之后，
-      档位才会开始生效。</div>
+    {{if .Tier}}
+      {{if .TierEffective}}
+      <div class="note ok">上面两行限额是按档位 <code>{{.Tier}}</code> 算出来的
+        （档位比例 × 账号窗口容量），闸门用的就是这个数。</div>
+      {{else}}
+      <div class="alert">已指派档位 <code>{{.Tier}}</code>，但<b>账号窗口容量还没校准</b>，
+        所以当前仍按上面的绝对限额判定。等校准完成后档位才会开始生效。</div>
+      {{end}}
     {{end}}
 
     {{if $.Tiers}}
