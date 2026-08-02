@@ -21,9 +21,9 @@
       <div><span>账号 7 天窗口</span><b>已用 {{printf "%.1f" .Account.SevenDayPct}}%</b></div>
       <div><span>数据截至</span><b>{{.AccountAge}}</b></div>
     </div>
-    <p class="muted">这是<b>整个账号</b>的真实用量，全部项目共用。它由活跃会话回传——
+    <p class="muted">这是<b>整个账号</b>的真实用量，本节点全部项目共用。它由活跃会话回传——
       官方命令行没有查用量的接口，所以没人在用时这个数会停在最后一次会话的时刻。
-      账号池上限正是按它自动校准的，各档位的百分比才对应现实。</p>
+      档位的分母（账号窗口容量）正是按它自动校准的，百分比才对应现实。</p>
     {{else}}
     <div class="alert">还没有账号用量快照。它由 Claude 会话的状态行回传，
       需要有人打开过终端；如果一直没有，检查项目镜像是否已更新到带
@@ -41,11 +41,11 @@
 <div class="card">
   <div class="card-hd"><h2>额度档位</h2>
     <span class="spacer"></span>
-    <span class="meta">项目限额 = 档位比例 × 账号池上限</span></div>
+    <span class="meta">项目限额 = 档位比例 × 这个 Claude 账号的窗口额度</span></div>
   <div class="card-bd">
     <div class="scroll">
     <table>
-      <tr><th>档位</th><th>占账号池</th><th>调整</th></tr>
+      <tr><th>档位</th><th>占账号额度</th><th>调整</th></tr>
       {{range .Tiers}}
       <tr>
         <td><code>{{.Name}}</code></td>
@@ -64,9 +64,11 @@
       {{end}}
     </table>
     </div>
-    <p class="muted">改动立刻影响这台节点上全部挂该档位的项目——限额是推导出来的，
-      闸门下一轮（约 30 秒内）就按新值判定。档位表存在节点自己的库里，
-      别的机器需要各自设置。</p>
+    <p class="muted">
+      比例是<b>相对这个 Claude 账号整个窗口的容量</b>算的，不是相对"当前还剩多少"——
+      所以一个项目能用多少不随别人的使用而变，是固定的一份。<br>
+      改动立刻影响这台节点上全部挂该档位的项目，闸门下一轮（约 30 秒内）按新值判定。
+      档位表存在节点自己的库里，别的机器需要各自设置。</p>
   </div>
 </div>
 {{end}}
