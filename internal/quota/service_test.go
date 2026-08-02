@@ -209,3 +209,57 @@ func TestApplyTierNeverExceedsPool(t *testing.T) {
 		}
 	}
 }
+
+// 端到端确认档位的语义，用一组好核对的数字。
+//
+// **账号 5h 总容量 100 单位，project-a 挂 2x（10%）→ 它的限额是 10。**
+// 用了 9 不受限，用到 10 就受限——"消耗要从自己那份里扣"就是这个比较。
+//
+// 关键在于分母是**总容量**而不是"当前剩余"：按剩余算的话，一个一直没用的
+// 项目会因为别人用得多而额度越来越小，甚至突然从"没超"变成"已超"。
+// 分配应该是"这一份归你"，不是"剩下的按比例分"。
+func TestTierIsShareOfTotalCapacityNotRemaining(t *testing.T) {
+	const capacity5h, capacity7d = 100, 1000
+	base := Limits{
+		FiveHour: 999999, SevenDay: 999999, // 绝对限额故意设得很大，确认被档位覆盖
+		PoolFiveHour: capacity5h, PoolSevenDay: capacity7d,
+	}
+	lim := ApplyTier(base, 1000, true) // 2x = 10%
+	if lim.FiveHour != 10 || lim.SevenDay != 100 {
+		t.Fatalf("10%% 应得到 5h=10 7d=100，got %d/%d", lim.FiveHour, lim.SevenDay)
+	}
+
+	svc := Service{Reader: fixedUsage{five: 9, seven: 50}}
+	d, err := svc.Check(context.Background(), "project-a", "acct", lim, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Over {
+		t.Errorf("用了 9/10 不该受限：%+v", d)
+	}
+
+	svc = Service{Reader: fixedUsage{five: 10, seven: 50}}
+	d, _ = svc.Check(context.Background(), "project-a", "acct", lim, time.Now())
+	if !d.Over || d.Reason != "five_hour_limit" {
+		t.Errorf("用到 10/10 应受限于 5h：%+v", d)
+	}
+
+	// **别人用得多不该改变我这一份**：账号被别的项目消耗到只剩 1，
+	// project-a 的限额仍然是 10（分母是总容量，不是剩余）。
+	limAgain := ApplyTier(base, 1000, true)
+	if limAgain.FiveHour != lim.FiveHour {
+		t.Errorf("限额不该随别人的用量变化：%d → %d", lim.FiveHour, limAgain.FiveHour)
+	}
+}
+
+// fixedUsage：项目自己的窗口用量固定，账号池用量设成 0 以免触发池保护，
+// 让这条测试只考察"档位限额 vs 项目自身用量"这一个比较。
+type fixedUsage struct{ five, seven int64 }
+
+func (f fixedUsage) WindowUsed(_ context.Context, _ string, since time.Time) (int64, error) {
+	if time.Since(since) > 24*time.Hour {
+		return f.seven, nil
+	}
+	return f.five, nil
+}
+func (f fixedUsage) PoolUsed(context.Context, string, time.Time) (int64, error) { return 0, nil }
