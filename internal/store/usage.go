@@ -117,6 +117,12 @@ type ProjectUsage struct {
 	// 空值或很久以前，说明 JSONL 没被扫到（最常见是只读挂载漏了），
 	// 那时限额设多少都没有意义。
 	LastEventAt *time.Time `json:"last_event_at"`
+	// PoolFiveHour/PoolSevenDay是这个账号整个窗口的容量（内部单位）。
+	// 档位限额 = 比例 × 它，界面上要能把"2x 等于多少单位"直接摆出来——
+	// 否则管理员只能指派完看结果，而指派会立刻杀掉活跃会话。
+	PoolFiveHour int64  `json:"pool_five_hour"`
+	PoolSevenDay int64  `json:"pool_seven_day"`
+	Tier         string `json:"tier"`
 }
 
 // ProjectUsageReport汇总全部项目的用量。
@@ -126,6 +132,7 @@ type ProjectUsage struct {
 func (s *Store) ProjectUsageReport(ctx context.Context) ([]ProjectUsage, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT p.slug, p.id::text, p.five_hour_limit, p.seven_day_limit,
+		       a.pool_five_hour_limit, a.pool_seven_day_limit, COALESCE(p.tier, ''),
 		       COALESCE(SUM(u.input_tokens)       FILTER (WHERE u.occurred_at >= now() - interval '5 hours'), 0),
 		       COALESCE(SUM(u.output_tokens)      FILTER (WHERE u.occurred_at >= now() - interval '5 hours'), 0),
 		       COALESCE(SUM(u.cache_read_tokens)  FILTER (WHERE u.occurred_at >= now() - interval '5 hours'), 0),
@@ -143,8 +150,10 @@ func (s *Store) ProjectUsageReport(ctx context.Context) ([]ProjectUsage, error) 
 		       COALESCE(SUM(u.weighted_units), 0), COUNT(u.id),
 		       MAX(u.occurred_at)
 		FROM projects p
+		JOIN accounts a ON a.id = p.account_id
 		LEFT JOIN usage_events u ON u.project_id = p.id
-		GROUP BY p.id, p.slug, p.five_hour_limit, p.seven_day_limit
+		GROUP BY p.id, p.slug, p.five_hour_limit, p.seven_day_limit,
+		         a.pool_five_hour_limit, a.pool_seven_day_limit, p.tier
 		ORDER BY p.slug`)
 	if err != nil {
 		return nil, err
@@ -155,6 +164,7 @@ func (s *Store) ProjectUsageReport(ctx context.Context) ([]ProjectUsage, error) 
 	for rows.Next() {
 		var u ProjectUsage
 		if err := rows.Scan(&u.Slug, &u.ProjectID, &u.FiveHourLim, &u.SevenDayLim,
+			&u.PoolFiveHour, &u.PoolSevenDay, &u.Tier,
 			&u.FiveHour.Input, &u.FiveHour.Output, &u.FiveHour.CacheRead, &u.FiveHour.CacheWrite,
 			&u.FiveHour.Weighted, &u.FiveHour.Events,
 			&u.SevenDay.Input, &u.SevenDay.Output, &u.SevenDay.CacheRead, &u.SevenDay.CacheWrite,

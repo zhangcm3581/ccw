@@ -135,7 +135,7 @@ func main() {
 		// 正常：后台同步 + 前台终端。任一返回（断开）后回到循环重连。
 		syncDone := make(chan struct{})
 		go func() { defer close(syncDone); runSync(ctx, cwd, c, cdk, sessionToken, conn) }()
-		if err := runTerminal(ctx, conn, syncpkg.WorkspaceKey(cwd), permMode(*bypass)); err != nil {
+		if err := runTerminal(ctx, conn, syncpkg.WorkspaceKey(cwd), permMode(*bypass)); err != nil && !isExpectedClose(err) {
 			fmt.Fprintln(os.Stderr, "terminal:", err)
 		}
 		<-syncDone
@@ -155,6 +155,33 @@ func printStatus(conn control.ConnectionResponse) {
 	fmt.Printf("[%s] 5h:%d/%d 7d:%d/%d disk:%d/%d mode:%s\n", conn.ProjectSlug,
 		conn.FiveHourUsed, conn.FiveHourLimit, conn.SevenDayUsed, conn.SevenDayLimit,
 		conn.DiskUsed, conn.DiskLimit, conn.SyncMode)
+}
+
+// isExpectedClose判断这是不是一次"意料之中"的断开。
+//
+// 服务端因为额度用尽主动关连接时，客户端这边只会看到
+// `use of closed network connection` 之类的原始网络错误——把它原样打出来
+// 毫无信息量，而且**紧接着下一轮 Connection 就会返回真正的原因**
+// （项目受限 + reason），那条消息才是该看的。
+//
+// 所以这类断开不打原始错误，让下一轮的说明来解释。真正的异常（DNS、拒绝连接、
+// 证书）不在此列，仍要打出来。
+func isExpectedClose(err error) bool {
+	if err == nil {
+		return true
+	}
+	s := err.Error()
+	for _, quiet := range []string{
+		"use of closed network connection",
+		"websocket: close sent",
+		"connection reset by peer",
+		"EOF",
+	} {
+		if strings.Contains(s, quiet) {
+			return true
+		}
+	}
+	return false
 }
 
 // wsDialError把握手失败翻成能定位的错误。

@@ -252,15 +252,18 @@ type ModelUsage struct {
 }
 
 type NodeProjectUsage struct {
-	Slug        string       `json:"slug"`
-	ProjectID   string       `json:"project_id"`
-	FiveHour    UsageTotals  `json:"five_hour"`
-	SevenDay    UsageTotals  `json:"seven_day"`
-	Total       UsageTotals  `json:"total"`
-	ByModel     []ModelUsage `json:"by_model"`
-	FiveHourLim int64        `json:"five_hour_limit"`
-	SevenDayLim int64        `json:"seven_day_limit"`
-	LastEventAt *time.Time   `json:"last_event_at"`
+	Slug         string       `json:"slug"`
+	ProjectID    string       `json:"project_id"`
+	FiveHour     UsageTotals  `json:"five_hour"`
+	SevenDay     UsageTotals  `json:"seven_day"`
+	Total        UsageTotals  `json:"total"`
+	ByModel      []ModelUsage `json:"by_model"`
+	FiveHourLim  int64        `json:"five_hour_limit"`
+	SevenDayLim  int64        `json:"seven_day_limit"`
+	LastEventAt  *time.Time   `json:"last_event_at"`
+	PoolFiveHour int64        `json:"pool_five_hour"`
+	PoolSevenDay int64        `json:"pool_seven_day"`
+	Tier         string       `json:"tier"`
 }
 
 // NodeUsage取节点上各项目的真实用量。

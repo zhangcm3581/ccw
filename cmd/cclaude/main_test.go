@@ -107,3 +107,32 @@ func TestSizeFDsStdoutFirst(t *testing.T) {
 		t.Error("stdout 不可用时应还有退路（stderr）")
 	}
 }
+
+// 服务端因额度用尽主动关连接时，客户端只看到原始网络错误。
+//
+// 把 `use of closed network connection` 原样打出来毫无信息量，而且紧接着
+// 下一轮 Connection 就会返回真正的原因（项目受限 + reason）——那条才该看。
+// 真正的异常仍要打出来，否则会把网络故障也一起吞掉。
+func TestIsExpectedClose(t *testing.T) {
+	for _, quiet := range []string{
+		"use of closed network connection",
+		"read tcp 1.2.3.4:1->5.6.7.8:443: use of closed network connection",
+		"websocket: close sent",
+		"EOF",
+		"connection reset by peer",
+	} {
+		if !isExpectedClose(errors.New(quiet)) {
+			t.Errorf("%q 应视为意料之中的断开", quiet)
+		}
+	}
+	for _, loud := range []string{
+		"dial tcp: lookup api-01.example.com: no such host",
+		"x509: certificate has expired",
+		"dial tcp 1.2.3.4:443: connect: connection refused",
+		"服务端拒绝了终端连接：这个 cclaude 版本比节点旧",
+	} {
+		if isExpectedClose(errors.New(loud)) {
+			t.Errorf("%q 是真正的异常，不该被吞掉", loud)
+		}
+	}
+}

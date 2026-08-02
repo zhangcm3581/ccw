@@ -1,6 +1,7 @@
 package console
 
 import (
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -149,5 +150,44 @@ func TestUsageIsScopedToNode(t *testing.T) {
 	w = get(t, s, "/admin/usage", nil)
 	if w.Code != http.StatusFound || w.Header().Get("Location") != "/admin/nodes" {
 		t.Errorf("/admin/usage 应重定向到 /admin/nodes，got %d %s", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// **指派档位会立刻生效并杀掉活跃会话**，所以要让人在按下去之前就看见
+// "这一档等于多少单位、会不会当场受限"，而不是指派完看结果。
+// 2026-08-02 真机上就是这样：给 project-b 指派 2x，终端当场被关。
+func TestTierOptionsWarnBeforeLockout(t *testing.T) {
+	u := provision.NodeProjectUsage{
+		Slug:         "project-b",
+		PoolFiveHour: 9_000_000, PoolSevenDay: 9_000_000,
+		SevenDay: provision.UsageTotals{Weighted: 1_606_051}, // 已用 1.6M
+	}
+	tiers := []provision.QuotaTier{{Name: "2x", ShareBP: 1000}, {Name: "7x", ShareBP: 3300}}
+	got := tierOptionsFor(u, tiers)
+	if len(got) != 2 {
+		t.Fatalf("应给出两档，got %+v", got)
+	}
+	// 2x = 10% × 9M = 900K，而已用 1.6M → 会当场受限
+	if got[0].SevenLim != 900_000 {
+		t.Errorf("2x 的 7d 限额应为 900000，got %d", got[0].SevenLim)
+	}
+	if !got[0].WouldLimit {
+		t.Error("已用 1.6M 超过 2x 的 900K，必须提前标出会受限")
+	}
+	// 7x = 33% × 9M = 2.97M > 1.6M → 不受限
+	if got[1].WouldLimit {
+		t.Errorf("7x 的限额 %d 高于已用量，不该标记受限", got[1].SevenLim)
+	}
+}
+
+// 容量未校准时不摆数字——那时档位本来就不生效，
+// 摆一堆算不出来的值只会误导。
+func TestTierOptionsEmptyWhenUncalibrated(t *testing.T) {
+	tiers := []provision.QuotaTier{{Name: "2x", ShareBP: 1000}}
+	for _, pool := range []int64{0, -1, math.MaxInt64} {
+		u := provision.NodeProjectUsage{PoolFiveHour: pool, PoolSevenDay: pool}
+		if got := tierOptionsFor(u, tiers); got != nil {
+			t.Errorf("容量=%d 时不该给出档位数字，got %+v", pool, got)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package console
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -38,6 +39,52 @@ type usageRow struct {
 	LastSeen  string
 	FiveHrPct int
 	SevenDPct int
+	// TierOpts是每个档位在这个项目上的实际后果。**指派档位会立刻生效并杀掉
+	// 活跃会话**，所以要让人在按下去之前就看见"这一档等于多少单位、会不会
+	// 当场受限"，而不是指派完看结果。
+	TierOpts []tierOption
+}
+
+type tierOption struct {
+	Name     string
+	Pct      float64
+	FiveLim  int64
+	SevenLim int64
+	// Selected表示项目当前就挂着这一档。
+	Selected bool
+	// WouldLimit为true表示按这一档算，项目现在就已经超了。
+	WouldLimit bool
+}
+
+// tierOptionsFor算出每个档位在这个项目上的限额，并标出哪些会当场受限。
+//
+// 容量未校准（<=0 或大到会溢出）时返回空：那时档位本来就不生效，
+// 摆一堆算不出来的数字只会误导。
+func tierOptionsFor(u provision.NodeProjectUsage, tiers []provision.QuotaTier) []tierOption {
+	var out []tierOption
+	for _, t := range tiers {
+		five, ok5 := shareOf(u.PoolFiveHour, t.ShareBP)
+		seven, ok7 := shareOf(u.PoolSevenDay, t.ShareBP)
+		if !ok5 || !ok7 {
+			return nil
+		}
+		out = append(out, tierOption{
+			Name: t.Name, Pct: float64(t.ShareBP) / 100,
+			FiveLim: five, SevenLim: seven,
+			Selected:   u.Tier == t.Name,
+			WouldLimit: u.FiveHour.Weighted >= five || u.SevenDay.Weighted >= seven,
+		})
+	}
+	return out
+}
+
+// shareOf与服务端 quota.ApplyTier 用同一套判定：容量为 0 或会溢出时算不出来。
+func shareOf(pool int64, bp int) (int64, bool) {
+	if pool <= 0 || bp <= 0 || pool > math.MaxInt64/int64(bp) {
+		return 0, false
+	}
+	v := pool * int64(bp) / 10000
+	return v, v > 0
 }
 
 func (s *Server) registerUsage(mux *http.ServeMux) {
@@ -132,7 +179,9 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess console
 		}
 		var containers []string
 		for _, u := range us {
-			rows = append(rows, makeUsageRow(u, node.Name, node.ID, time.Now()))
+			row := makeUsageRow(u, node.Name, node.ID, time.Now())
+			row.TierOpts = tierOptionsFor(u, tiers)
+			rows = append(rows, row)
 			containers = append(containers, "ccw-"+u.Slug)
 		}
 		if len(containers) > 0 {

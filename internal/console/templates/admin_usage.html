@@ -119,7 +119,15 @@
       <span class="muted">档位</span>
       <select name="tier">
         <option value="">不用档位（沿用绝对限额）</option>
-        {{range $.Tiers}}<option value="{{.Name}}">{{.Name}} · {{printf "%.2f" (pct .ShareBP)}}%</option>{{end}}
+        {{if .TierOpts}}
+          {{range .TierOpts}}
+          <option value="{{.Name}}"{{if .Selected}} selected{{end}}>
+            {{.Name}} · {{printf "%.2f" .Pct}}% → 5h {{.FiveLim}} / 7d {{.SevenLim}} 单位{{if .WouldLimit}}　⚠ 按这一档现在就已超额{{end}}
+          </option>
+          {{end}}
+        {{else}}
+          {{range $.Tiers}}<option value="{{.Name}}">{{.Name}} · {{printf "%.2f" (pct .ShareBP)}}%（账号容量未校准，暂不生效）</option>{{end}}
+        {{end}}
       </select>
       <button class="btn ghost" type="submit">指派</button>
     </form>
