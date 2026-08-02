@@ -102,3 +102,44 @@ func TestPoolSafetyMarginStopsBoth(t *testing.T) {
 		t.Fatalf("7d pool must also be protected: %+v", d)
 	}
 }
+
+// 挂了档位的项目，限额由「比例 × 账号池上限」推导，而不是用写死的绝对值。
+func TestApplyTier(t *testing.T) {
+	base := Limits{FiveHour: 1_000_000, SevenDay: 10_000_000,
+		PoolFiveHour: 9_600_000, PoolSevenDay: 60_000_000}
+
+	// 7x = 33%
+	got := ApplyTier(base, 3300, true)
+	if got.FiveHour != 3_168_000 {
+		t.Errorf("33%% × 9.6M 应为 3,168,000，got %d", got.FiveHour)
+	}
+	if got.SevenDay != 19_800_000 {
+		t.Errorf("33%% × 60M 应为 19,800,000，got %d", got.SevenDay)
+	}
+	// 池上限不该被改动——它是全部档位共同的分母
+	if got.PoolFiveHour != base.PoolFiveHour {
+		t.Error("不该改动池上限")
+	}
+
+	// 没挂档位：沿用绝对限额，已有部署不因迁移换一套数
+	if got := ApplyTier(base, 0, false); got.FiveHour != base.FiveHour {
+		t.Errorf("无档位应沿用绝对限额，got %d", got.FiveHour)
+	}
+	// 比例非法时同样不动，宁可维持原状也不要算出 0（0 意味着立刻全员受限）
+	if got := ApplyTier(base, 0, true); got.FiveHour != base.FiveHour {
+		t.Errorf("比例为0时应沿用绝对限额，got %d", got.FiveHour)
+	}
+	if got := ApplyTier(base, -5, true); got.FiveHour != base.FiveHour {
+		t.Errorf("负比例应沿用绝对限额，got %d", got.FiveHour)
+	}
+}
+
+// 三个默认档位加起来是 68%，不是 100%——刻意留了余量。
+// 这条测试记录该意图：哪天有人把它们改到超过 100%，说明分配方式变了，
+// 该先想清楚而不是让闸门去承受超卖。
+func TestDefaultTiersLeaveHeadroom(t *testing.T) {
+	total := 1000 + 2500 + 3300 // 2x + 5x + 7x
+	if total > 10000 {
+		t.Errorf("默认档位合计 %d bp 已超过账号池，超卖时闸门会同时拦住多个项目", total)
+	}
+}

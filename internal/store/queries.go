@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -73,4 +74,71 @@ func (s *Store) SetAccountPoolLimits(ctx context.Context, accountID string, five
 		`UPDATE accounts SET pool_five_hour_limit=$2, pool_seven_day_limit=$3 WHERE id=$1`,
 		accountID, fiveHour, sevenDay)
 	return err
+}
+
+// QuotaTier是一个额度档位。ShareBP是占账号池的比例，万分之一（1000=10%）。
+type QuotaTier struct {
+	Name    string `json:"name"`
+	ShareBP int    `json:"share_bp"`
+	Order   int    `json:"sort_order"`
+}
+
+// ListQuotaTiers列出全部档位。
+func (s *Store) ListQuotaTiers(ctx context.Context) ([]QuotaTier, error) {
+	rows, err := s.Pool.Query(ctx,
+		`SELECT name, share_bp, sort_order FROM quota_tiers ORDER BY sort_order, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []QuotaTier
+	for rows.Next() {
+		var t QuotaTier
+		if err := rows.Scan(&t.Name, &t.ShareBP, &t.Order); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// SetTierShare改一个档位的百分比。
+func (s *Store) SetTierShare(ctx context.Context, name string, shareBP int) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE quota_tiers SET share_bp=$2 WHERE name=$1`, name, shareBP)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("store: 档位%q不存在", name)
+	}
+	return nil
+}
+
+// SetProjectTier把项目挂到一个档位；name为空表示改回用绝对限额。
+func (s *Store) SetProjectTier(ctx context.Context, slug string, name *string) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE projects SET tier=$2 WHERE slug=$1`, slug, name)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("store: 项目%q不存在", slug)
+	}
+	return nil
+}
+
+// ProjectTierShare返回项目所属档位的比例（万分之一）。
+// 没挂档位时返回 ok=false，调用方应沿用绝对限额。
+func (s *Store) ProjectTierShare(ctx context.Context, projectID string) (int, bool, error) {
+	var bp *int
+	err := s.Pool.QueryRow(ctx, `
+		SELECT t.share_bp FROM projects p
+		LEFT JOIN quota_tiers t ON t.name = p.tier
+		WHERE p.id = $1`, projectID).Scan(&bp)
+	if err != nil {
+		return 0, false, err
+	}
+	if bp == nil {
+		return 0, false, nil
+	}
+	return *bp, true, nil
 }

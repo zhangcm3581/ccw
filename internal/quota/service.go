@@ -30,6 +30,23 @@ type PoolLimitReader interface {
 // Margins是池保护的安全余量，来自部署配置（CCW_POOL_RESERVE / CCW_POOL_SAFETY_MARGIN）。
 type Margins struct{ Reserve, SafetyMargin int64 }
 
+// ApplyTier把档位比例折算成项目限额。
+//
+// **档位优先于绝对限额**：挂了档位的项目，限额 = 比例 × 账号池上限，
+// 而池上限由真实账号用量自动校准（calibrate.go）——这样"给你 33%"
+// 才真的对应账号的三分之一，而不是一个拍脑袋的绝对数。
+//
+// shareBP 是万分之一（1000 = 10%）。用整数而不是浮点：限额要参与
+// ">=" 比较，浮点会带来"到底算不算超"的边界抖动。
+func ApplyTier(l Limits, shareBP int, hasTier bool) Limits {
+	if !hasTier || shareBP <= 0 {
+		return l
+	}
+	l.FiveHour = l.PoolFiveHour * int64(shareBP) / 10000
+	l.SevenDay = l.PoolSevenDay * int64(shareBP) / 10000
+	return l
+}
+
 // Assemble组装项目级 + 账号级的双层限额。
 //
 // **control-api与worker-agent必须共用本函数。**此前两者各自组装：worker读accounts表、

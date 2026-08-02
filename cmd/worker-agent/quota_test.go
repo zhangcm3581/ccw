@@ -16,6 +16,12 @@ type fakeQuotaLookup struct {
 	pool5, pool7 int64
 	projErr      error
 	poolErr      error
+	tierBP       int
+	hasTier      bool
+}
+
+func (f fakeQuotaLookup) ProjectTierShare(context.Context, string) (int, bool, error) {
+	return f.tierBP, f.hasTier, nil
 }
 
 func (f fakeQuotaLookup) GetProjectByID(context.Context, string) (project.Project, error) {
@@ -111,5 +117,35 @@ func TestAssembleUsesAccountPoolLimits(t *testing.T) {
 	}
 	if lim.Reserve != 7 || lim.SafetyMargin != 9 {
 		t.Errorf("余量未透传：%+v", lim)
+	}
+}
+
+// 挂了档位的项目，限额由「档位比例 × 账号池上限」推导，绝对限额被覆盖。
+//
+// 这是档位真正生效的那一处：改了后台的百分比，闸门下一轮（30秒内）就按新值判。
+func TestCheckProjectAppliesTier(t *testing.T) {
+	q := fakeQuotaLookup{
+		p:       project.Project{ID: "pid", AccountID: "acct", FiveHourLimit: 1_000_000, SevenDayLimit: 10_000_000},
+		pool5:   9_600_000,
+		pool7:   60_000_000,
+		tierBP:  3300, // 7x
+		hasTier: true,
+	}
+	svc := quota.Service{Reader: fakeUsage{}}
+	_, lim, err := checkProject(context.Background(), q, svc, "pid", quota.Margins{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lim.FiveHour != 3_168_000 {
+		t.Errorf("7x(33%%) × 9.6M 应为 3,168,000，got %d", lim.FiveHour)
+	}
+	// 没挂档位的项目行为不变——这次迁移之前建的项目不该突然换一套限额
+	q.hasTier = false
+	_, lim, err = checkProject(context.Background(), q, svc, "pid", quota.Margins{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lim.FiveHour != 1_000_000 {
+		t.Errorf("无档位应沿用绝对限额，got %d", lim.FiveHour)
 	}
 }

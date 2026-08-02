@@ -584,3 +584,75 @@ func runUsage(args []string, stdout, stderr io.Writer, st usageStore) int {
 	}
 	return 0
 }
+
+// ---- tiers ----
+
+// tierStore是档位子命令需要的能力。
+type tierStore interface {
+	ListQuotaTiers(ctx context.Context) ([]store.QuotaTier, error)
+	SetTierShare(ctx context.Context, name string, shareBP int) error
+	SetProjectTier(ctx context.Context, slug string, name *string) error
+}
+
+type tierRow struct {
+	Name    string `json:"name"`
+	ShareBP int    `json:"share_bp"`
+	Order   int    `json:"sort_order"`
+}
+
+// runTiers列出/修改额度档位，以及把项目挂到某个档位。
+//
+// 档位比例存的是万分之一（1000=10%）。命令行按**百分比**收，转换在这里做一次
+// ——让人在命令行上敲 3300 表示 33% 是不必要的心智负担。
+func runTiers(args []string, stdout, stderr io.Writer, st tierStore) int {
+	fs := flag.NewFlagSet("tiers", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := fs.Bool("json", false, "机器可读输出")
+	setName := fs.String("set", "", "要修改的档位名（如 7x）")
+	pct := fs.Float64("percent", -1, "该档位占账号池的百分比，配合 --set")
+	assign := fs.String("assign", "", "把项目挂到档位：--assign <slug>")
+	tier := fs.String("tier", "", "配合 --assign 指定档位名；留空表示改回绝对限额")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	ctx := context.Background()
+
+	if *setName != "" {
+		if *pct <= 0 || *pct > 100 {
+			fmt.Fprintln(stderr, "tiers: --percent 需在 (0,100]")
+			return 2
+		}
+		if err := st.SetTierShare(ctx, *setName, int(*pct*100+0.5)); err != nil {
+			fmt.Fprintln(stderr, "tiers:", err)
+			return 1
+		}
+	}
+	if *assign != "" {
+		var t *string
+		if *tier != "" {
+			t = tier
+		}
+		if err := st.SetProjectTier(ctx, *assign, t); err != nil {
+			fmt.Fprintln(stderr, "tiers:", err)
+			return 1
+		}
+	}
+
+	ts, err := st.ListQuotaTiers(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, "tiers:", err)
+		return 1
+	}
+	rows := make([]tierRow, 0, len(ts))
+	for _, t := range ts {
+		rows = append(rows, tierRow{Name: t.Name, ShareBP: t.ShareBP, Order: t.Order})
+	}
+	if *jsonOut {
+		writeJSON(stdout, rows)
+		return 0
+	}
+	for _, r := range rows {
+		fmt.Fprintf(stdout, "%-4s  %.2f%%\n", r.Name, float64(r.ShareBP)/100)
+	}
+	return 0
+}

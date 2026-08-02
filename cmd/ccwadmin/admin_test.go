@@ -445,3 +445,72 @@ func TestStatusJSON(t *testing.T) {
 		t.Error("last_usage_event_at字段必须存在（可为null）")
 	}
 }
+
+// ---- tiers ----
+
+type fakeTierStore struct {
+	tiers    []store.QuotaTier
+	setName  string
+	setBP    int
+	assigned string
+	assignTo *string
+}
+
+func (f *fakeTierStore) ListQuotaTiers(context.Context) ([]store.QuotaTier, error) {
+	return f.tiers, nil
+}
+func (f *fakeTierStore) SetTierShare(_ context.Context, name string, bp int) error {
+	f.setName, f.setBP = name, bp
+	return nil
+}
+func (f *fakeTierStore) SetProjectTier(_ context.Context, slug string, name *string) error {
+	f.assigned, f.assignTo = slug, name
+	return nil
+}
+
+// 命令行按**百分比**收，存的是万分之一。让人敲 3300 表示 33% 是不必要的心智负担，
+// 但转换错了会让全部限额差 100 倍——所以单独测这一步。
+func TestTiersSetConvertsPercentToBasisPoints(t *testing.T) {
+	f := &fakeTierStore{tiers: []store.QuotaTier{{Name: "7x", ShareBP: 3300}}}
+	var out, errb bytes.Buffer
+	if code := runTiers([]string{"--set", "7x", "--percent", "33"}, &out, &errb, f); code != 0 {
+		t.Fatalf("code=%d %s", code, errb.String())
+	}
+	if f.setName != "7x" || f.setBP != 3300 {
+		t.Errorf("33%% 应存成 3300 bp，got %s=%d", f.setName, f.setBP)
+	}
+	// 小数也要对
+	runTiers([]string{"--set", "5x", "--percent", "12.5"}, &out, &errb, f)
+	if f.setBP != 1250 {
+		t.Errorf("12.5%% 应存成 1250 bp，got %d", f.setBP)
+	}
+}
+
+// 越界的百分比要拒绝：0 或负数会让该档位的项目立刻全员受限，
+// >100 则是超卖账号池。
+func TestTiersRejectsOutOfRangePercent(t *testing.T) {
+	f := &fakeTierStore{}
+	var out, errb bytes.Buffer
+	for _, p := range []string{"0", "-5", "101", "1000"} {
+		if code := runTiers([]string{"--set", "7x", "--percent", p}, &out, &errb, f); code == 0 {
+			t.Errorf("--percent %s 应被拒绝", p)
+		}
+		if f.setName != "" {
+			t.Errorf("--percent %s 不该到达存储层", p)
+		}
+	}
+}
+
+// --assign 不带 --tier 表示改回绝对限额（传 NULL），而不是挂到一个空名字的档位。
+func TestTiersAssignEmptyMeansNoTier(t *testing.T) {
+	f := &fakeTierStore{}
+	var out, errb bytes.Buffer
+	runTiers([]string{"--assign", "alice"}, &out, &errb, f)
+	if f.assigned != "alice" || f.assignTo != nil {
+		t.Errorf("留空应传 NULL，got %v", f.assignTo)
+	}
+	runTiers([]string{"--assign", "bob", "--tier", "5x"}, &out, &errb, f)
+	if f.assignTo == nil || *f.assignTo != "5x" {
+		t.Errorf("应挂到 5x，got %v", f.assignTo)
+	}
+}
