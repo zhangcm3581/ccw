@@ -8,11 +8,9 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"ccw/internal/auth"
 	"ccw/internal/secretbox"
-	"ccw/internal/totp"
 )
 
 type fakeAdminCreator struct {
@@ -69,15 +67,19 @@ func TestCreateAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TOTP secret应能用同一AAD解开（否则登录时解不开）: %v", err)
 	}
-	// 输出的密钥要与落库的一致，且可用于算码
-	if !strings.Contains(out.String(), string(plain)) {
-		t.Error("输出应含刚生成的TOTP密钥（只显示一次）")
+	// **两步验证已于 2026-08-02 移除**：密钥仍生成并入库（列是 NOT NULL，
+	// 留着让"想再开回来"只是恢复几行校验），但**不该再打印**——
+	// 打了会让人以为要配认证器，而配了也不会被用到。
+	if strings.Contains(out.String(), string(plain)) {
+		t.Error("登录已不校验两步验证码，不该再把密钥打出来")
 	}
-	if _, err := totp.Code(string(plain), timeNowForTest()); err != nil {
-		t.Errorf("生成的TOTP密钥应可用: %v", err)
+	if strings.Contains(out.String(), "otpauth://totp/") {
+		t.Error("不该再给认证器链接")
 	}
-	if !strings.Contains(out.String(), "otpauth://totp/") {
-		t.Error("输出应含认证器可扫的otpauth链接")
+	// **去掉一道防护就必须提醒另一道**：白名单为空时等于不限制，
+	// 那样公网后台只剩一道密码。
+	if !strings.Contains(out.String(), "CCW_ADMIN_ALLOWLIST") {
+		t.Error("应提醒配置 IP 白名单——现在只剩密码一道")
 	}
 	// 密码绝不回显
 	if strings.Contains(out.String(), pw) || strings.Contains(errBuf.String(), pw) {
@@ -138,8 +140,6 @@ func TestNoPasswordFlag(t *testing.T) {
 		}
 	}
 }
-
-func timeNowForTest() time.Time { return time.Unix(1111111111, 0) }
 
 func readFileString(path string) (string, error) {
 	b, err := os.ReadFile(path)

@@ -74,14 +74,9 @@ button:hover{filter:brightness(1.07)}
         <span class="lb">密码</span>
         <input type="password" name="password" autocomplete="current-password" required>
       </label>
-      <label>
-        <span class="lb">两步验证码</span>
-        <input type="text" name="code" inputmode="numeric" pattern="[0-9 ]*" maxlength="9"
-               autocomplete="one-time-code" placeholder="6 位数字" required>
-      </label>
       <button type="submit">登录</button>
     </form>
-    <p class="foot">密码与两步验证码缺一不可。连续失败会按 IP 与用户名两个维度限速。</p>
+    <p class="foot">连续失败会按 IP 与用户名两个维度限速。</p>
   </div>
 </div>
 </body>

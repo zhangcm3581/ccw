@@ -15,7 +15,6 @@ import (
 	"ccw/internal/consolestore"
 	"ccw/internal/dns"
 	"ccw/internal/provision"
-	"ccw/internal/totp"
 )
 
 type fakeFleetStore struct {
@@ -206,12 +205,10 @@ func (f *fakeFleetStore) RevokeCDKIssue(_ context.Context, publicID string) erro
 // newFleetServer返回一个已登录的Server与会话cookie。
 func newFleetServer(t *testing.T) (*Server, *fakeFleetStore, *http.Cookie, *http.Cookie) {
 	t.Helper()
-	s, _, secret := newAuthServer(t)
+	s, _ := newAuthServer(t)
 	fs := newFleetStore()
 	s.Fleet = &Fleet{Store: fs, Logs: NewLogHub("")}
-
-	code, _ := totp.Code(secret, time.Now())
-	form, cookies := loginForm(t, s, "admin", testPassword, code)
+	form, cookies := loginForm(t, s, "admin", testPassword)
 	w := postForm(t, s, "/admin/login", form, cookies, "203.0.113.5")
 	// CSRF token在会话内复用，登录响应不重发——沿用登录页那次发的。
 	var sess, csrf *http.Cookie
@@ -280,7 +277,7 @@ func TestRunStreamFinishedRunClosesImmediately(t *testing.T) {
 
 // Fleet为nil时机队路由不存在（与Auth同款约束）。
 func TestFleetRoutesAbsentWithoutFleet(t *testing.T) {
-	s, _, _ := newAuthServer(t)
+	s, _ := newAuthServer(t)
 	if w := get(t, s, "/admin/nodes", nil); w.Code != 404 {
 		t.Errorf("未配置Fleet时/admin/nodes应404，got %d", w.Code)
 	}

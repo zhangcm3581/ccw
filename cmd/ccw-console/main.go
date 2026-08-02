@@ -92,7 +92,7 @@ func serve() {
 			os.Exit(1)
 		}
 		srv.Auth = &console.Auth{
-			Store: st, Box: box, Allowlist: nets,
+			Store: st, Allowlist: nets,
 			Secure: !cfg.AdminInsecureCookie,
 		}
 		// 按Host分流：管理路由只在管理域名上存在（见console.hostRouter）。

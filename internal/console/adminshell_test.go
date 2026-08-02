@@ -74,7 +74,7 @@ func TestAdminShellHasThemeControl(t *testing.T) {
 // 登录页没有侧边栏（此时还没登录），但必须沿用同一份主题偏好——
 // 否则选了深色的人每次登录都被闪一次白底。
 func TestLoginPageHonorsThemePreference(t *testing.T) {
-	s, _, _ := newAuthServer(t)
+	s, _ := newAuthServer(t)
 	body := get(t, s, "/admin/login", map[string]string{"X-Forwarded-For": "203.0.113.5"}).Body.String()
 
 	if !strings.Contains(body, "ccw-theme") {

@@ -16,14 +16,13 @@ import (
 
 	"ccw/internal/auth"
 	"ccw/internal/consolestore"
-	"ccw/internal/secretbox"
-	"ccw/internal/totp"
 )
 
 // C3管理员认证（console-fleet-design §8.1–§8.3、§8.5）。
 //
 // 权限等同全机队root，因此安全要求高于现有任何组件：
-// 密码+TOTP缺一不可、统一错误、限速、服务端可撤销会话、IP白名单应用层复核、CSRF。
+// 统一错误、限速、服务端可撤销会话、IP白名单应用层复核、CSRF。
+// （两步验证已于 2026-08-02 按要求移除。）
 
 const (
 	sessionCookie   = "ccw_admin_session"
@@ -49,7 +48,6 @@ type AdminStore interface {
 // 没有认证就不上管理页面（设计§8.3；部署说明见DEPLOY.md的B部分）。
 type Auth struct {
 	Store AdminStore
-	Box   *secretbox.Box // 解TOTP secret用
 	// Allowlist是IP白名单（CIDR或单IP）。**应用层独立校验，不只依赖Caddy**（§8.3）：
 	// 反代配置改错时应用层要兜底。为空表示不限制（仅限本机开发）。
 	Allowlist []*net.IPNet
@@ -232,11 +230,19 @@ func (a *Auth) issueCSRF(w http.ResponseWriter, r *http.Request) string {
 // csrfTokenRe校验cookie里的token形态，避免把客户端塞进来的任意值当成自己发的。
 var csrfTokenRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// login执行密码+TOTP双因子校验。
+// login执行密码校验。
 //
-// **统一错误（§8.1、验收A4）**：用户不存在、密码错、TOTP错、账号被禁用
-// 返回完全相同的invalid_credentials，不区分——否则可用错误差异枚举用户名。
-func (a *Auth) login(ctx context.Context, username, password, code, clientIP string) (userID string, token string, err error) {
+// **两步验证已于 2026-08-02 按要求移除。**剩下的防护是：登录限速（IP + 用户名
+// 两个维度）、统一错误、服务端可撤销会话、CSRF，以及 IP 白名单——
+// 注意白名单**为空时等于不限制**（ipAllowed 的空列表分支），
+// 也就是说没配 CCW_ADMIN_ALLOWLIST 时，公网后台只剩这一道密码。
+//
+// TOTP 的存储字段（TOTPSecretEnc/TOTPNonce）保留未删：删掉要迁移，
+// 而留着让"想再开回来"只是恢复几行校验的事。
+//
+// **统一错误（§8.1、验收A4）**：用户不存在、密码错、账号被禁用返回完全相同的
+// invalid_credentials，不区分——否则可用错误差异枚举用户名。
+func (a *Auth) login(ctx context.Context, username, password, clientIP string) (userID string, token string, err error) {
 	fail := errors.New("invalid_credentials")
 
 	u, uerr := a.Store.AdminByUsername(ctx, username)
@@ -255,15 +261,6 @@ func (a *Auth) login(ctx context.Context, username, password, code, clientIP str
 	if !auth.VerifySecret(password, u.PasswordHash) {
 		return "", "", fail
 	}
-	secret, derr := a.Box.Open(u.TOTPSecretEnc, u.TOTPNonce, totpContext)
-	if derr != nil {
-		// 解不开TOTP secret是配置/密钥问题（CCW_SECRET_KEY换过？），不是凭据错。
-		return "", "", derr
-	}
-	if !totp.Verify(string(secret), code, time.Now()) {
-		return "", "", fail
-	}
-
 	tok, terr := randomToken()
 	if terr != nil {
 		return "", "", terr
@@ -273,9 +270,6 @@ func (a *Auth) login(ctx context.Context, username, password, code, clientIP str
 	}
 	return u.ID, tok, nil
 }
-
-// totpContext是TOTP secret信封加密的AAD用途标签（见internal/secretbox）。
-const totpContext = "admin-totp"
 
 // dummyHash是一个真实可解析的Argon2id哈希，用于"用户不存在/已禁用"时的等时校验：
 // 让这两条路径也付出一次完整的Argon2id开销，避免用响应时间区分用户是否存在。

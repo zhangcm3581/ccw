@@ -91,11 +91,12 @@ func runCreateAdmin(args []string, stdout, stderr io.Writer, st adminCreator, bo
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "管理员已创建：%s\n\n", *username)
-	fmt.Fprintln(stdout, "两步验证密钥（只显示一次，立即添加到认证器App）:")
-	fmt.Fprintf(stdout, "  密钥: %s\n", secret)
-	fmt.Fprintf(stdout, "  链接: %s\n\n", totp.ProvisioningURI(secret, *username, "ccw Console"))
-	fmt.Fprintln(stdout, "添加后请立即用它登录一次验证；丢失该密钥需要重建账号。")
+	fmt.Fprintf(stdout, "管理员已创建：%s\n", *username)
+	// **两步验证已于 2026-08-02 移除，登录只校验密码。**密钥仍生成并入库
+	// （列是 NOT NULL，且留着让"想再开回来"只是恢复几行校验的事），
+	// 但不再打印——打了会让人以为要配认证器，而配了也不会被用到。
+	fmt.Fprintln(stdout, "登录只需用户名与密码。请确保 CCW_ADMIN_ALLOWLIST 已配置，")
+	fmt.Fprintln(stdout, "否则公网后台只有这一道密码保护。")
 	return 0
 }
 

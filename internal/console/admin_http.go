@@ -49,7 +49,6 @@ func (s *Server) adminLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	username := r.PostFormValue("username")
 	password := r.PostFormValue("password")
-	code := r.PostFormValue("code")
 
 	// 限速：IP与用户名两个维度（§8.1）。超限不透露是哪一维触发。
 	if !s.Auth.allowLogin("ip:"+ip, "user:"+username) {
@@ -57,9 +56,9 @@ func (s *Server) adminLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, token, err := s.Auth.login(r.Context(), username, password, code, ip)
+	userID, token, err := s.Auth.login(r.Context(), username, password, ip)
 	if err != nil {
-		// 审计失败尝试；**不记录密码与验证码**，用户名记入target供排查撞库。
+		// 审计失败尝试；**不记录密码**，用户名记入target供排查撞库。
 		if aerr := s.Auth.audit(r.Context(), consolestore.AuditEntry{
 			Action: "admin.login", Target: username, Result: "denied", ClientIP: ip,
 		}); aerr != nil {
@@ -69,8 +68,8 @@ func (s *Server) adminLoginSubmit(w http.ResponseWriter, r *http.Request) {
 			// 基础设施错误（数据库、密钥解不开）：日志留痕，页面仍给统一提示。
 			s.Logf("console: 登录处理失败: %v", err)
 		}
-		// 统一错误（§8.1、A4）：不区分用户不存在/密码错/TOTP错。
-		s.renderLoginError(w, r, "用户名、密码或验证码不正确。")
+		// 统一错误（§8.1、A4）：不区分用户不存在/密码错/账号被禁用。
+		s.renderLoginError(w, r, "用户名或密码不正确。")
 		return
 	}
 

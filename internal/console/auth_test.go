@@ -13,7 +13,6 @@ import (
 	"ccw/internal/auth"
 	"ccw/internal/consolestore"
 	"ccw/internal/secretbox"
-	"ccw/internal/totp"
 )
 
 // C3认证的HTTP层测试（console-fleet-design §8）。存储用假实现，
@@ -97,15 +96,15 @@ func (f *fakeAdminStore) AuditActions(context.Context) ([]string, error) {
 
 const testPassword = "correct-horse-battery-staple"
 
-func newAuthServer(t *testing.T) (*Server, *fakeAdminStore, string) {
+func newAuthServer(t *testing.T) (*Server, *fakeAdminStore) {
 	t.Helper()
 	key, _ := hex.DecodeString(strings.Repeat("ab", 32))
 	box, err := secretbox.New(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret, _ := totp.GenerateSecret()
-	enc, nonce, _ := box.Seal([]byte(secret), totpContext)
+	// 两步验证已移除；这两列仍在（NOT NULL），塞占位值即可。
+	enc, nonce, _ := box.Seal([]byte("unused"), "admin-totp")
 	hash, _ := auth.HashSecret(testPassword)
 
 	fs := &fakeAdminStore{
@@ -114,8 +113,8 @@ func newAuthServer(t *testing.T) (*Server, *fakeAdminStore, string) {
 		sessions: map[string]consolestore.AdminSession{},
 	}
 	s, _, _, _ := newTestServer(t)
-	s.Auth = &Auth{Store: fs, Box: box}
-	return s, fs, secret
+	s.Auth = &Auth{Store: fs}
+	return s, fs
 }
 
 func postForm(t *testing.T, s *Server, path string, form url.Values, cookies []*http.Cookie, ip string) *httptest.ResponseRecorder {
@@ -134,7 +133,7 @@ func postForm(t *testing.T, s *Server, path string, form url.Values, cookies []*
 }
 
 // 取登录页发的CSRF cookie，构造合法表单。
-func loginForm(t *testing.T, s *Server, username, password, code string) (url.Values, []*http.Cookie) {
+func loginForm(t *testing.T, s *Server, username, password string) (url.Values, []*http.Cookie) {
 	t.Helper()
 	w := get(t, s, "/admin/login", map[string]string{"X-Forwarded-For": "203.0.113.5"})
 	if w.Code != 200 {
@@ -151,7 +150,7 @@ func loginForm(t *testing.T, s *Server, username, password, code string) (url.Va
 		t.Fatal("登录页应下发CSRF cookie")
 	}
 	return url.Values{
-		"username": {username}, "password": {password}, "code": {code}, "csrf_token": {csrf},
+		"username": {username}, "password": {password}, "csrf_token": {csrf},
 	}, cookies
 }
 
@@ -166,9 +165,8 @@ func TestAdminRoutesAbsentWithoutAuth(t *testing.T) {
 }
 
 func TestLoginSuccessAndSession(t *testing.T) {
-	s, fs, secret := newAuthServer(t)
-	code, _ := totp.Code(secret, time.Now())
-	form, cookies := loginForm(t, s, "admin", testPassword, code)
+	s, fs := newAuthServer(t)
+	form, cookies := loginForm(t, s, "admin", testPassword)
 
 	w := postForm(t, s, "/admin/login", form, cookies, "203.0.113.5")
 	if w.Code != http.StatusFound || w.Header().Get("Location") != "/admin" {
@@ -219,21 +217,28 @@ func TestLoginSuccessAndSession(t *testing.T) {
 	}
 }
 
-// A4：用户不存在、密码错、TOTP错三种情况返回**完全相同**的错误。
+// A4：用户不存在、密码错、账号被禁用返回**完全相同**的错误。
+// （TOTP 错这一类已随两步验证一起移除。）
 func TestLoginUnifiedError(t *testing.T) {
-	s, _, secret := newAuthServer(t)
-	good, _ := totp.Code(secret, time.Now())
+	s, fs := newAuthServer(t)
 
 	var bodies []string
-	cases := []struct{ user, pass, code string }{
-		{"ghost", testPassword, good}, // 用户不存在
-		{"admin", "wrong-password", good},
-		{"admin", testPassword, "000000"}, // TOTP错
+	cases := []struct {
+		user, pass string
+		disabled   bool
+	}{
+		{user: "ghost", pass: testPassword},                 // 用户不存在
+		{user: "admin", pass: "wrong-password"},             // 密码错
+		{user: "admin", pass: testPassword, disabled: true}, // 账号被禁用
 	}
 	for i, c := range cases {
+		if c.disabled {
+			now := time.Now()
+			fs.user.DisabledAt = &now
+		}
 		// 每次换IP避免触发限速
 		ip := "203.0.113." + string(rune('1'+i))
-		form, cookies := loginForm(t, s, c.user, c.pass, c.code)
+		form, cookies := loginForm(t, s, c.user, c.pass)
 		w := postForm(t, s, "/admin/login", form, cookies, ip)
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("case %d 应401，got %d", i, w.Code)
@@ -253,24 +258,18 @@ func TestLoginUnifiedError(t *testing.T) {
 		j := strings.Index(s[i+25:], `"`)
 		return s[:i] + s[i+25+j:]
 	}
-	if norm(bodies[0]) != norm(bodies[1]) || norm(bodies[1]) != norm(bodies[2]) {
-		t.Error("A4：三种失败原因的响应必须完全相同")
-	}
-}
-
-// 密码对但没有TOTP码：必须失败（缺一不可，§8.1）。
-func TestLoginRequiresTOTP(t *testing.T) {
-	s, _, _ := newAuthServer(t)
-	form, cookies := loginForm(t, s, "admin", testPassword, "")
-	if w := postForm(t, s, "/admin/login", form, cookies, "203.0.113.7"); w.Code != http.StatusUnauthorized {
-		t.Errorf("无TOTP码应401，got %d", w.Code)
+	// 逐一与第一个比，而不是写死下标——用例增减时这条断言不会跟着失效
+	// （移除两步验证时它就因为写死 bodies[2] 直接 panic 了）。
+	for i := 1; i < len(bodies); i++ {
+		if norm(bodies[i]) != norm(bodies[0]) {
+			t.Errorf("A4：case %d 的响应与 case 0 不同，泄露了失败原因", i)
+		}
 	}
 }
 
 func TestLoginRequiresCSRF(t *testing.T) {
-	s, _, secret := newAuthServer(t)
-	code, _ := totp.Code(secret, time.Now())
-	form := url.Values{"username": {"admin"}, "password": {testPassword}, "code": {code}}
+	s, _ := newAuthServer(t)
+	form := url.Values{"username": {"admin"}, "password": {testPassword}}
 	// 没有CSRF cookie与字段
 	if w := postForm(t, s, "/admin/login", form, nil, "203.0.113.5"); w.Code != http.StatusForbidden {
 		t.Errorf("缺CSRF应403，got %d", w.Code)
@@ -285,14 +284,14 @@ func TestLoginRequiresCSRF(t *testing.T) {
 
 // §8.1：每IP每分钟5次。
 func TestLoginRateLimit(t *testing.T) {
-	s, _, _ := newAuthServer(t)
+	s, _ := newAuthServer(t)
 	for i := 0; i < 5; i++ {
-		form, cookies := loginForm(t, s, "admin", "wrong", "000000")
+		form, cookies := loginForm(t, s, "admin", "wrong")
 		if w := postForm(t, s, "/admin/login", form, cookies, "198.51.100.1"); w.Code != http.StatusUnauthorized {
 			t.Fatalf("第%d次应401，got %d", i+1, w.Code)
 		}
 	}
-	form, cookies := loginForm(t, s, "admin", "wrong", "000000")
+	form, cookies := loginForm(t, s, "admin", "wrong")
 	w := postForm(t, s, "/admin/login", form, cookies, "198.51.100.1")
 	if !strings.Contains(w.Body.String(), "频繁") {
 		t.Error("超限应提示限速")
@@ -301,7 +300,7 @@ func TestLoginRateLimit(t *testing.T) {
 
 // §8.3：应用层独立校验IP白名单，不只依赖Caddy；白名单外一律404。
 func TestIPAllowlistEnforcedInApp(t *testing.T) {
-	s, _, secret := newAuthServer(t)
+	s, _ := newAuthServer(t)
 	nets, err := ParseAllowlist("203.0.113.0/24, 198.51.100.9")
 	if err != nil {
 		t.Fatal(err)
@@ -320,8 +319,7 @@ func TestIPAllowlistEnforcedInApp(t *testing.T) {
 		}
 	}
 	// 白名单外即便凭据正确也进不去
-	code, _ := totp.Code(secret, time.Now())
-	form, cookies := loginForm(t, s, "admin", testPassword, code) // 用白名单内IP取CSRF
+	form, cookies := loginForm(t, s, "admin", testPassword) // 用白名单内IP取CSRF
 	if w := postForm(t, s, "/admin/login", form, cookies, "192.0.2.1"); w.Code != 404 {
 		t.Errorf("白名单外提交登录应404，got %d", w.Code)
 	}
@@ -340,9 +338,8 @@ func TestParseAllowlistErrors(t *testing.T) {
 }
 
 func TestLogoutRevokesSession(t *testing.T) {
-	s, fs, secret := newAuthServer(t)
-	code, _ := totp.Code(secret, time.Now())
-	form, cookies := loginForm(t, s, "admin", testPassword, code)
+	s, fs := newAuthServer(t)
+	form, cookies := loginForm(t, s, "admin", testPassword)
 	w := postForm(t, s, "/admin/login", form, cookies, "203.0.113.5")
 
 	// CSRF token在会话内复用，登录响应不会重发——沿用登录页那次发的。
@@ -383,10 +380,9 @@ func TestLogoutRevokesSession(t *testing.T) {
 
 // §8.5：审计写入失败时登录也失败——不允许存在无审计的特权操作。
 func TestLoginFailsWhenAuditFails(t *testing.T) {
-	s, fs, secret := newAuthServer(t)
+	s, fs := newAuthServer(t)
 	fs.auditErr = context.DeadlineExceeded
-	code, _ := totp.Code(secret, time.Now())
-	form, cookies := loginForm(t, s, "admin", testPassword, code)
+	form, cookies := loginForm(t, s, "admin", testPassword)
 	w := postForm(t, s, "/admin/login", form, cookies, "203.0.113.5")
 	if w.Code == http.StatusFound {
 		t.Fatal("审计失败时不得登录成功")
@@ -398,8 +394,8 @@ func TestLoginFailsWhenAuditFails(t *testing.T) {
 
 // 登录页与管理页都不得把密码/验证码回显进HTML。
 func TestNoCredentialEchoInHTML(t *testing.T) {
-	s, _, _ := newAuthServer(t)
-	form, cookies := loginForm(t, s, "admin", testPassword, "123456")
+	s, _ := newAuthServer(t)
+	form, cookies := loginForm(t, s, "admin", testPassword)
 	w := postForm(t, s, "/admin/login", form, cookies, "203.0.113.5")
 	body := w.Body.String()
 	if strings.Contains(body, testPassword) || strings.Contains(body, "123456") {
@@ -409,9 +405,8 @@ func TestNoCredentialEchoInHTML(t *testing.T) {
 
 // CSRF token在会话内复用：否则打开第二个标签页会让第一个页面的表单作废（403）。
 func TestCSRFTokenReusedAcrossPages(t *testing.T) {
-	s, _, secret := newAuthServer(t)
-	code, _ := totp.Code(secret, time.Now())
-	form, cookies := loginForm(t, s, "admin", testPassword, code)
+	s, _ := newAuthServer(t)
+	form, cookies := loginForm(t, s, "admin", testPassword)
 	w := postForm(t, s, "/admin/login", form, cookies, "203.0.113.5")
 
 	var sess *http.Cookie
@@ -490,7 +485,7 @@ func TestClientIPResistsXFFSpoofing(t *testing.T) {
 
 // 端到端：伪造 XFF 不得绕过应用层 IP 白名单。
 func TestAllowlistNotBypassableByXFF(t *testing.T) {
-	s, _, _ := newAuthServer(t)
+	s, _ := newAuthServer(t)
 	nets, err := ParseAllowlist("203.0.113.0/24")
 	if err != nil {
 		t.Fatal(err)
@@ -520,9 +515,9 @@ func TestAllowlistNotBypassableByXFF(t *testing.T) {
 
 // 登录限速不得被轮换伪造的 XFF 规避（后台上公网后这条直接相关）。
 func TestLoginRateLimitNotBypassableByXFF(t *testing.T) {
-	s, _, _ := newAuthServer(t)
+	s, _ := newAuthServer(t)
 	tryLogin := func(fakeXFF string) int {
-		form, cookies := loginForm(t, s, "admin", "wrong", "000000")
+		form, cookies := loginForm(t, s, "admin", "wrong")
 		req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set("X-Forwarded-For", fakeXFF+", 198.51.100.50")
@@ -539,7 +534,7 @@ func TestLoginRateLimitNotBypassableByXFF(t *testing.T) {
 	}
 	var body string
 	{
-		form, cookies := loginForm(t, s, "admin", "wrong", "000000")
+		form, cookies := loginForm(t, s, "admin", "wrong")
 		req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set("X-Forwarded-For", "10.9.9.9, 198.51.100.50")
