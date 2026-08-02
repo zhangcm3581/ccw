@@ -156,10 +156,24 @@ func (s *Store) AccountWindows(ctx context.Context, accountID string, now time.T
 	if err != nil {
 		return quota.Windows{}, err
 	}
-	var w quota.Windows
-	w.FiveHourStart = windowStart(r5, now, 5*time.Hour)
-	w.SevenDayStart = windowStart(r7, now, 7*24*time.Hour)
-	return w, nil
+	return windowsFrom(r5, r7, now), nil
+}
+
+// 两个窗口的长度。**成对定义在一处**：分散在调用点上时，把 7 天写成 5 小时
+// 这类错误只会在运行时表现为"7 天窗口按 5 小时截断"——大量用量被误判成
+// 已经滑出，闸门形同虚设，而且不报任何错。
+const (
+	fiveHourWindow = 5 * time.Hour
+	sevenDayWindow = 7 * 24 * time.Hour
+)
+
+// windowsFrom把两个 resets_at 折算成窗口起点。抽成纯函数是为了让**调用点**
+// 可测——真正容易写错的是"哪个窗口配哪个长度"，而不是 windowStart 本身。
+func windowsFrom(r5, r7 *time.Time, now time.Time) quota.Windows {
+	return quota.Windows{
+		FiveHourStart: windowStart(r5, now, fiveHourWindow),
+		SevenDayStart: windowStart(r7, now, sevenDayWindow),
+	}
 }
 
 // windowStart由 Claude 报的下次重置时刻算出当前窗口的起点。
