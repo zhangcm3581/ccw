@@ -1,0 +1,83 @@
+package console
+
+import (
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"ccw/internal/provision"
+)
+
+func ts(t time.Time) *time.Time { return &t }
+
+// 「最近无采集」是判断采集链路死没死的唯一线索——采集断掉的表现不是报错，
+// 而是"一切正常、表永远是空的"。
+func TestUsageRowFlagsStaleCollection(t *testing.T) {
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+
+	// 从没采集到 → 一定是 stale
+	r := makeUsageRow(provision.NodeProjectUsage{Slug: "a"}, "n1", now)
+	if !r.Stale || r.LastSeen != "从未采集到" {
+		t.Errorf("无数据应标为 stale，got %+v", r)
+	}
+
+	// 刚采到 → 正常
+	r = makeUsageRow(provision.NodeProjectUsage{Slug: "a", LastEventAt: ts(now.Add(-time.Hour))}, "n1", now)
+	if r.Stale {
+		t.Error("1 小时前有数据不该算 stale")
+	}
+
+	// **周末没人用不该报警**：阈值取 24 小时，正常空闲不会误报
+	r = makeUsageRow(provision.NodeProjectUsage{Slug: "a", LastEventAt: ts(now.Add(-20 * time.Hour))}, "n1", now)
+	if r.Stale {
+		t.Error("20 小时前有数据仍不该算 stale（正常空闲）")
+	}
+	r = makeUsageRow(provision.NodeProjectUsage{Slug: "a", LastEventAt: ts(now.Add(-30 * time.Hour))}, "n1", now)
+	if !r.Stale {
+		t.Error("超过 24 小时应标为 stale")
+	}
+}
+
+// 占比不能除零，也不能算出超过 100% 或负数。
+func TestPctOf(t *testing.T) {
+	cases := []struct {
+		used, limit int64
+		want        int
+	}{
+		{0, 1000, 0}, {250, 1000, 25}, {1000, 1000, 100},
+		{5000, 1000, 100}, // 超了钳到 100
+		{100, 0, 0},       // 限额未配置：不能除零，也不该编一个百分比
+		{-5, 1000, 0},
+	}
+	for _, c := range cases {
+		if got := pctOf(c.used, c.limit); got != c.want {
+			t.Errorf("pctOf(%d,%d) = %d, want %d", c.used, c.limit, got, c.want)
+		}
+	}
+}
+
+// 页面必须把"真实 token"与"内部额度单位"分开讲。
+// 混在一起最容易让人把估算值当成账号的实际消耗，而 spec §10 明令不得
+// 把内部计量标成官方订阅百分比。
+func TestUsagePageSeparatesRealFromEstimated(t *testing.T) {
+	s, _, sess, csrf := newFleetServer(t)
+	req := httptest.NewRequest("GET", "/admin/usage", nil)
+	req.AddCookie(sess)
+	req.AddCookie(csrf)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	body := w.Body.String()
+	for _, want := range []string{"真实", "内部额度单位", "CCW_USAGE_WEIGHTS"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("用量页应说明 %q", want)
+		}
+	}
+	// **这里不做措辞黑名单。**页面上正确的写法本来就要提到"不是官方订阅额度"，
+	// 黑名单会把否定句一起判成违规——写这条测试时就先误报了一次。
+	// 越界措辞的风险在对外的落地页，那边有 TestHomePage 的黑名单守着；
+	// 这一页是给管理员看的，真正要保证的是"两套数分得清"，即上面那几条正向断言。
+	if !strings.Contains(body, "不是") {
+		t.Error("必须明确否定'内部单位＝官方额度'这个误解，而不是只摆数字")
+	}
+}

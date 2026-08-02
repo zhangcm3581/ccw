@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // 节点诊断与维护（2026-07-30）。
@@ -227,4 +228,53 @@ echo "Docker: $(%[1]sdocker --version 2>/dev/null || echo 不可用)"`,
 		return "", fmt.Errorf("擦除未完成（退出码%d）：%s", res.ExitCode, firstLine(res.Stdout+res.Stderr))
 	}
 	return res.Stdout, nil
+}
+
+// UsageTotals/ModelUsage/NodeProjectUsage与节点侧 ccwadmin usage --json 的输出对应。
+//
+// **不复用 internal/store 的类型**：Console 与节点是两个独立的库、两套迁移，
+// 让 Console 依赖节点库的类型会把两者的 schema 悄悄绑在一起（CLAUDE.md：
+// 两个数据库的 schema 无交集）。这里只按 JSON 契约声明一份。
+type UsageTotals struct {
+	Events     int64 `json:"events"`
+	Input      int64 `json:"input_tokens"`
+	Output     int64 `json:"output_tokens"`
+	CacheRead  int64 `json:"cache_read_tokens"`
+	CacheWrite int64 `json:"cache_write_tokens"`
+	Weighted   int64 `json:"weighted_units"`
+}
+
+type ModelUsage struct {
+	Model string `json:"model"`
+	UsageTotals
+}
+
+type NodeProjectUsage struct {
+	Slug        string       `json:"slug"`
+	ProjectID   string       `json:"project_id"`
+	FiveHour    UsageTotals  `json:"five_hour"`
+	SevenDay    UsageTotals  `json:"seven_day"`
+	Total       UsageTotals  `json:"total"`
+	ByModel     []ModelUsage `json:"by_model"`
+	FiveHourLim int64        `json:"five_hour_limit"`
+	SevenDayLim int64        `json:"seven_day_limit"`
+	LastEventAt *time.Time   `json:"last_event_at"`
+}
+
+// NodeUsage取节点上各项目的真实用量。
+func (o *Orchestrator) NodeUsage(ctx context.Context, nodeID string) ([]NodeProjectUsage, error) {
+	out, err := o.RunAdmin(ctx, nodeID, "usage", "--json")
+	if err != nil {
+		return nil, err
+	}
+	i := strings.IndexByte(out, '[')
+	j := strings.LastIndexByte(out, ']')
+	if i < 0 || j <= i {
+		return nil, nil
+	}
+	var rows []NodeProjectUsage
+	if err := json.Unmarshal([]byte(out[i:j+1]), &rows); err != nil {
+		return nil, fmt.Errorf("节点返回的用量数据无法解析")
+	}
+	return rows, nil
 }

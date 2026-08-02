@@ -235,6 +235,18 @@ spec §8要求的`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`已实现（`inte
   会回到盘符列表。手打 `C:\TestProjects\SyntheticProject` 既慢又容易打错，
   而打错只得到一句"不是一个存在的目录"。读不了的目录列一行原因、仍可返回上级，
   不会把人困住。
+- **用量页**（2026-08-02）：`/admin/usage` 显示各项目的**真实 token 消耗**
+  （按模型拆分：输入/输出/缓存读/缓存写，逐条来自 Claude 写的会话 JSONL）
+  与**内部额度单位**占比。两者在页面上明确分开——前者是真实的，
+  后者是 `CCW_USAGE_WEIGHTS` 折算出来的估算，spec §10 明令不得标成官方订阅百分比。
+  数据经 `ccwadmin usage --json` 走 SSH 从各节点取，不落 Console 库
+  （节点库才是权威，两个库 schema 无交集）。
+  **「最近无采集」标记是判断采集链路死没死的唯一线索**——链路断掉
+  （最常见是 compose 里 `<slug>-claude-projects` 没只读挂进 worker-agent）的表现
+  不是报错，而是"一切正常、表永远是空的"。阈值取 24 小时，免得正常的周末空闲被误报。
+  **计量按项目，不按 CDK**：用量数据源是容器里的会话 JSONL，它不知道这次连接
+  用的是哪张卡；同项目的全部 CDK 共用一个容器与一份凭据，令牌里也只有
+  ProjectID。要按人分开算就一人一个项目（单节点上限 3 个）。
 - **左侧残影的根因是 ConPTY，用官方变量修**（2026-07-31）：官方文档
   code.claude.com/docs/en/fullscreen 的「Stale or misplaced text」写明：
   fullscreen 渲染只发送变化的单元格，而 **Windows Terminal 等 ConPTY 宿主会错误

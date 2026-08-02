@@ -117,6 +117,7 @@ func (s *Server) registerFleet(mux *http.ServeMux) {
 	s.registerCDKs(mux)
 	s.registerClaudeAuth(mux)
 	s.registerDiag(mux)
+	s.registerUsage(mux)
 	mux.HandleFunc("GET /admin/nodes", s.Auth.requireAdmin(s.adminNodes))
 	mux.HandleFunc("GET /admin/nodes/new", s.Auth.requireAdmin(s.adminNodeNew))
 	mux.HandleFunc("POST /admin/nodes/new", s.Auth.requireAdmin(s.adminNodeCreate))

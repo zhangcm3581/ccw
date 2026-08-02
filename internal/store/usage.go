@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -78,4 +79,127 @@ func (s *Store) Save(ctx context.Context, projectID, fileIdentity, path string, 
 		  partial_line = EXCLUDED.partial_line`,
 		projectID, fileIdentity, path, offset, partial)
 	return err
+}
+
+// UsageTotals是一个时间窗口内的真实用量汇总。
+//
+// **token 数是真实的**——直接来自 Claude Code 写的会话 JSONL，逐条累加，
+// 没有任何估算。WeightedUnits 才是本仓库自己算的"内部额度单位"
+// （token × CCW_USAGE_WEIGHTS），闸门用它，但它是估算口径，
+// 不等于 Claude 账号的真实消耗（spec §10）。
+type UsageTotals struct {
+	Events     int64 `json:"events"`
+	Input      int64 `json:"input_tokens"`
+	Output     int64 `json:"output_tokens"`
+	CacheRead  int64 `json:"cache_read_tokens"`
+	CacheWrite int64 `json:"cache_write_tokens"`
+	Weighted   int64 `json:"weighted_units"`
+}
+
+// ModelUsage是按模型拆分的用量。贵的模型和便宜的模型混在一起看不出问题，
+// 而"这周 Opus 用了多少"恰恰是最该知道的一条。
+type ModelUsage struct {
+	Model string `json:"model"`
+	UsageTotals
+}
+
+// ProjectUsage是一个项目的用量概览。
+type ProjectUsage struct {
+	Slug        string       `json:"slug"`
+	ProjectID   string       `json:"project_id"`
+	FiveHour    UsageTotals  `json:"five_hour"`
+	SevenDay    UsageTotals  `json:"seven_day"`
+	Total       UsageTotals  `json:"total"`
+	ByModel     []ModelUsage `json:"by_model"` // 7天窗口内
+	FiveHourLim int64        `json:"five_hour_limit"`
+	SevenDayLim int64        `json:"seven_day_limit"`
+	// LastEventAt是最后一条用量的时间。**它是判断采集有没有在工作的唯一依据**：
+	// 空值或很久以前，说明 JSONL 没被扫到（最常见是只读挂载漏了），
+	// 那时限额设多少都没有意义。
+	LastEventAt *time.Time `json:"last_event_at"`
+}
+
+// ProjectUsageReport汇总全部项目的用量。
+//
+// 窗口边界用**数据库的 now()**（CLAUDE.md：所有时间窗口用数据库now()与UTC），
+// 不接受调用方传时间——巡检机器的时钟不可信。
+func (s *Store) ProjectUsageReport(ctx context.Context) ([]ProjectUsage, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT p.slug, p.id::text, p.five_hour_limit, p.seven_day_limit,
+		       COALESCE(SUM(u.input_tokens)       FILTER (WHERE u.occurred_at >= now() - interval '5 hours'), 0),
+		       COALESCE(SUM(u.output_tokens)      FILTER (WHERE u.occurred_at >= now() - interval '5 hours'), 0),
+		       COALESCE(SUM(u.cache_read_tokens)  FILTER (WHERE u.occurred_at >= now() - interval '5 hours'), 0),
+		       COALESCE(SUM(u.cache_write_tokens) FILTER (WHERE u.occurred_at >= now() - interval '5 hours'), 0),
+		       COALESCE(SUM(u.weighted_units)     FILTER (WHERE u.occurred_at >= now() - interval '5 hours'), 0),
+		       COUNT(u.id)                        FILTER (WHERE u.occurred_at >= now() - interval '5 hours'),
+		       COALESCE(SUM(u.input_tokens)       FILTER (WHERE u.occurred_at >= now() - interval '7 days'), 0),
+		       COALESCE(SUM(u.output_tokens)      FILTER (WHERE u.occurred_at >= now() - interval '7 days'), 0),
+		       COALESCE(SUM(u.cache_read_tokens)  FILTER (WHERE u.occurred_at >= now() - interval '7 days'), 0),
+		       COALESCE(SUM(u.cache_write_tokens) FILTER (WHERE u.occurred_at >= now() - interval '7 days'), 0),
+		       COALESCE(SUM(u.weighted_units)     FILTER (WHERE u.occurred_at >= now() - interval '7 days'), 0),
+		       COUNT(u.id)                        FILTER (WHERE u.occurred_at >= now() - interval '7 days'),
+		       COALESCE(SUM(u.input_tokens), 0), COALESCE(SUM(u.output_tokens), 0),
+		       COALESCE(SUM(u.cache_read_tokens), 0), COALESCE(SUM(u.cache_write_tokens), 0),
+		       COALESCE(SUM(u.weighted_units), 0), COUNT(u.id),
+		       MAX(u.occurred_at)
+		FROM projects p
+		LEFT JOIN usage_events u ON u.project_id = p.id
+		GROUP BY p.id, p.slug, p.five_hour_limit, p.seven_day_limit
+		ORDER BY p.slug`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ProjectUsage
+	for rows.Next() {
+		var u ProjectUsage
+		if err := rows.Scan(&u.Slug, &u.ProjectID, &u.FiveHourLim, &u.SevenDayLim,
+			&u.FiveHour.Input, &u.FiveHour.Output, &u.FiveHour.CacheRead, &u.FiveHour.CacheWrite,
+			&u.FiveHour.Weighted, &u.FiveHour.Events,
+			&u.SevenDay.Input, &u.SevenDay.Output, &u.SevenDay.CacheRead, &u.SevenDay.CacheWrite,
+			&u.SevenDay.Weighted, &u.SevenDay.Events,
+			&u.Total.Input, &u.Total.Output, &u.Total.CacheRead, &u.Total.CacheWrite,
+			&u.Total.Weighted, &u.Total.Events, &u.LastEventAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		m, err := s.usageByModel(ctx, out[i].ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].ByModel = m
+	}
+	return out, nil
+}
+
+// usageByModel取7天窗口内按模型拆分的用量，用量大的在前。
+func (s *Store) usageByModel(ctx context.Context, projectID string) ([]ModelUsage, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT model, COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+		       COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0),
+		       COALESCE(SUM(weighted_units),0), COUNT(*)
+		FROM usage_events
+		WHERE project_id = $1 AND occurred_at >= now() - interval '7 days'
+		GROUP BY model
+		ORDER BY SUM(output_tokens) DESC, model`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ModelUsage
+	for rows.Next() {
+		var m ModelUsage
+		if err := rows.Scan(&m.Model, &m.Input, &m.Output, &m.CacheRead, &m.CacheWrite,
+			&m.Weighted, &m.Events); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }

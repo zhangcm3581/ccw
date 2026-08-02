@@ -73,7 +73,7 @@ func New(store SiteStore, distDir string, logf func(string, ...any)) *Server {
 	}
 	for _, page := range []string{"admin_dashboard.html", "admin_nodes.html",
 		"admin_node_new.html", "admin_node.html", "admin_run.html",
-		"admin_cdks.html", "admin_domains.html", "admin_audit.html"} {
+		"admin_cdks.html", "admin_domains.html", "admin_audit.html", "admin_usage.html"} {
 		s.tmpl[page] = template.Must(template.ParseFS(tmplFS, "templates/admin_layout.html", "templates/"+page))
 	}
 	// 登录页没有侧边栏（此时还没登录），自带完整文档结构。

@@ -4,6 +4,7 @@
 //
 //	init-project   建项目并签发首张CDK（幂等；强制3项目/15GiB上限，设计§7.6）
 //	list-projects  列项目及配额
+//	usage          列各项目的真实用量（token）与内部额度单位
 //	issue-cdk      为已有项目签发新CDK（输出含public_id）
 //	rotate-cdk     轮换CDK：--grace 24h（默认）或--revoke-now（设计§11.1.1）
 //	disable-cdk    按public-id禁用单张CDK
@@ -32,6 +33,7 @@ func usage() {
   ccwadmin init-project --slug <slug> [--disk-gib 1..15] [--five-hour n] [--seven-day n] [--json]
   ccwadmin init-project <slug> [disk_gib] [five_hour_units] [seven_day_units]   （旧式位置参数，仍兼容）
   ccwadmin list-projects [--json]
+  ccwadmin usage [--json]
   ccwadmin issue-cdk --slug <slug> [--json]
   ccwadmin rotate-cdk --slug <slug> [--grace 24h | --revoke-now] [--json]
   ccwadmin disable-cdk --public-id <id>
@@ -63,6 +65,7 @@ func main() {
 		"disable-cdk":   func(a []string, st *store.Store) int { return runDisableCDK(a, os.Stdout, os.Stderr, st) },
 		"list-cdks":     func(a []string, st *store.Store) int { return runListCDKs(a, os.Stdout, os.Stderr, st) },
 		"status":        func(a []string, st *store.Store) int { return runStatus(a, os.Stdout, os.Stderr, st, buildVersion) },
+		"usage":         func(a []string, st *store.Store) int { return runUsage(a, os.Stdout, os.Stderr, st) },
 	}[cmd]
 	if !ok {
 		usage()

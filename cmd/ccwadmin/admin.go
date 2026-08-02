@@ -409,6 +409,11 @@ func runListCDKs(args []string, stdout, stderr io.Writer, st adminStore) int {
 	return 0
 }
 
+// usageStore是 usage 子命令需要的能力（只读）。
+type usageStore interface {
+	ProjectUsageReport(ctx context.Context) ([]store.ProjectUsage, error)
+}
+
 // ---- list-projects ----
 
 type projectRow struct {
@@ -527,6 +532,48 @@ func runStatus(args []string, stdout, stderr io.Writer, st adminStore, version s
 		}
 		fmt.Fprintf(stdout, "%s  disk=%d/%d  active_cdks=%d  last_usage=%s\n",
 			p.Slug, p.DiskUsed, p.DiskLimit, p.ActiveCDKs, last)
+	}
+	return 0
+}
+
+// ---- usage ----
+
+// runUsage输出各项目的真实用量。
+//
+// **token 数是真实的**，直接来自 Claude 写的会话 JSONL；weighted_units 是本仓库
+// 自己算的内部额度单位（估算口径，闸门用它）。两者必须分开呈现，
+// 否则很容易把估算当成账号的实际消耗。
+func runUsage(args []string, stdout, stderr io.Writer, st usageStore) int {
+	fs := flag.NewFlagSet("usage", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := fs.Bool("json", false, "机器可读输出")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	rows, err := st.ProjectUsageReport(context.Background())
+	if err != nil {
+		fmt.Fprintln(stderr, "usage:", err)
+		return 1
+	}
+	if *jsonOut {
+		writeJSON(stdout, rows)
+		return 0
+	}
+	for _, r := range rows {
+		last := "从未采集到"
+		if r.LastEventAt != nil {
+			last = r.LastEventAt.UTC().Format("2006-01-02 15:04 UTC")
+		}
+		fmt.Fprintf(stdout, "%s  最近采集=%s\n", r.Slug, last)
+		fmt.Fprintf(stdout, "  5h  in=%d out=%d cache_r=%d cache_w=%d  units=%d/%d\n",
+			r.FiveHour.Input, r.FiveHour.Output, r.FiveHour.CacheRead, r.FiveHour.CacheWrite,
+			r.FiveHour.Weighted, r.FiveHourLim)
+		fmt.Fprintf(stdout, "  7d  in=%d out=%d cache_r=%d cache_w=%d  units=%d/%d\n",
+			r.SevenDay.Input, r.SevenDay.Output, r.SevenDay.CacheRead, r.SevenDay.CacheWrite,
+			r.SevenDay.Weighted, r.SevenDayLim)
+		for _, m := range r.ByModel {
+			fmt.Fprintf(stdout, "    %-28s in=%d out=%d\n", m.Model, m.Input, m.Output)
+		}
 	}
 	return 0
 }
