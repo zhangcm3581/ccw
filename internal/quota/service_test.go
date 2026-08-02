@@ -2,6 +2,7 @@ package quota
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -324,3 +325,57 @@ func (u windowAwareUsage) WindowUsed(_ context.Context, _ string, since time.Tim
 	return u.beforeReset + u.afterReset, nil
 }
 func (u windowAwareUsage) PoolUsed(context.Context, string, time.Time) (int64, error) { return 0, nil }
+
+// **两处判定必须用同一个实现。**
+//
+// 2026-08-03 真机：control-api 用绝对限额判超额、worker-agent 用档位折算后的
+// 限额，于是客户端被告知"项目受限（five_hour_limit）"，而后台同一时刻显示
+// 93%、远没到顶。cmd/control-api/main.go 的注释里还记着更早的同款事故
+// （池上限一个读环境变量、一个读库）。
+//
+// 这条测试锁住 AssembleProject 的语义：它必须把档位算进去，
+// 否则两边又会各说各话。
+func TestAssembleProjectAppliesTier(t *testing.T) {
+	r := tieredReader{pool5: 2_471_406, pool7: 9_842_136, bp: 5000, has: true}
+	got, err := AssembleProject(context.Background(), r, "p1", "acct",
+		1_000_000, 10_000_000, Margins{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 50% × 2,471,406 = 1,235,703（真机上后台显示的正是这个数）
+	if got.FiveHour != 1_235_703 {
+		t.Errorf("5h 限额应按档位折算为 1235703，got %d", got.FiveHour)
+	}
+	if got.FiveHour == 1_000_000 {
+		t.Error("拿到了绝对限额——档位没被应用，两处判定会重新漂移")
+	}
+
+	// 没挂档位：沿用绝对限额
+	r.has = false
+	got, _ = AssembleProject(context.Background(), r, "p1", "acct", 1_000_000, 10_000_000, Margins{})
+	if got.FiveHour != 1_000_000 {
+		t.Errorf("无档位应沿用绝对限额，got %d", got.FiveHour)
+	}
+
+	// 档位查询出错：沿用绝对限额，不因此让整次判定失败
+	r.has, r.err = true, errBoom
+	if got, err := AssembleProject(context.Background(), r, "p1", "acct", 1_000_000, 10_000_000, Margins{}); err != nil || got.FiveHour != 1_000_000 {
+		t.Errorf("档位查询失败应降级为绝对限额，got %d %v", got.FiveHour, err)
+	}
+}
+
+var errBoom = errors.New("boom")
+
+type tieredReader struct {
+	pool5, pool7 int64
+	bp           int
+	has          bool
+	err          error
+}
+
+func (r tieredReader) AccountPoolLimits(context.Context, string) (int64, int64, error) {
+	return r.pool5, r.pool7, nil
+}
+func (r tieredReader) ProjectTierShare(context.Context, string) (int, bool, error) {
+	return r.bp, r.has, r.err
+}

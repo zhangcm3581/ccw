@@ -28,15 +28,10 @@ func checkProject(ctx context.Context, q quotaLookup, svc quota.Service, project
 	if err != nil {
 		return quota.Decision{}, quota.Limits{}, err
 	}
-	lim, err := quota.Assemble(ctx, q, p.AccountID, p.FiveHourLimit, p.SevenDayLimit, margins)
+	// 与 control-api 用同一个实现，见 quota.AssembleProject 的说明。
+	lim, err := quota.AssembleProject(ctx, q, projectID, p.AccountID, p.FiveHourLimit, p.SevenDayLimit, margins)
 	if err != nil {
 		return quota.Decision{}, quota.Limits{}, err
-	}
-	// 挂了档位的项目：限额 = 档位比例 × 账号池上限，覆盖掉写死的绝对值。
-	// 查不到档位时**沿用绝对限额**而不是报错——档位是可选的，
-	// 没挂的项目（含这次迁移之前建的）行为一点不变。
-	if bp, has, terr := q.ProjectTierShare(ctx, projectID); terr == nil {
-		lim = quota.ApplyTier(lim, bp, has)
 	}
 	// **把限额一并返回**：调用方（状态栏）需要它才能算百分比，
 	// 而它已经在这里组装好了——再查一次库既多余，也可能与本次判定用的值不一致。

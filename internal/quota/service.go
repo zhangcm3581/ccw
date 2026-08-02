@@ -106,6 +106,35 @@ func tierLimit(pool int64, shareBP int) (int64, bool) {
 	return v, true
 }
 
+// ProjectLimitReader是组装项目限额需要的全部读取能力。
+type ProjectLimitReader interface {
+	PoolLimitReader
+	// ProjectTierShare返回项目所属档位的比例（万分之一）；未挂档位时 ok=false。
+	ProjectTierShare(ctx context.Context, projectID string) (int, bool, error)
+}
+
+// AssembleProject组装一个项目**最终生效**的限额：双层限额 + 档位折算。
+//
+// **这是唯一的实现**。此前 control-api 与 worker-agent 各算各的，
+// 结果是 control-api 用绝对限额判定超额、worker 用档位折算后的限额——
+// 客户端被告知"项目受限"，而后台显示 93%、远没到顶（2026-08-03 真机）。
+// cmd/control-api/main.go 的注释里记着更早的同款事故（池上限一个读环境变量、
+// 一个读库）。两处判定同一件事就一定会漂移，所以合并在这里。
+//
+// 档位查不到时沿用绝对限额而不是报错——档位是可选的。
+func AssembleProject(ctx context.Context, r ProjectLimitReader,
+	projectID, accountID string, fiveHour, sevenDay int64, m Margins) (Limits, error) {
+	l, err := Assemble(ctx, r, accountID, fiveHour, sevenDay, m)
+	if err != nil {
+		return Limits{}, err
+	}
+	bp, has, terr := r.ProjectTierShare(ctx, projectID)
+	if terr != nil {
+		return l, nil
+	}
+	return ApplyTier(l, bp, has), nil
+}
+
 // Assemble组装项目级 + 账号级的双层限额。
 //
 // **control-api与worker-agent必须共用本函数。**此前两者各自组装：worker读accounts表、
