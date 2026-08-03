@@ -169,8 +169,12 @@ func (s *Server) connection(w http.ResponseWriter, r *http.Request) {
 		ProjectID: p.ID, ProjectSlug: p.Slug,
 		TerminalURL: s.AgentBase + "/terminal", SyncURL: s.AgentBase + "/sync",
 		DiskUsed: disk, DiskLimit: p.DiskLimit,
-		FiveHourUsed: d.FiveHourUsed, FiveHourLimit: p.FiveHourLimit,
-		SevenDayUsed: d.SevenDayUsed, SevenDayLimit: p.SevenDayLimit,
+		// **限额必须来自 lim，不能读 p 的原始列**：挂了档位的项目，
+		// 判定用的是档位折算后的限额（lim），而 p.FiveHourLimit 是没折算的绝对值。
+		// 两者混用的效果是客户端打印 "7d:8132044/10000000 项目受限"——
+		// 数字自己就否定了那句提示，看的人只会以为系统坏了（2026-08-03 真机）。
+		FiveHourUsed: d.FiveHourUsed, FiveHourLimit: lim.FiveHour,
+		SevenDayUsed: d.SevenDayUsed, SevenDayLimit: lim.SevenDay,
 		Over: d.Over, OverReason: d.Reason,
 	}
 	if disk >= p.DiskLimit && !resp.Over {

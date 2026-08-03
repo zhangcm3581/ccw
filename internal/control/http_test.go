@@ -195,3 +195,52 @@ func TestExchangeRateLimited(t *testing.T) {
 		t.Fatalf("repeated failures must be rate limited, got %d", last)
 	}
 }
+
+// **返回给客户端的限额，必须就是闸门判定用的那个限额。**
+//
+// 2026-08-03 真机：project-a 挂了 7x 档位（7d 实际限额 5086014），
+// 闸门按档位判定为超额，客户端却打印
+// `7d:8132044/10000000 项目受限（seven_day_limit）`——
+// 10000000 是 projects 表里没折算的绝对值。数字比限额小、却说超额，
+// 那句提示等于自己否定自己。
+func TestConnectionReportsTheLimitTheGateUsed(t *testing.T) {
+	s, cdk := newTestServer(t, 0)
+	// LimitsFor 给出与项目原始列**不同**的限额（模拟档位折算）：
+	// 原始列是 5h 100 / 7d 1000，折算后是 50 / 500。
+	s.LimitsFor = func(_ context.Context, _ project.Project) (quota.Limits, error) {
+		return quota.Limits{FiveHour: 50, SevenDay: 500,
+			PoolFiveHour: 1 << 40, PoolSevenDay: 1 << 40}, nil
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn, code := getConnection(t, srv.URL, exchange(t, srv.URL, cdk))
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	if conn.FiveHourLimit != 50 || conn.SevenDayLimit != 500 {
+		t.Errorf("应报告折算后的限额 50/500，got %d/%d（读了原始列就会是 100/1000）",
+			conn.FiveHourLimit, conn.SevenDayLimit)
+	}
+}
+
+// 同一件事的另一面：报告的限额必须与 Over 判定自洽——
+// 不能出现 used < limit 却说超额。
+func TestConnectionLimitAgreesWithOverFlag(t *testing.T) {
+	s, cdk := newTestServer(t, 80) // 5h 已用 80
+	s.LimitsFor = func(_ context.Context, _ project.Project) (quota.Limits, error) {
+		return quota.Limits{FiveHour: 50, SevenDay: 500, // 80 >= 50，超额
+			PoolFiveHour: 1 << 40, PoolSevenDay: 1 << 40}, nil
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn, _ := getConnection(t, srv.URL, exchange(t, srv.URL, cdk))
+	if !conn.Over {
+		t.Fatalf("80 >= 50 应判超额: %+v", conn)
+	}
+	if conn.FiveHourUsed < conn.FiveHourLimit {
+		t.Errorf("说了超额，报告的数字却是 %d/%d——客户端会显示一句自相矛盾的提示",
+			conn.FiveHourUsed, conn.FiveHourLimit)
+	}
+}
